@@ -2,3 +2,5 @@ glom
 tabulate
 beautifulsoup4
 requests
+aiohttp
+rich
