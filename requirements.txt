@@ -1,7 +1,13 @@
-glom
-tabulate
-beautifulsoup4
-requests
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+requests>=2.28.0
+websockets>=10.0
+python-multipart>=0.0.6
+httpx>=0.24.0
+openai>=1.0.0
 aiohttp
+beautifulsoup4
+glom
 rich
 textual
+tabulate
