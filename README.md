@@ -1,4 +1,4 @@
-# HH Bot Dashboard
+# Панель управления HH Bot
 
 Веб-интерфейс для автоматизации работы с hh.ru: массовые отклики, авто-подъём резюме, мониторинг просмотров, AI-ответы работодателям.
 
@@ -140,7 +140,7 @@ python web_app.py
 docker-compose up -d
 ```
 
-Данные сессий сохраняются в `./data/` (монтируется как volume).
+Данные сессий сохраняются в `./data/` (монтируется как том Docker).
 
 ---
 
@@ -148,11 +148,19 @@ docker-compose up -d
 
 ```
 data/
-  browser_sessions.json   # сохранённые аккаунты и cookies
-  accounts.json           # конфигурация аккаунтов
+  accounts.json                 # основные аккаунты панели; может быть пустым массивом
+  browser_sessions.json         # браузерные сессии, cookies, резюме и настройки аккаунта
+  config.json                   # глобальные настройки бота, URL-пул, шаблоны писем, LLM и анкеты
+  applied_vacancies.json        # история отправленных откликов по аккаунтам и ID вакансий
+  test_required_vacancies.json  # вакансии, где потребовался тест или анкета
+  answer_history.json           # история ответов на тесты/анкеты работодателей
+  interviews.json               # переговоры, сообщения, статусы LLM-ответов и закрытые чаты
+  debug.log                     # рабочий лог серверной части
 ```
 
-Формат сессии в `browser_sessions.json`:
+Основные форматы:
+
+`browser_sessions.json` и элементы `accounts.json`:
 ```json
 {
   "name": "nick",
@@ -163,8 +171,73 @@ data/
   "letter": "",
   "cookies": { "hhtoken": "...", ... },
   "bot_active": true,
+  "url_pages": {},
   "apply_tests": false
 }
+```
+
+`config.json`:
+```json
+{
+  "pages_per_url": 25,
+  "max_concurrent": 20,
+  "response_delay": 3,
+  "pause_between_cycles": 60,
+  "min_salary": 0,
+  "questionnaire_templates": [{ "keywords": ["..."], "answer": "..." }],
+  "letter_templates": [{ "name": "Стандартное", "text": "..." }],
+  "url_pool": [{ "url": "https://hh.ru/search/vacancy?...", "pages": 25 }],
+  "llm_enabled": false,
+  "llm_profiles": [{ "name": "gpt", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini" }]
+}
+```
+
+`applied_vacancies.json`:
+```json
+{
+  "Имя аккаунта": {
+    "123456789": {
+      "url": "https://hh.ru/vacancy/123456789",
+      "title": "Название вакансии",
+      "company": "Компания",
+      "salary_from": null,
+      "salary_to": null,
+      "at": "2026-04-04T05:18:28.422961"
+    }
+  }
+}
+```
+
+`test_required_vacancies.json` хранит вакансии, где отклик упёрся в тест; `answer_history.json` - сохранённые ответы на вопросы тестов; `interviews.json` - переговоры и служебные признаки LLM-автоответов.
+
+---
+
+## Структура файлов
+
+```
+.
+  web_app.py                 # точка входа приложения; импортирует модули серверной части
+  requirements.txt           # Python-зависимости
+  Dockerfile                 # образ приложения
+  docker-compose.yml         # локальный запуск в контейнере с томом для data/
+  README.md                  # основная документация проекта
+
+  hh_backend/
+    __init__.py              # пакет серверной части
+    README.md                # краткая карта модулей серверной части
+    state.py                 # глобальная конфигурация и список аккаунтов
+    storage.py               # чтение/запись JSON, кеши, функции доступа к данным
+    hh_client.py             # HTTP-клиент HH.ru, парсинг страниц, резюме, чаты и LLM
+    bot.py                   # состояние аккаунтов, рабочие циклы бота и WebSocket-рассылка
+    routes.py                # маршруты FastAPI, обработчики REST API, WebSocket-точка подключения и служебные точки доступа
+
+  static/
+    index.html               # HTML-разметка панели
+    css/dashboard.css        # стили интерфейса
+    js/dashboard.js          # клиентская логика, WebSocket, рендер таблиц и настроек
+
+  data/                      # рабочие JSON-данные, сессии, история и логи
+  images/                    # скриншоты интерфейса для README
 ```
 
 ---
@@ -173,8 +246,8 @@ data/
 
 | Компонент | Стек |
 |-----------|------|
-| Backend | Python 3.13, FastAPI, uvicorn |
-| Frontend | Vanilla JS, WebSocket (real-time) |
+| Серверная часть | Python 3.13, FastAPI, uvicorn |
+| Интерфейс | Vanilla JS, WebSocket (реальное время) |
 | AI | OpenAI GPT (авто-ответы, решения об откликах) |
 | Парсинг | requests, BeautifulSoup4, SSR JSON |
 | Деплой | Docker + docker-compose |

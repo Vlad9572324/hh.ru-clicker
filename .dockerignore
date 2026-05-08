@@ -2,3 +2,13 @@ data/
 __pycache__/
 *.pyc
 .git/
+.gitignore
+.env
+.env.*
+*.local
+*.secret
+*.pem
+*.key
+*.log
+dist/
+build/

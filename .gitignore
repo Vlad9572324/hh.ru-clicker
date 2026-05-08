@@ -1,6 +1,14 @@
 # Данные пользователя
 data/
 
+# Локальные секреты и окружение
+.env
+.env.*
+*.local
+*.secret
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.py[cod]

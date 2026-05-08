@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY web_app.py .
+COPY hh_backend/ hh_backend/
 COPY static/ static/
 
 # Папка data монтируется через volume (см. docker-compose.yml)
