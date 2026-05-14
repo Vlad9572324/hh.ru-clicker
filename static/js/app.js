@@ -3657,7 +3657,7 @@ async function loadHotLeads(btn) {
     res.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px">${offers.map(o => {
       const vacs = (o.vacancies || []).slice(0, 2).map(v => esc(v)).join(', ');
       const invBadge = o.has_invitation ? '<span style="background:rgba(63,185,80,0.15);color:var(--green);padding:1px 6px;border-radius:3px;font-size:10px;margin-left:6px">приглашение</span>' : '';
-      const link = o.vacancy_id ? `<a href="https://hh.ru/vacancy/${o.vacancy_id}" target="_blank" style="color:var(--cyan);font-size:11px;margin-left:6px">→ вакансия</a>` : '';
+      const link = o.vacancy_id ? `<a href="https://hh.ru/vacancy/${encodeURIComponent(o.vacancy_id)}" target="_blank" style="color:var(--cyan);font-size:11px;margin-left:6px">→ вакансия</a>` : '';
       return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 12px">
         <div style="font-size:12px;font-weight:600">${esc(o.employer)}${invBadge}${link}</div>
         <div style="font-size:11px;color:var(--dim);margin-top:2px">${vacs}</div>

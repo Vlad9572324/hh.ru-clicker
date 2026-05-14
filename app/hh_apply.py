@@ -161,23 +161,48 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                     rich_fields = {q["field"]: q for q in rich_qs}
                     validated_ans = {}
                     for field, llm_val in llm_ans.items():
-                        if field in rich_fields:
-                            q = rich_fields[field]
-                            if q["type"] in ("radio", "checkbox", "select") and q["options"]:
-                                valid_values = [o["value"] for o in q["options"]]
-                                if llm_val in valid_values:
-                                    validated_ans[field] = llm_val
+                        if field not in rich_fields:
+                            # Free-text or unknown field — only accept scalars
+                            if isinstance(llm_val, (str, int, float, bool)):
+                                validated_ans[field] = str(llm_val)
+                            continue
+                        q = rich_fields[field]
+                        if not (q["type"] in ("radio", "checkbox", "select") and q["options"]):
+                            if isinstance(llm_val, (str, int, float, bool)):
+                                validated_ans[field] = str(llm_val)
+                            continue
+                        valid_values = [o["value"] for o in q["options"]]
+                        # Checkbox may legitimately receive a list of selected values
+                        if q["type"] == "checkbox" and isinstance(llm_val, list):
+                            picked = []
+                            for item in llm_val:
+                                if not isinstance(item, (str, int, float, bool)):
+                                    continue
+                                s = str(item).strip()
+                                if s in valid_values:
+                                    picked.append(s)
                                 else:
-                                    # Try fuzzy match (case-insensitive strip)
-                                    matched = [v for v in valid_values if v.lower().strip() == llm_val.lower().strip()]
-                                    if matched:
-                                        validated_ans[field] = matched[0]
-                                    else:
-                                        log_debug(f"LLM answer '{llm_val}' not in options {valid_values}, skipping field {field}")
+                                    fuzzy = [v for v in valid_values if v.lower().strip() == s.lower()]
+                                    if fuzzy:
+                                        picked.append(fuzzy[0])
+                            if picked:
+                                validated_ans[field] = picked
                             else:
-                                validated_ans[field] = llm_val
+                                log_debug(f"LLM checkbox {field}: nothing matched in {llm_val} vs {valid_values}")
+                            continue
+                        # Scalar option (radio/select or single checkbox value as string)
+                        if not isinstance(llm_val, (str, int, float, bool)):
+                            log_debug(f"LLM {q['type']} {field}: unexpected type {type(llm_val).__name__}, skipping")
+                            continue
+                        s = str(llm_val).strip()
+                        if s in valid_values:
+                            validated_ans[field] = s
                         else:
-                            validated_ans[field] = llm_val
+                            fuzzy = [v for v in valid_values if v.lower().strip() == s.lower()]
+                            if fuzzy:
+                                validated_ans[field] = fuzzy[0]
+                            else:
+                                log_debug(f"LLM answer '{s}' not in options {valid_values}, skipping field {field}")
                     overridden = [f for f in validated_ans if f in field_answers]
                     for f in overridden:
                         field_answers[f] = validated_ans[f]
@@ -201,7 +226,12 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                     data.add_field(name, hidden[name])
 
             for name, value in field_answers.items():
-                data.add_field(name, str(value))
+                # checkbox с несколькими выбранными значениями → несколько полей одного name
+                if isinstance(value, list):
+                    for v in value:
+                        data.add_field(name, str(v))
+                else:
+                    data.add_field(name, str(value))
 
             # Шаг 3: POST
             async with session.post(

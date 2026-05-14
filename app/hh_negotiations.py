@@ -31,6 +31,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
         "unread_by_employer": 0,  # count of negotiations where employer hasn't read our messages
     }
     cutoff = datetime.now().astimezone() - timedelta(days=60)
+    seen_interview_ids: set = set()  # для дедупа при битой пагинации HH
 
     # ── Шаг 1: точный счёт интервью через state=INTERVIEW фильтр ──────────────
     for page in range(max_pages):
@@ -62,17 +63,22 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 break
 
             items_on_page = 0
+            new_items_on_page = 0
             for item in parts[1:]:
                 items_on_page += 1
                 item = re.sub(r'^[^>]*>', '', item, count=1)
 
-                result["interview"] += 1
-
-                # chatId per item
+                # chatId per item — дедуп по нему, чтобы повторная страница не накручивала interview
                 neg_id_match = re.search(r'"chatId"\s*:\s*(\d+)', item)
                 item_neg_id = neg_id_match.group(1) if neg_id_match else ""
-                if item_neg_id and item_neg_id not in result["neg_ids"]:
-                    result["neg_ids"].append(item_neg_id)
+                if item_neg_id:
+                    if item_neg_id in seen_interview_ids:
+                        continue  # уже видели этот чат на предыдущей странице
+                    seen_interview_ids.add(item_neg_id)
+                    if item_neg_id not in result["neg_ids"]:
+                        result["neg_ids"].append(item_neg_id)
+                new_items_on_page += 1
+                result["interview"] += 1
 
                 # Извлекаем текст для списка
                 clean = re.sub(r'<svg[\s\S]*?</svg>', '', item)
@@ -103,7 +109,8 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                     "neg_id": item_neg_id,
                 })
 
-            if items_on_page == 0:
+            if items_on_page == 0 or new_items_on_page == 0:
+                # либо страница пустая, либо HH вернул дубликаты предыдущей
                 break
 
         except Exception as e:
@@ -114,6 +121,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
         return result
 
     # ── Шаг 2: просмотры / отказы с общей страницы ────────────────────────────
+    seen_general_keys: set = set()
     for page in range(max_pages):
         try:
             resp = requests.get(
@@ -147,9 +155,18 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 break
 
             items_on_page = 0
+            new_items_on_page = 0
             for item in parts[1:]:
                 items_on_page += 1
                 item = re.sub(r'^[^>]*>', '', item, count=1)
+                # Dedup by chatId — HH иногда повторяет страницы
+                neg_id_match = re.search(r'"chatId"\s*:\s*(\d+)', item)
+                key = neg_id_match.group(1) if neg_id_match else f"page{page}_idx{items_on_page}"
+                if key in seen_general_keys:
+                    continue
+                seen_general_keys.add(key)
+                new_items_on_page += 1
+
                 clean = re.sub(r'<svg[\s\S]*?</svg>', '', item)
                 clean = re.sub(r'<[^>]*>', ' ', clean, flags=re.DOTALL)
                 clean = re.sub(r'\s+', ' ', clean).strip()
@@ -162,7 +179,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 elif first_word not in ('Собеседование', 'Приглашение', 'Интервью'):
                     result["not_viewed"] += 1
 
-            if items_on_page == 0:
+            if items_on_page == 0 or new_items_on_page == 0:
                 break
 
         except Exception as e:

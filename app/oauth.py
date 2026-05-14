@@ -3,7 +3,9 @@ OAuth via official Android app credentials — token management and OAuth-based 
 """
 
 import json
+import os
 import re
+import secrets
 import time
 import threading
 from pathlib import Path
@@ -12,13 +14,21 @@ import requests
 from app.logging_utils import log_debug
 from app.config import CONFIG
 
-# ── OAuth via official Android app credentials ──
-_HH_OAUTH_CLIENT_ID = "HIOMIAS39CA9DICTA7JIO64LQKQJF5AGIK74G9ITJKLNEDAOH5FHS5G1JI7FOEGD"
-_HH_OAUTH_CLIENT_SECRET = "V9M870DE342BGHFRUJ5FTCGCUA1482AN0DI8C5TFI9ULMA89H10N60NOP8I4JMVS"
+# Эти креды извлечены из публичного APK HH Android и широко известны.
+# Не секрет: но желательно вынести в env для возможности замены.
+_HH_OAUTH_CLIENT_ID = os.environ.get(
+    "HH_OAUTH_CLIENT_ID",
+    "HIOMIAS39CA9DICTA7JIO64LQKQJF5AGIK74G9ITJKLNEDAOH5FHS5G1JI7FOEGD",
+)
+_HH_OAUTH_CLIENT_SECRET = os.environ.get(
+    "HH_OAUTH_CLIENT_SECRET",
+    "V9M870DE342BGHFRUJ5FTCGCUA1482AN0DI8C5TFI9ULMA89H10N60NOP8I4JMVS",
+)
 _HH_OAUTH_REDIRECT = "hhandroid://oauthresponse"
 _OAUTH_FILE = Path("data/oauth_tokens.json")
 _oauth_tokens: dict = {}  # {resume_hash: {access_token, refresh_token, expires_at}}
 _oauth_lock = threading.Lock()
+_oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чтобы не интерливить файл
 
 
 def _load_oauth_tokens():
@@ -34,13 +44,22 @@ def _load_oauth_tokens():
 
 
 def _save_oauth_tokens():
-    """Persist OAuth tokens to disk."""
-    try:
-        _OAUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_OAUTH_FILE, "w", encoding="utf-8") as f:
-            json.dump(_oauth_tokens, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log_debug(f"OAuth: failed to save tokens: {e}")
+    """Atomic persist (tmp + replace) of OAuth tokens to disk."""
+    with _oauth_save_lock:
+        try:
+            _OAUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with _oauth_lock:
+                snapshot = dict(_oauth_tokens)
+            tmp = _OAUTH_FILE.with_suffix(".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                tmp.replace(_OAUTH_FILE)
+            except Exception as e:
+                log_debug(f"OAuth: failed to save tokens: {e}")
+                tmp.unlink(missing_ok=True)
+        except Exception as e:
+            log_debug(f"OAuth: save outer error: {e}")
 
 
 # Load on import
@@ -104,33 +123,42 @@ def _obtain_oauth_token(acc: dict) -> str:
     # Full authorize flow using cookies
     try:
         cookies = acc.get("cookies", {})
+        # Random per-request state защищает от accept'a чужого code-redirect (CSRF)
+        flow_state = secrets.token_urlsafe(24)
+
+        def _extract_code(location: str) -> str:
+            """Извлечь code только если state совпадает с нашим."""
+            if not location:
+                return ""
+            state_m = re.search(r"[?&]state=([^&]+)", location)
+            if state_m and state_m.group(1) != flow_state:
+                log_debug(f"OAuth: state mismatch (got {state_m.group(1)!r}, want {flow_state!r}) — rejecting code")
+                return ""
+            code_m = re.search(r"[?&]code=([^&]+)", location)
+            return code_m.group(1) if code_m else ""
+
         # Step 1: GET authorize
         r1 = requests.get("https://hh.ru/oauth/authorize", params={
             "response_type": "code",
             "client_id": _HH_OAUTH_CLIENT_ID,
             "redirect_uri": _HH_OAUTH_REDIRECT,
-            "state": "botstate",
+            "state": flow_state,
         }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
 
-        code = None
-        loc = r1.headers.get("Location", "")
-        m = re.search(r"code=([^&]+)", loc)
-        if m:
-            code = m.group(1)
-        elif r1.status_code == 200 and ("разрешить" in r1.text.lower() or "approve" in r1.text.lower() or "grant" in r1.text.lower()):
+        code = _extract_code(r1.headers.get("Location", ""))
+        if not code and r1.status_code == 200 and (
+            "разрешить" in r1.text.lower() or "approve" in r1.text.lower() or "grant" in r1.text.lower()
+        ):
             # Submit approve form
             r2 = requests.post("https://hh.ru/oauth/authorize", data={
                 "response_type": "code",
                 "client_id": _HH_OAUTH_CLIENT_ID,
                 "redirect_uri": _HH_OAUTH_REDIRECT,
-                "state": "botstate",
+                "state": flow_state,
                 "action": "approve",
                 "_xsrf": cookies.get("_xsrf", ""),
             }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
-            loc2 = r2.headers.get("Location", "")
-            m2 = re.search(r"code=([^&]+)", loc2)
-            if m2:
-                code = m2.group(1)
+            code = _extract_code(r2.headers.get("Location", ""))
 
         if not code:
             log_debug(f"OAuth: failed to get code for {resume_hash[:12]}")

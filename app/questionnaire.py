@@ -142,30 +142,40 @@ def _parse_questionnaire_rich(html: str) -> list:
                        "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": []})
         q_idx += 1
 
-    radio_groups: dict = {}
+    radio_groups: dict = {}      # name -> [value, ...]
+    radio_value_label: dict = {}  # (name, value) -> label_text
     radio_order: list = []
+    # Берём весь input как блок, чтобы вытащить name+value+id одной строкой.
     for inp in re.findall(r'<input[^>]+type="radio"[^>]+>', html, re.I):
         nm = re.search(r'name="([^"]+)"', inp)
         vl = re.search(r'value="([^"]+)"', inp)
-        if nm and vl and re.match(r'task_\d+', nm.group(1)):
-            n, v = nm.group(1), vl.group(1)
-            if n not in radio_groups:
-                radio_groups[n] = []
-                radio_order.append(n)
-            radio_groups[n].append(v)
+        if not (nm and vl and re.match(r'task_\d+', nm.group(1))):
+            continue
+        n, v = nm.group(1), vl.group(1)
+        if n not in radio_groups:
+            radio_groups[n] = []
+            radio_order.append(n)
+        radio_groups[n].append(v)
+        # Лейбл — по id этого конкретного input (может отличаться от value)
+        id_m = re.search(r'\bid="([^"]+)"', inp)
+        if id_m:
+            label_m = re.search(
+                rf'<label[^>]+for="{re.escape(id_m.group(1))}"[^>]*>(.*?)</label>',
+                html, re.DOTALL,
+            )
+            if label_m:
+                lbl = re.sub(r'<[^>]+>', '', label_m.group(1)).strip()
+                if lbl:
+                    radio_value_label[(n, v)] = lbl
 
-    label_map: dict = {}
-    for inp_with_id in re.findall(r'<input[^>]+type="radio"[^>]+id="([^"]+)"[^>]*>', html, re.I):
-        label_m = re.search(rf'<label[^>]+for="{re.escape(inp_with_id)}"[^>]*>(.*?)</label>', html, re.DOTALL)
-        if label_m:
-            lbl = re.sub(r'<[^>]+>', '', label_m.group(1)).strip()
-            label_map[inp_with_id] = lbl
     default_labels = ["да", "нет"]
-
     for name in radio_order:
         vals = radio_groups[name]
-        options = [{"value": v, "label": label_map.get(v, default_labels[i] if i < len(default_labels) else v)}
-                   for i, v in enumerate(vals)]
+        options = [
+            {"value": v,
+             "label": radio_value_label.get((name, v), default_labels[i] if i < len(default_labels) else v)}
+            for i, v in enumerate(vals)
+        ]
         result.append({"field": name, "type": "radio",
                        "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": options})
         q_idx += 1
