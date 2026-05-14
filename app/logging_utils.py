@@ -7,30 +7,49 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-
 DEBUG_LOG_FILE = DATA_DIR / "debug.log"
 
-_logger = logging.getLogger("hh_bot")
-if not _logger.handlers:
-    _logger.setLevel(logging.DEBUG)
-    _handler = RotatingFileHandler(
-        DEBUG_LOG_FILE,
-        maxBytes=50 * 1024 * 1024,  # 50MB per file
-        backupCount=3,               # debug.log + .1 + .2 + .3 = до 200MB
-        encoding="utf-8",
-    )
-    _handler.setFormatter(logging.Formatter(
-        "[%(asctime)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    _logger.addHandler(_handler)
-    _logger.propagate = False
+_logger = None
+_logger_lock_init = False
+
+
+def _get_logger() -> logging.Logger:
+    """Lazy-init RotatingFileHandler. Создание handler'а откладывается до первого
+    log_debug() чтобы import работал даже когда data/ недоступен (например в тестах
+    или когда файл root-owned)."""
+    global _logger, _logger_lock_init
+    if _logger is not None:
+        return _logger
+    if _logger_lock_init:
+        # Re-entrant защита: если init упал — не пытаемся снова, отдаём silent logger.
+        return logging.getLogger("hh_bot_null")
+    _logger_lock_init = True
+    try:
+        DATA_DIR.mkdir(exist_ok=True)
+        lg = logging.getLogger("hh_bot")
+        lg.setLevel(logging.DEBUG)
+        handler = RotatingFileHandler(
+            DEBUG_LOG_FILE,
+            maxBytes=50 * 1024 * 1024,  # 50MB на файл
+            backupCount=3,               # debug.log + .1 + .2 + .3 = до 200MB
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(
+            "[%(asctime)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        lg.addHandler(handler)
+        lg.propagate = False
+        _logger = lg
+        return lg
+    except Exception:
+        # data/ unreadable / permission denied — fall back на silent stderr.
+        return logging.getLogger("hh_bot_null")
 
 
 def log_debug(message: str):
     """Записать отладочное сообщение в файл (с ротацией)."""
-    _logger.debug(message)
+    _get_logger().debug(message)
 
 
 def _is_login_page(html: str) -> bool:

@@ -24,6 +24,61 @@ except ImportError:
     _openai_available = False
 
 
+def classify_apply_response(status_code: int, txt: str) -> tuple:
+    """Pure: классифицирует ответ HH popup на отклик в (result, info).
+    Вынесено из send_response_async чтобы было тестируемо без mock'ов HTTP.
+
+    Порядок проверок важен:
+    1. 401/403 → auth_error
+    2. 200 + login-page HTML → auth_error
+    3. известные error-маркеры в теле (limit/test/already) — даже на 200, т.к. HH
+       отдаёт их с status=200 (см. audit C5)
+    4. 200 + success-маркер → sent
+    5. всё остальное → error
+    """
+    if status_code in (401, 403):
+        return "auth_error", {}
+
+    if status_code == 200 and _is_login_page(txt):
+        return "auth_error", {}
+
+    info = {}
+    if "shortVacancy" in txt:
+        try:
+            p = json.loads(txt)
+            info = {
+                "title": glom(p, "responseStatus.shortVacancy.name", default=""),
+                "company": glom(p, "responseStatus.shortVacancy.company.name", default=""),
+                "salary_from": glom(p, "responseStatus.shortVacancy.compensation.from", default=None),
+                "salary_to": glom(p, "responseStatus.shortVacancy.compensation.to", default=None),
+            }
+            ci = glom(p, "responseStatus.shortVacancy.contactInfo", default={})
+            if ci and (ci.get("email") or ci.get("fio")):
+                contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
+                phones = (ci.get("phones") or {}).get("phones", [])
+                if phones:
+                    ph = phones[0]
+                    contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
+                info["contact"] = contact
+        except Exception:
+            pass
+
+    if "negotiations-limit-exceeded" in txt:
+        return "limit", info
+    if "test-required" in txt:
+        return "test", info
+    if "alreadyApplied" in txt:
+        return "already", info
+
+    if status_code == 200:
+        if ('"success":true' in txt or '"status":"ok"' in txt
+                or '"responded":true' in txt or "shortVacancy" in txt):
+            return "sent", info
+        return "error", {"raw": txt[:200], **info}
+
+    return "error", {"raw": txt[:200], **info}
+
+
 async def send_response_async(acc: dict, vid: str) -> tuple:
     """Асинхронная отправка отклика. Возвращает (результат, инфо)"""
     log_debug(f"📤 ОТПРАВКА ОТКЛИКА на вакансию {vid} | Аккаунт: {acc['name']}")
@@ -56,52 +111,7 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
         log_debug(f"   Ответ HTTP: {status_code} | Размер: {len(txt)}")
         if status_code >= 400:
             log_debug(f"   Тело ответа: {txt[:300]}")
-
-        if status_code in (401, 403):
-            return "auth_error", {}
-
-        if status_code == 200 and _is_login_page(txt):
-            return "auth_error", {}
-
-        # Извлекаем title/company один раз — пригодится во всех ветках
-        info = {}
-        if "shortVacancy" in txt:
-            try:
-                p = json.loads(txt)
-                info = {
-                    "title": glom(p, "responseStatus.shortVacancy.name", default=""),
-                    "company": glom(p, "responseStatus.shortVacancy.company.name", default=""),
-                    "salary_from": glom(p, "responseStatus.shortVacancy.compensation.from", default=None),
-                    "salary_to": glom(p, "responseStatus.shortVacancy.compensation.to", default=None),
-                }
-                ci = glom(p, "responseStatus.shortVacancy.contactInfo", default={})
-                if ci and (ci.get("email") or ci.get("fio")):
-                    contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
-                    phones = (ci.get("phones") or {}).get("phones", [])
-                    if phones:
-                        ph = phones[0]
-                        contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
-                    info["contact"] = contact
-            except Exception:
-                pass
-
-        # Классификация по содержимому ответа (порядок важен: ошибки сначала)
-        if "negotiations-limit-exceeded" in txt:
-            return "limit", info
-        if "test-required" in txt:
-            return "test", info
-        if "alreadyApplied" in txt:
-            return "already", info
-
-        if status_code == 200:
-            # Только явные success-маркеры → sent
-            if ('"success":true' in txt or '"status":"ok"' in txt
-                    or '"responded":true' in txt or "shortVacancy" in txt):
-                return "sent", info
-            # 200 без success-маркеров и без known errors → подозрительно, считаем error
-            return "error", {"raw": txt[:200], **info}
-
-        return "error", {"raw": txt[:200], **info}
+        return classify_apply_response(status_code, txt)
     except Exception as e:
         return "error", {"exception": str(e)}
 

@@ -71,7 +71,8 @@ _save_applied_lock = threading.Lock()
 
 def _save_applied_async():
     """Сохранить applied в фоне (atomic write)"""
-    if not _save_applied_lock.acquire(blocking=False):
+    lock = _save_applied_lock  # local ref на случай reload модуля
+    if not lock.acquire(blocking=False):
         return  # another save in progress
     try:
         with _cache_lock:
@@ -87,14 +88,15 @@ def _save_applied_async():
         except Exception:
             pass
     finally:
-        _save_applied_lock.release()
+        lock.release()
 
 
 _save_tests_lock = threading.Lock()
 
 def _save_tests_async():
     """Сохранить tests в фоне (atomic write)"""
-    if not _save_tests_lock.acquire(blocking=False):
+    lock = _save_tests_lock
+    if not lock.acquire(blocking=False):
         return
     try:
         with _cache_lock:
@@ -110,14 +112,15 @@ def _save_tests_async():
         except Exception:
             pass
     finally:
-        _save_tests_lock.release()
+        lock.release()
 
 
 _save_interviews_lock = threading.Lock()
 
 def _save_interviews_async():
     """Сохранить interviews в фоне (атомарная запись, с защитой от параллельных записей)"""
-    if not _save_interviews_lock.acquire(blocking=False):
+    lock = _save_interviews_lock
+    if not lock.acquire(blocking=False):
         return  # другой поток уже сохраняет — пропускаем
     try:
         with _cache_lock:
@@ -127,7 +130,7 @@ def _save_interviews_async():
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
         tmp.replace(INTERVIEWS_FILE)
     finally:
-        _save_interviews_lock.release()
+        lock.release()
 
 
 def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
