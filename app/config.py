@@ -14,6 +14,10 @@ DATA_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 
+# Защищаем write+rename последовательность от конкурентных вызовов из разных потоков.
+_config_write_lock = threading.Lock()
+_accounts_write_lock = threading.Lock()
+
 
 # ============================================================
 # АККАУНТЫ
@@ -140,14 +144,15 @@ def save_config():
     data["llm_profiles"] = CONFIG.llm_profiles
     data["llm_profile_mode"] = CONFIG.llm_profile_mode
     def _write():
-        tmp = CONFIG_FILE.with_suffix(".tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            tmp.replace(CONFIG_FILE)
-        except Exception as e:
-            log_debug(f"save_config error: {e}")
-            tmp.unlink(missing_ok=True)
+        with _config_write_lock:
+            tmp = CONFIG_FILE.with_suffix(".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                tmp.replace(CONFIG_FILE)
+            except Exception as e:
+                log_debug(f"save_config error: {e}")
+                tmp.unlink(missing_ok=True)
     threading.Thread(target=_write, daemon=True).start()
 
 
@@ -202,14 +207,15 @@ def save_accounts():
         for acc in accounts_data
     ]
     def _write():
-        tmp = ACCOUNTS_FILE.with_suffix(".tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f, ensure_ascii=False, indent=2)
-            tmp.replace(ACCOUNTS_FILE)
-        except Exception as e:
-            log_debug(f"save_accounts error: {e}")
-            tmp.unlink(missing_ok=True)
+        with _accounts_write_lock:
+            tmp = ACCOUNTS_FILE.with_suffix(".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                tmp.replace(ACCOUNTS_FILE)
+            except Exception as e:
+                log_debug(f"save_accounts error: {e}")
+                tmp.unlink(missing_ok=True)
     threading.Thread(target=_write, daemon=True).start()
 
 

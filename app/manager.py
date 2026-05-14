@@ -100,6 +100,8 @@ class BotManager:
         # HR contacts collected from contactInfo during pre-checks
         self.hr_contacts: list = []  # capped at 500
         self._hr_contacts_lock = threading.Lock()
+        # Guards activate_session against concurrent WS calls spawning duplicate workers
+        self._activate_lock = threading.Lock()
 
     def _build_session_urls(self, resume_hash: str) -> list[str]:
         """URL поиска для браузерной сессии: resume-URL + keyword-URLs из глобального пула."""
@@ -118,25 +120,26 @@ class BotManager:
 
     def activate_session(self, temp_idx: int) -> bool:
         """Запустить браузерную сессию как полноценный бот-аккаунт."""
-        if temp_idx < 0 or temp_idx >= len(self.temp_sessions):
-            return False
-        ts = self.temp_sessions[temp_idx]
-        if not ts.get("resume_hash"):
-            return False
-        if temp_idx in self.temp_states:
-            return True  # уже запущен
-        acc = {
-            "name": ts["name"],
-            "short": ts.get("short", ts["name"]),
-            "color": "yellow",
-            "resume_hash": ts["resume_hash"],
-            "letter": ts.get("letter", ""),
-            "cookies": ts.get("cookies", {}),
-            "urls": self._build_session_urls(ts["resume_hash"]),
-        }
-        state = AccountState(acc)
-        self.temp_states[temp_idx] = state
-        ts["bot_active"] = True
+        with self._activate_lock:
+            if temp_idx < 0 or temp_idx >= len(self.temp_sessions):
+                return False
+            ts = self.temp_sessions[temp_idx]
+            if not ts.get("resume_hash"):
+                return False
+            if temp_idx in self.temp_states:
+                return True  # уже запущен
+            acc = {
+                "name": ts["name"],
+                "short": ts.get("short", ts["name"]),
+                "color": "yellow",
+                "resume_hash": ts["resume_hash"],
+                "letter": ts.get("letter", ""),
+                "cookies": ts.get("cookies", {}),
+                "urls": self._build_session_urls(ts["resume_hash"]),
+            }
+            state = AccountState(acc)
+            self.temp_states[temp_idx] = state
+            ts["bot_active"] = True
         save_browser_sessions(self.temp_sessions)
         log_debug(f"activate_session({temp_idx}): starting threads...")
         t1 = threading.Thread(target=self._run_account_worker, args=(900 + temp_idx, state), daemon=True, name=f"worker-{temp_idx}")

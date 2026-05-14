@@ -80,13 +80,13 @@ async def websocket_endpoint(ws: WebSocket):
                     save_config()
                     bot._add_log("", "", f"⚙️ Авто-тесты: {'ВКЛ' if CONFIG.auto_apply_tests else 'ВЫКЛ'}", "info")
                 elif key and key in _CONFIG_KEYS:
-                    old_val = getattr(CONFIG, key)
+                    from app.routes.settings import _safe_cast
                     try:
-                        setattr(CONFIG, key, type(old_val)(value))
+                        setattr(CONFIG, key, _safe_cast(key, value))
                         save_config()
                         bot._add_log("", "", f"⚙️ {key} = {value}", "info")
-                    except Exception as e:
-                        log_debug(f"set_config error: {e}")
+                    except (ValueError, TypeError) as e:
+                        log_debug(f"set_config {key} type error: {e}")
             elif cmd == "set_questionnaire":
                 templates = data.get("templates")
                 default = data.get("default_answer")

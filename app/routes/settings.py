@@ -2,6 +2,8 @@
 Settings and raw config/accounts routes.
 """
 
+from typing import Union
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
@@ -13,20 +15,50 @@ router = APIRouter()
 
 class ConfigUpdate(BaseModel):
     key: str
-    value: float
+    value: Union[bool, int, float, str]
+
+
+def _safe_cast(key: str, value):
+    """Cast `value` to the type of `CONFIG.<key>`. Raises ValueError on mismatch.
+    Prevents type confusion (e.g. dict where int expected) и сохраняет инварианты Config.
+    """
+    old_val = getattr(CONFIG, key)
+    expected = type(old_val)
+    if expected is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str) and value.lower() in ("true", "false", "1", "0", "yes", "no"):
+            return value.lower() in ("true", "1", "yes")
+        raise ValueError(f"{key} expects bool, got {type(value).__name__}")
+    if expected in (int, float):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return expected(value)
+        if isinstance(value, str):
+            return expected(value)
+        raise ValueError(f"{key} expects {expected.__name__}, got {type(value).__name__}")
+    if expected is str:
+        return str(value)
+    if expected in (list, dict):
+        if not isinstance(value, expected):
+            raise ValueError(f"{key} expects {expected.__name__}, got {type(value).__name__}")
+        return value
+    if isinstance(value, expected):
+        return value
+    raise ValueError(f"{key}: cannot cast {type(value).__name__} to {expected.__name__}")
 
 
 @router.post("/api/settings")
 async def api_settings(update: ConfigUpdate):
-    if update.key in _CONFIG_KEYS:
-        old_val = getattr(CONFIG, update.key)
-        try:
-            setattr(CONFIG, update.key, type(old_val)(update.value))
-        except (ValueError, TypeError):
-            return {"ok": False, "error": "Invalid value type"}
-        save_config()
-        return {"ok": True, "key": update.key, "value": getattr(CONFIG, update.key)}
-    return {"ok": False, "error": "Unknown key"}
+    if update.key not in _CONFIG_KEYS:
+        return {"ok": False, "error": "Unknown key"}
+    try:
+        setattr(CONFIG, update.key, _safe_cast(update.key, update.value))
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "error": str(e)}
+    save_config()
+    return {"ok": True, "key": update.key, "value": getattr(CONFIG, update.key)}
 
 
 @router.get("/api/raw/config")
@@ -41,28 +73,30 @@ async def api_raw_config_get():
 
 @router.post("/api/raw/config")
 async def api_raw_config_set(request: Request):
-    """Перезаписать config из JSON-объекта."""
+    """Перезаписать config из JSON-объекта. Только разрешённые ключи + строгий кастинг типов."""
     try:
         data = await request.json()
     except Exception:
         return {"ok": False, "error": "Невалидный JSON"}
     if not isinstance(data, dict):
         return {"ok": False, "error": "Ожидается объект"}
+    errors = {}
     for key, value in data.items():
         if key in _CONFIG_KEYS:
             try:
-                field_type = type(getattr(CONFIG, key))
-                setattr(CONFIG, key, field_type(value))
-            except Exception:
-                setattr(CONFIG, key, value)
+                setattr(CONFIG, key, _safe_cast(key, value))
+            except (ValueError, TypeError) as e:
+                errors[key] = str(e)
         elif key == "questionnaire_templates" and isinstance(value, list):
             CONFIG.questionnaire_templates = value
         elif key == "letter_templates" and isinstance(value, list):
             CONFIG.letter_templates = value
         elif key == "url_pool" and isinstance(value, list):
             CONFIG.url_pool = value
+        else:
+            errors[key] = "unknown_or_wrong_type"
     save_config()
-    return {"ok": True}
+    return {"ok": not errors, "errors": errors}
 
 
 @router.get("/api/raw/accounts")

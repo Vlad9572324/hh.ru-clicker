@@ -244,18 +244,22 @@ def load_browser_sessions() -> list:
     return []
 
 
+_save_sessions_lock = threading.Lock()
+
+
 def save_browser_sessions(sessions: list):
     """Сохранить браузерные сессии в файл (в фоновом потоке)."""
     snapshot = copy.deepcopy(sessions)
     def _write():
-        tmp = SESSIONS_FILE.with_suffix(".tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f, ensure_ascii=False, indent=2)
-            tmp.replace(SESSIONS_FILE)
-        except Exception as e:
-            log_debug(f"save_browser_sessions error: {e}")
-            tmp.unlink(missing_ok=True)
+        with _save_sessions_lock:
+            tmp = SESSIONS_FILE.with_suffix(".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                tmp.replace(SESSIONS_FILE)
+            except Exception as e:
+                log_debug(f"save_browser_sessions error: {e}")
+                tmp.unlink(missing_ok=True)
     threading.Thread(target=_write, daemon=True).start()
 
 

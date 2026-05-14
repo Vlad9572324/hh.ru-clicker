@@ -239,20 +239,20 @@ def auto_decline_discards(acc: dict) -> int:
                 break
 
         # Отклоняем
-        post_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
         for tid in topic_ids[:50]:  # не более 50 за раз
             try:
+                # requests сам сделает URL-encoding (важно: _xsrf может содержать `+`, `=`, `&`)
                 r2 = requests.post(
                     "https://hh.ru/applicant/negotiations/decline",
-                    headers=post_headers,
+                    headers=headers,
                     cookies=acc["cookies"],
-                    data=f"topicId={tid}&_xsrf={xsrf}",
+                    data={"topicId": tid, "_xsrf": xsrf},
                     timeout=10
                 )
                 if r2.status_code in (200, 302):
                     declined += 1
-            except Exception:
-                pass
+            except Exception as e:
+                log_debug(f"auto_decline_discards POST {tid}: {e}")
     except Exception as e:
         log_debug(f"auto_decline_discards error: {e}")
     return declined
