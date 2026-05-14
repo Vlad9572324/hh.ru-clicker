@@ -569,8 +569,8 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                             if m_found:
                                 vacancy_count = int(m_found.group(1).replace(" ", "").replace("\xa0", ""))
                                 break
-            except Exception:
-                pass
+            except Exception as e:
+                log_debug(f"_analyze_resume supply_demand error: {e}")
 
             supply_demand = round(active_seekers / vacancy_count, 2) if vacancy_count > 0 else 0
 
@@ -658,8 +658,8 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                         "vacancies": vc,
                         "ratio": round(active_seekers / vc, 1) if vc > 0 else 0,
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_debug(f"_analyze_resume term={term!r}: {e}")
             supply_demand_comparison.sort(key=lambda x: x.get("ratio") or 9999)
         except Exception as e:
             log_debug(f"_analyze_resume supply/demand comparison error: {e}")

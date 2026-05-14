@@ -134,7 +134,8 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
                      employer: str = "", vacancy_title: str = "",
                      employer_last_msg: str = None, needs_reply: bool = None,
                      llm_reply: str = None, llm_sent: bool = None,
-                     chat_not_found: bool = None, chat_status: str = None):
+                     chat_not_found: bool = None, chat_status: str = None,
+                     replied_msg_id: str = None):
     """Создать или обновить запись об интервью-переговоре."""
     _load_cache()
     now = datetime.now().isoformat(timespec="seconds")
@@ -165,6 +166,10 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
             # Never downgrade: once llm_sent=True, keep it
             if not record.get("llm_sent"):
                 record["llm_sent"] = llm_sent
+        # Persisted dedup key: last msg_id we successfully replied to.
+        # Used by LLM loop to skip after restart (in-memory dedup is lost).
+        if replied_msg_id:
+            record["replied_msg_id"] = str(replied_msg_id)
         if chat_not_found is True:
             record["chat_not_found"] = True  # never reset — chat is permanently closed
         if chat_status is not None:
@@ -197,6 +202,19 @@ def get_no_chat_neg_ids() -> set:
     _load_cache()
     with _cache_lock:
         return {nid for nid, r in _cache_interviews.items() if r.get("chat_not_found")}
+
+
+def get_replied_keys() -> set:
+    """Persisted LLM dedup: returns {(neg_id, replied_msg_id)} for chats already replied to.
+    Used to seed `state.llm_replied_msgs` on startup so we don't re-reply after restart.
+    """
+    _load_cache()
+    with _cache_lock:
+        return {
+            (str(nid), str(r["replied_msg_id"]))
+            for nid, r in _cache_interviews.items()
+            if r.get("llm_sent") and r.get("replied_msg_id")
+        }
 
 
 def get_interviews_list(acc: str = "", limit: int = 2000, status: str = "") -> list:

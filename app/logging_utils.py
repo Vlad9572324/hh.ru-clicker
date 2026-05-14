@@ -2,7 +2,8 @@
 Logging utilities and login-page detection helper.
 """
 
-from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 DATA_DIR = Path("data")
@@ -10,12 +11,26 @@ DATA_DIR.mkdir(exist_ok=True)
 
 DEBUG_LOG_FILE = DATA_DIR / "debug.log"
 
+_logger = logging.getLogger("hh_bot")
+if not _logger.handlers:
+    _logger.setLevel(logging.DEBUG)
+    _handler = RotatingFileHandler(
+        DEBUG_LOG_FILE,
+        maxBytes=50 * 1024 * 1024,  # 50MB per file
+        backupCount=3,               # debug.log + .1 + .2 + .3 = до 200MB
+        encoding="utf-8",
+    )
+    _handler.setFormatter(logging.Formatter(
+        "[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    _logger.addHandler(_handler)
+    _logger.propagate = False
+
 
 def log_debug(message: str):
-    """Записать отладочное сообщение в файл"""
-    with open(DEBUG_LOG_FILE, "a", encoding="utf-8") as f:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"[{timestamp}] {message}\n")
+    """Записать отладочное сообщение в файл (с ротацией)."""
+    _logger.debug(message)
 
 
 def _is_login_page(html: str) -> bool:

@@ -63,54 +63,45 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
         if status_code == 200 and _is_login_page(txt):
             return "auth_error", {}
 
-        if status_code == 200:
-            if "shortVacancy" in txt:
-                try:
-                    p = json.loads(txt)
-                    info = {
-                        "title": glom(p, "responseStatus.shortVacancy.name", default="?"),
-                        "company": glom(p, "responseStatus.shortVacancy.company.name", default="?"),
-                        "salary_from": glom(p, "responseStatus.shortVacancy.compensation.from", default=None),
-                        "salary_to": glom(p, "responseStatus.shortVacancy.compensation.to", default=None),
-                    }
-                    # Extract HR contact info
-                    ci = glom(p, "responseStatus.shortVacancy.contactInfo", default={})
-                    if ci and (ci.get("email") or ci.get("fio")):
-                        contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
-                        phones = (ci.get("phones") or {}).get("phones", [])
-                        if phones:
-                            ph = phones[0]
-                            contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
-                        info["contact"] = contact
-                    return "sent", info
-                except Exception as e:
-                    return "sent", {}
+        # Извлекаем title/company один раз — пригодится во всех ветках
+        info = {}
+        if "shortVacancy" in txt:
+            try:
+                p = json.loads(txt)
+                info = {
+                    "title": glom(p, "responseStatus.shortVacancy.name", default=""),
+                    "company": glom(p, "responseStatus.shortVacancy.company.name", default=""),
+                    "salary_from": glom(p, "responseStatus.shortVacancy.compensation.from", default=None),
+                    "salary_to": glom(p, "responseStatus.shortVacancy.compensation.to", default=None),
+                }
+                ci = glom(p, "responseStatus.shortVacancy.contactInfo", default={})
+                if ci and (ci.get("email") or ci.get("fio")):
+                    contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
+                    phones = (ci.get("phones") or {}).get("phones", [])
+                    if phones:
+                        ph = phones[0]
+                        contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
+                    info["contact"] = contact
+            except Exception:
+                pass
 
-            if '"success":true' in txt or '"status":"ok"' in txt or '"responded":true' in txt:
-                return "sent", {}
-
-            return "sent", {}
-
+        # Классификация по содержимому ответа (порядок важен: ошибки сначала)
         if "negotiations-limit-exceeded" in txt:
-            return "limit", {}
-
+            return "limit", info
         if "test-required" in txt:
-            info = {}
-            if "shortVacancy" in txt:
-                try:
-                    p = json.loads(txt)
-                    info = {
-                        "title": glom(p, "responseStatus.shortVacancy.name", default=""),
-                        "company": glom(p, "responseStatus.shortVacancy.company.name", default=""),
-                    }
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
             return "test", info
-
         if "alreadyApplied" in txt:
-            return "already", {}
+            return "already", info
 
-        return "error", {"raw": txt[:200]}
+        if status_code == 200:
+            # Только явные success-маркеры → sent
+            if ('"success":true' in txt or '"status":"ok"' in txt
+                    or '"responded":true' in txt or "shortVacancy" in txt):
+                return "sent", info
+            # 200 без success-маркеров и без known errors → подозрительно, считаем error
+            return "error", {"raw": txt[:200], **info}
+
+        return "error", {"raw": txt[:200], **info}
     except Exception as e:
         return "error", {"exception": str(e)}
 
@@ -138,6 +129,14 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
             # Шаг 1: GET форма опроса
             async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 html = await r.text()
+                status_code = r.status
+
+            # Auth check: 401/403/login-page → не считать "test" (валидный отклик),
+            # а отдать auth_error чтобы воркер обновил куки/спаузил аккаунт.
+            if status_code in (401, 403) or _is_login_page(html):
+                return "auth_error", {}
+            if status_code != 200:
+                return "error", {"http_status": status_code}
 
             # Hidden поля
             hidden = dict(re.findall(r'<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"', html))
@@ -254,9 +253,14 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
             cookies=acc.get("cookies", {}),
             timeout=10,
         )
-        if r.status_code not in (200,):
-            return {"ok": True, "reason": ""}  # can't check, allow
-        data = r.json()
+        if r.status_code in (401, 403) or _is_login_page(r.text):
+            return {"ok": False, "reason": "auth_error", "skip_reason": "auth"}
+        if r.status_code != 200:
+            return {"ok": False, "reason": f"http_{r.status_code}", "skip_reason": "http_error"}
+        try:
+            data = r.json()
+        except (json.JSONDecodeError, ValueError):
+            return {"ok": False, "reason": "bad_json", "skip_reason": "parse_error"}
         # Check responseImpossible
         resp_status = data.get("responseStatus") or {}
         if resp_status.get("responseImpossible"):
@@ -294,7 +298,9 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
         return {"ok": True, "reason": "", "contact": contact}
     except Exception as e:
         log_debug(f"_check_vacancy_before_apply {vid}: {e}")
-        return {"ok": True, "reason": ""}  # on error, allow apply
+        # Fail-closed: на любой неожиданной ошибке лучше пропустить вакансию,
+        # чем зря потратить лимит откликов.
+        return {"ok": False, "reason": str(e), "skip_reason": "exception"}
 
 
 def check_limit(acc: dict) -> bool:

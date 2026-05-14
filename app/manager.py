@@ -24,7 +24,7 @@ from app.storage import (
     _load_cache, _cache_applied, _cache_lock,
     add_applied, is_applied, add_test_vacancy, is_test, get_stats,
     load_browser_sessions, save_browser_sessions,
-    upsert_interview, get_no_chat_neg_ids,
+    upsert_interview, get_no_chat_neg_ids, get_replied_keys,
 )
 
 from app.oauth import (
@@ -1371,6 +1371,22 @@ class BotManager:
 
         # Sync _llm_no_chat from persisted DB (catches 409 failures from previous sessions)
         state._llm_no_chat.update(get_no_chat_neg_ids())
+        # Sync llm_replied_msgs from persisted DB so we don't re-reply after restart.
+        # In-memory dedup is lost on restart; persisted replied_msg_id is the source of truth.
+        state.llm_replied_msgs.update(get_replied_keys())
+
+        # Memory leak prevention: purge expired temp_skip + cap in-memory sets.
+        # Без этого _llm_temp_skip/_llm_sent_global/llm_replied_msgs растут навечно.
+        now_ts = time.time()
+        state._llm_temp_skip = {
+            k: v for k, v in state._llm_temp_skip.items() if v > now_ts
+        }
+        if len(state.llm_replied_msgs) > 5000:
+            # Trim to most recent 2000 — старые записи в interviews.json остаются persisted
+            state.llm_replied_msgs = set(list(state.llm_replied_msgs)[-2000:])
+        with self._llm_sent_lock:
+            if len(self._llm_sent_global) > 10000:
+                self._llm_sent_global = set(list(self._llm_sent_global)[-5000:])
 
         # Fetch recent chat pages sorted by last activity. Chats needing reply
         # (employer just wrote) will always be near the top.
@@ -1662,9 +1678,11 @@ class BotManager:
                     if ok:
                         state.llm_replied_msgs.add(key)
                         state._msg_consecutive[neg_id] = state._msg_consecutive.get(neg_id, 0) + 1
+                        state._llm_neg_failures.pop(neg_id, None)  # clear backoff on success
                         replied += 1
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
-                                         llm_reply=reply_text, llm_sent=True)
+                                         llm_reply=reply_text, llm_sent=True,
+                                         replied_msg_id=last_msg_id)
                         self._add_log(state.short, state.color,
                             f"\U0001f916 Авто-ответ → {employer}: {reply_text[:60]}…", "success", neg_id=neg_id)
                         self.llm_log.appendleft({
@@ -1709,6 +1727,16 @@ class BotManager:
                         self._llm_sent_global -= to_remove
                 except Exception:
                     pass
+                # Backoff at chat-level: предотвращает бесконечный retry перманентной ошибки.
+                # 1 ошибка → 5 мин, 2 → 15 мин, 3+ → 1 час. После 5 — постоянный skip.
+                fail_count = state._llm_neg_failures.get(neg_id, 0) + 1
+                state._llm_neg_failures[neg_id] = fail_count
+                if fail_count >= 5:
+                    state._llm_no_chat.add(neg_id)  # permanent skip in this session
+                else:
+                    backoff = {1: 300, 2: 900, 3: 3600, 4: 3600}.get(fail_count, 3600)
+                    key_for_skip = (neg_id, "exception")
+                    state._llm_temp_skip[key_for_skip] = time.time() + backoff
 
         state.llm_replied_count += replied
         if replied:
