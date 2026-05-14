@@ -49,15 +49,20 @@ async def api_debug_session(idx: int):
     return result
 
 
+_SESSION_REDACT_KEYS = {"cookies", "_raw_cookie_line", "raw_cookie_line", "api_key"}
+
+
+def _safe_session_dict(s: dict) -> dict:
+    """Strip raw cookie line and any other sensitive fields before returning to client."""
+    return {k: v for k, v in s.items() if k not in _SESSION_REDACT_KEYS}
+
+
 @router.get("/api/debug")
 async def api_debug():
     snap = bot.get_state_snapshot()
     return {
         "temp_sessions_count": len(bot.temp_sessions),
-        "temp_sessions": [
-            {k: v for k, v in s.items() if k != "cookies"}
-            for s in bot.temp_sessions
-        ],
+        "temp_sessions": [_safe_session_dict(s) for s in bot.temp_sessions],
         "accounts_in_snapshot": [
             {"idx": a["idx"], "name": a["name"], "temp": a.get("temp", False)}
             for a in snap["accounts"]

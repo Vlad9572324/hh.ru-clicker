@@ -40,8 +40,30 @@ async def index():
 # WEBSOCKET
 # ============================================================
 
+_ALLOWED_WS_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"}
+
+
+def _ws_origin_allowed(origin: str) -> bool:
+    """CSWSH-защита: bind 127.0.0.1 не спасает от того, что произвольный сайт
+    из браузера откроет ws://localhost:8000/ws. Проверяем Origin вручную."""
+    if not origin:
+        # WS-клиент без Origin (curl, скрипт) — пускаем; браузер всегда выставит.
+        return True
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(origin).hostname or ""
+    except Exception:
+        return False
+    return host.lower() in _ALLOWED_WS_ORIGIN_HOSTS
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    origin = ws.headers.get("origin", "")
+    if not _ws_origin_allowed(origin):
+        await ws.close(code=4403)  # policy violation
+        log_debug(f"WS: rejected origin {origin!r}")
+        return
     await manager.connect(ws)
     try:
         while True:

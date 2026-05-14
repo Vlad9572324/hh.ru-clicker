@@ -216,7 +216,10 @@ async def api_session_refresh(idx: int):
     profile = await loop.run_in_executor(None, _validate_and_profile, raw_line)
     if not profile["ok"]:
         return {"status": "error", "message": profile.get("error", "Ошибка")}
+    resume_changed = False
     if profile["resume_hash"]:
+        if bot.temp_sessions[temp_idx].get("resume_hash") != profile["resume_hash"]:
+            resume_changed = True
         bot.temp_sessions[temp_idx]["resume_hash"] = profile["resume_hash"]
     if profile.get("all_resumes"):
         bot.temp_sessions[temp_idx]["all_resumes"] = profile["all_resumes"]
@@ -224,6 +227,18 @@ async def api_session_refresh(idx: int):
         old_name = ts.get("name", "")
         suffix = " (\U0001f310)" if "(\U0001f310)" in old_name else ""
         bot.temp_sessions[temp_idx]["name"] = profile["name"] + suffix
+    # Если сессия уже активна — обновим runtime-копию, иначе воркер
+    # продолжит работать со старыми resume_hash/именем/URL'ами.
+    active_state = bot.temp_states.get(temp_idx)
+    if active_state is not None:
+        if profile["resume_hash"]:
+            active_state.acc["resume_hash"] = profile["resume_hash"]
+            if resume_changed:
+                active_state.acc["urls"] = bot._build_session_urls(profile["resume_hash"])
+                active_state.total_urls = len(active_state.acc["urls"])
+        if profile["name"] and profile["name"] != "Браузер":
+            active_state.name = bot.temp_sessions[temp_idx]["name"]
+            active_state.acc["name"] = bot.temp_sessions[temp_idx]["name"]
     save_browser_sessions(bot.temp_sessions)
     return {"status": "ok", "resume_hash": profile["resume_hash"], "name": profile["name"]}
 

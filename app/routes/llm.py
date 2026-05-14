@@ -47,10 +47,20 @@ async def api_llm_profiles(request: Request):
     profiles = body.get("profiles")
     mode = body.get("mode", "fallback")
     if isinstance(profiles, list):
-        old_by_idx = {i: p for i, p in enumerate(CONFIG.llm_profiles or [])}
-        for i, p in enumerate(profiles):
-            if not p.get("api_key") and old_by_idx.get(i, {}).get("api_key"):
-                p["api_key"] = old_by_idx[i]["api_key"]
+        # Match old profile by (name, base_url, model) — устойчиво к реордеру.
+        # Иначе ключ профиля #0 мог уехать профилю с тем же индексом, но другим провайдером.
+        def _identity(p):
+            return (
+                str(p.get("name", "")).strip(),
+                str(p.get("base_url", "")).strip(),
+                str(p.get("model", "")).strip(),
+            )
+        old_by_identity = {_identity(p): p for p in (CONFIG.llm_profiles or [])}
+        for p in profiles:
+            if not p.get("api_key"):
+                ident = _identity(p)
+                if ident in old_by_identity and old_by_identity[ident].get("api_key"):
+                    p["api_key"] = old_by_identity[ident]["api_key"]
         CONFIG.llm_profiles = profiles
         if profiles:
             first = profiles[0]
@@ -90,14 +100,24 @@ async def api_llm_config(request: Request):
         CONFIG.llm_model = str(body["model"]).strip()
     if "system_prompt" in body:
         CONFIG.llm_system_prompt = str(body["system_prompt"]).strip()
+    def _truthy(v):
+        # strict bool: "false"/"0"/"no" → False, иначе bool(v).
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes", "on")
+        return False
+
     if "enabled" in body:
-        CONFIG.llm_enabled = bool(body["enabled"])
+        CONFIG.llm_enabled = _truthy(body["enabled"])
     if "auto_send" in body:
-        CONFIG.llm_auto_send = bool(body["auto_send"])
+        CONFIG.llm_auto_send = _truthy(body["auto_send"])
     if "use_cover_letter" in body:
-        CONFIG.llm_use_cover_letter = bool(body["use_cover_letter"])
+        CONFIG.llm_use_cover_letter = _truthy(body["use_cover_letter"])
     if "use_resume" in body:
-        CONFIG.llm_use_resume = bool(body["use_resume"])
+        CONFIG.llm_use_resume = _truthy(body["use_resume"])
     if CONFIG.llm_profiles and CONFIG.llm_api_key:
         first = CONFIG.llm_profiles[0]
         if not first.get("api_key") or "api_key" in body:
@@ -144,6 +164,39 @@ async def api_llm_reset_replied():
     return {"ok": True, "cleared": cleared, "global_cleared": n_global}
 
 
+_LLM_DETECT_ALLOWED_HOSTS = {
+    "api.openai.com",
+    "api.anthropic.com",
+    "openrouter.ai",
+    "api.together.xyz",
+    "api.groq.com",
+    "api.deepseek.com",
+    "api.mistral.ai",
+    "api.perplexity.ai",
+    "api.cohere.com",
+    "generativelanguage.googleapis.com",
+}
+
+
+def _is_safe_llm_base_url(url: str) -> bool:
+    """Reject SSRF vectors: only https + known provider hosts."""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if p.scheme != "https" or not p.hostname:
+        return False
+    host = p.hostname.lower()
+    # Reject private/internal addresses outright
+    if host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.endswith(".local"):
+        return False
+    # Reject IP-literal addresses
+    if any(host.startswith(p) for p in ("10.", "172.", "192.168.", "169.254.", "::1", "fc", "fd")):
+        return False
+    return host in _LLM_DETECT_ALLOWED_HOSTS
+
+
 @router.post("/api/llm_detect")
 async def api_llm_detect(request: Request):
     """Определить провайдера по ключу и получить список доступных моделей."""
@@ -157,6 +210,8 @@ async def api_llm_detect(request: Request):
         return {"ok": False, "error": "Нет ключа"}
     if not base_url:
         base_url = _detect_base_url(api_key)
+    if not _is_safe_llm_base_url(base_url):
+        return {"ok": False, "error": "base_url не из списка разрешённых LLM-провайдеров"}
     try:
         resp = requests.get(
             f"{base_url.rstrip('/')}/models",

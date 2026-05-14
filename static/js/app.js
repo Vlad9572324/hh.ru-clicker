@@ -1324,7 +1324,7 @@ function buildPoolRow(item, rowIdx) {
   const pages = typeof item === 'object' && item !== null ? (item?.pages ?? '') : '';
   const badge = parseUrlFilter(url);
   return `<div class="url-row" id="pool-row-${rowIdx}">
-    <div class="url-badge">${badge}</div>
+    <div class="url-badge">${esc(badge)}</div>
     <div style="display:flex;gap:4px;align-items:center">
       <input class="apply-input url-input" style="font-size:10px;padding:2px 6px;flex:1"
         value="${esc(url)}" oninput="urlPoolReparse(${rowIdx},this.value)">
@@ -1954,7 +1954,7 @@ function renderAccounts(snap) {
 function buildCardHTML(acc) {
   return `
     <div class="acc-header">
-      <div class="acc-name" id="acc-name-${acc.idx}">${acc.name}</div>
+      <div class="acc-name" id="acc-name-${acc.idx}">${esc(acc.name)}</div>
       <button class="compact-btn" title="Свернуть/развернуть карточку" onclick="toggleCompact(${acc.idx})">⬜</button>
       <button class="compact-btn" title="Удалить аккаунт" style="color:var(--red);margin-left:2px" onclick="accDeleteCard(${acc.idx}, this)">🗑</button>
       <div class="acc-status-badge status-idle" id="acc-badge-${acc.idx}">⏸ ${t('status_idle')}</div>
@@ -2843,7 +2843,7 @@ function dbFillTable(items) {
       <td>${esc(item.company || '')}</td>
       <td>${accs || '<span class="c-dim">—</span>'}</td>
       <td><button class="btn-sm" style="padding:1px 6px;color:var(--red);border-color:var(--red)"
-        onclick="dbDelete('${esc(item.vacancy_id)}',this)" title="Удалить из базы">✕</button></td>
+        data-vid="${esc(item.vacancy_id)}" onclick="dbDelete(this.dataset.vid,this)" title="Удалить из базы">✕</button></td>
     </tr>`;
   }).join('');
 }
@@ -2959,12 +2959,14 @@ function syncSettingsSliders(snap) {
 
 // ── Helpers ──────────────────────────────────────────────────
 function esc(s) {
-  if (!s) return '';
+  if (s === null || s === undefined) return '';
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/`/g, '&#96;');
 }
 
 function setText(id, val) {
@@ -3478,9 +3480,9 @@ function renderAuditResult(d) {
       </div>
 
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:12px">
-        <div><span style="color:var(--dim)">Формат:</span> ${(d.work_formats || []).join(', ') || '—'}</div>
-        <div><span style="color:var(--dim)">График:</span> ${(d.work_schedule || []).join(', ') || '—'}</div>
-        <div><span style="color:var(--dim)">Занятость:</span> ${(d.employment || []).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">Формат:</span> ${(d.work_formats || []).map(esc).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">График:</span> ${(d.work_schedule || []).map(esc).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">Занятость:</span> ${(d.employment || []).map(esc).join(', ') || '—'}</div>
         <div><span style="color:var(--dim)">Роли:</span> ${(d.roles || []).map(r => esc(r)).join(', ') || '—'}</div>
       </div>
 
