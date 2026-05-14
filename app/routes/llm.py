@@ -32,6 +32,13 @@ def _detect_base_url(api_key: str) -> str:
         return "https://openrouter.ai/api/v1"
     if api_key.startswith("sk-proj-"):
         return "https://api.openai.com/v1"
+    if api_key.startswith("sk-ant-"):
+        # Anthropic claude — есть OpenAI-compat shim:
+        return "https://api.anthropic.com/v1"
+    if api_key.startswith("AIza"):
+        # Google Gemini (Google AI Studio key) — OpenAI-compatible endpoint
+        # https://ai.google.dev/gemini-api/docs/openai
+        return "https://generativelanguage.googleapis.com/v1beta/openai"
     if api_key.startswith("sk-") and len(api_key) < 45:
         return "https://api.deepseek.com"
     return "https://api.openai.com/v1"

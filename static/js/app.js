@@ -3025,7 +3025,12 @@ async function sessionAdd() {
     if (!cookieStr) { st.textContent = '❌ Вставьте строку cookies'; st.style.color = 'var(--red)'; return; }
   }
 
-  st.textContent = '⏳ Проверяю сессию...'; st.style.color = 'var(--dim)';
+  await _doSessionAdd(cookieStr, nameEl, letterEl, st, false);
+}
+
+async function _doSessionAdd(cookieStr, nameEl, letterEl, st, force) {
+  st.textContent = force ? '⏳ Добавляю без проверки...' : '⏳ Проверяю сессию...';
+  st.style.color = 'var(--dim)';
   try {
     const res = await fetch('/api/session/add', {
       method: 'POST',
@@ -3033,13 +3038,14 @@ async function sessionAdd() {
       body: JSON.stringify({
         cookies: cookieStr,
         name: nameEl?.value.trim() || '',
-        letter: letterEl?.value || ''
+        letter: letterEl?.value || '',
+        force: !!force,
       })
     });
     const data = await res.json();
     if (data.status === 'ok') {
-      st.textContent = '✅ ' + data.message; st.style.color = 'var(--green)';
-      // Очищаем оба режима
+      st.textContent = '✅ ' + data.message;
+      st.style.color = 'var(--green)';
       const ta = document.getElementById('session-cookies');
       if (ta) ta.value = '';
       ['ck-hhtoken','ck-xsrf','ck-hhul','ck-crypted-id'].forEach(id => {
@@ -3048,7 +3054,23 @@ async function sessionAdd() {
       if (nameEl)   nameEl.value = '';
       if (letterEl) letterEl.value = '';
     } else {
-      st.textContent = '❌ ' + data.message; st.style.color = 'var(--red)';
+      // HH вернул 401/403 — DDoS-Guard или anti-bot. Предлагаем добавить без проверки.
+      if (data.can_force && !force) {
+        st.innerHTML = '';
+        const msg = document.createElement('span');
+        msg.textContent = '⚠️ ' + data.message + ' ';
+        msg.style.color = 'var(--yellow)';
+        const btn = document.createElement('button');
+        btn.className = 'btn-sm';
+        btn.textContent = 'Добавить всё равно';
+        btn.style.marginLeft = '8px';
+        btn.onclick = () => _doSessionAdd(cookieStr, nameEl, letterEl, st, true);
+        st.appendChild(msg);
+        st.appendChild(btn);
+      } else {
+        st.textContent = '❌ ' + data.message;
+        st.style.color = 'var(--red)';
+      }
     }
   } catch(e) {
     st.textContent = '❌ ' + e; st.style.color = 'var(--red)';

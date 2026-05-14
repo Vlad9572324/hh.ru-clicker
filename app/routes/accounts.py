@@ -122,7 +122,7 @@ async def api_resume_touch_toggle(idx: int):
 
 @router.post("/api/account/{idx}/set_urls")
 async def api_set_urls(idx: int, request: Request):
-    """Обновить список поисковых URL аккаунта и индивидуальную глубину поиска."""
+    """Обновить список поисковых URL аккаунта (regular или browser-сессия)."""
     body = await request.json()
     urls = [u.strip() for u in body.get("urls", []) if u.strip()]
     url_pages = {}
@@ -131,6 +131,7 @@ async def api_set_urls(idx: int, request: Request):
             url_pages[k] = int(v) if v else 0
         except (ValueError, TypeError):
             pass
+    # Regular accounts
     if 0 <= idx < len(bot.account_states):
         bot.account_states[idx].acc["urls"] = urls
         bot.account_states[idx].acc["url_pages"] = url_pages
@@ -139,6 +140,17 @@ async def api_set_urls(idx: int, request: Request):
             accounts_data[idx]["urls"] = urls
             accounts_data[idx]["url_pages"] = url_pages
             save_accounts()
+        return {"ok": True, "count": len(urls)}
+    # Browser sessions (issue #7: "Аккаунт не найден" при выборе URL)
+    temp_idx = idx - len(bot.account_states)
+    if 0 <= temp_idx < len(bot.temp_sessions):
+        bot.temp_sessions[temp_idx]["urls"] = urls
+        bot.temp_sessions[temp_idx]["url_pages"] = url_pages
+        if temp_idx in bot.temp_states:
+            bot.temp_states[temp_idx].acc["urls"] = urls
+            bot.temp_states[temp_idx].acc["url_pages"] = url_pages
+            bot.temp_states[temp_idx].total_urls = len(urls)
+        save_browser_sessions(bot.temp_sessions)
         return {"ok": True, "count": len(urls)}
     return {"ok": False, "error": "Аккаунт не найден"}
 

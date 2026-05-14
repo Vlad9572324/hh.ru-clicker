@@ -21,27 +21,41 @@ router = APIRouter()
 def _validate_and_profile(raw_cookie_line: str) -> dict:
     """
     Синхронно проверяет сессию и вытаскивает профиль из SSR.
+    Использует Session() + warm-up GET к hh.ru/ чтобы получить DDoS-Guard-куки;
+    без warm-up прямой GET /applicant/resumes часто возвращает 403 (issue #8).
     """
-    headers = {
+    base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://hh.ru/",
+        "Accept-Language": "ru,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": '"Chromium";v="120", "Not?A_Brand";v="8"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1",
         "Cookie": raw_cookie_line,
     }
     try:
-        r = requests.get(
-            "https://hh.ru/applicant/resumes",
-            headers=headers,
-            
-            timeout=15,
-            allow_redirects=True,
-        )
+        with requests.Session() as s:
+            # Warm-up: получить DDoS-Guard/anti-bot куки для последующего запроса.
+            try:
+                s.get("https://hh.ru/", headers=base_headers, timeout=10, allow_redirects=True)
+            except Exception:
+                pass  # warm-up best-effort, если упадёт — попробуем основной запрос всё равно
+            r = s.get(
+                "https://hh.ru/applicant/resumes",
+                headers={**base_headers, "Referer": "https://hh.ru/"},
+                timeout=15,
+                allow_redirects=True,
+            )
     except Exception as e:
         return {"ok": False, "error": f"Ошибка сети: {e}"}
 
     if r.status_code != 200:
-        hint = " — возможно, сессия устарела или нужно войти заново" if r.status_code in (401, 403) else ""
-        return {"ok": False, "error": f"Сессия невалидна: HTTP {r.status_code}{hint}"}
+        hint = ""
+        if r.status_code in (401, 403):
+            hint = " — DDoS-Guard или сессия устарела. Попробуйте обновить cookie из браузера (свежая cURL)."
+        return {"ok": False, "error": f"Сессия невалидна: HTTP {r.status_code}{hint}", "http_status": r.status_code}
 
     ssr = parse_hh_lux_ssr(r.text)
 
@@ -121,13 +135,23 @@ async def api_session_add(body: dict):
     if "_xsrf" not in cookies:
         return {"status": "error", "message": "Не найден _xsrf"}
 
+    force = bool(body.get("force"))
     loop = asyncio.get_event_loop()
     profile = await loop.run_in_executor(None, _validate_and_profile, raw_cookie_line)
 
     if not profile["ok"]:
-        return {"status": "error", "message": profile["error"]}
+        if not force:
+            return {
+                "status": "error",
+                "message": profile["error"],
+                "can_force": profile.get("http_status") in (401, 403),
+            }
+        # force=true: пользователь хочет добавить сессию без validation
+        # (workaround для issue #8 когда HH режет первый запрос).
+        # Профиль будет добычен при первом refresh из UI.
+        profile = {"ok": True, "name": "", "resume_hash": "", "all_resumes": []}
 
-    display_name = body.get("name", "").strip() or profile["name"]
+    display_name = body.get("name", "").strip() or profile["name"] or "Браузер"
     all_resumes = profile.get("all_resumes", [])
 
     selected_hash = body.get("resume_hash", "").strip()
