@@ -1158,7 +1158,7 @@ function _llmUpdateAccToggles(snap) {
     }
     // Update label and color
     const on = acc.llm_enabled !== false;
-    btn.textContent = `🤖 ${esc(acc.short || acc.name)}`;
+    btn.textContent = `🤖 ${acc.short || acc.name || ''}`;
     btn.style.color = on ? colorVar(acc.color || 'green') : 'var(--dim)';
     btn.style.borderColor = on ? colorVar(acc.color || 'green') : 'var(--dim)';
     btn.style.opacity = on ? '1' : '0.5';
@@ -1482,7 +1482,8 @@ async function accDeleteCard(idx, btn) {
   const acc = (State.lastSnapshot?.accounts || []).find(a => a.idx === idx);
   const isTemp = acc?.temp === true;
   const url = isTemp ? `/api/session/${idx}` : `/api/account/${idx}/delete`;
-  const label = isTemp ? `сессию <b>${acc?.name || '#'+idx}</b>` : `аккаунт <b>#${idx}</b>`;
+  // showConfirm теперь textContent — никаких HTML-тегов, иначе они показываются буквально.
+  const label = isTemp ? `сессию ${acc?.name || '#'+idx}` : `аккаунт #${idx}`;
 
   if (!await showConfirm(`Удалить ${label}? Действие необратимо.`)) return;
   if (btn) btn.disabled = true;

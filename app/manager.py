@@ -1374,18 +1374,21 @@ class BotManager:
 
         # Sync _llm_no_chat from persisted DB (catches 409 failures from previous sessions)
         state._llm_no_chat.update(get_no_chat_neg_ids())
-        # Sync llm_replied_msgs from persisted DB so we don't re-reply after restart.
-        # In-memory dedup is lost on restart; persisted replied_msg_id is the source of truth.
-        state.llm_replied_msgs.update(get_replied_keys())
+        # Seed llm_replied_msgs from persisted store ONCE per worker lifetime —
+        # повторный merge каждый цикл с обрезкой делал бы trim случайным (set без порядка)
+        # и мог выкидывать только что записанные ключи.
+        if not getattr(state, "_replied_seeded", False):
+            state.llm_replied_msgs.update(get_replied_keys())
+            state._replied_seeded = True
 
         # Memory leak prevention: purge expired temp_skip + cap in-memory sets.
-        # Без этого _llm_temp_skip/_llm_sent_global/llm_replied_msgs растут навечно.
         now_ts = time.time()
         state._llm_temp_skip = {
             k: v for k, v in state._llm_temp_skip.items() if v > now_ts
         }
         if len(state.llm_replied_msgs) > 5000:
-            # Trim to most recent 2000 — старые записи в interviews.json остаются persisted
+            # Hard cap. Точная "recency" не нужна — после rebuild на следующем рестарте
+            # сид из interviews.json восстановит важные ключи.
             state.llm_replied_msgs = set(list(state.llm_replied_msgs)[-2000:])
         with self._llm_sent_lock:
             if len(self._llm_sent_global) > 10000:
@@ -1541,7 +1544,12 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {neg_id}: уже отвечали на msg {last_msg_id}")
                     self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] уже отвечали в этой сессии, пропуск", "info", neg_id=neg_id)
                     continue
-                _skip_until = state._llm_temp_skip.get(key, 0)
+                # temp_skip может быть выставлен и под key=(neg_id, last_msg_id), и под
+                # (neg_id, "exception") (chat-level backoff после исключения в H6).
+                _skip_until = max(
+                    state._llm_temp_skip.get(key, 0),
+                    state._llm_temp_skip.get((neg_id, "exception"), 0),
+                )
                 if time.time() < _skip_until:
                     mins = max(1, int((_skip_until - time.time()) / 60))
                     self._add_log(state.short, state.color,
@@ -1731,15 +1739,12 @@ class BotManager:
                 except Exception:
                     pass
                 # Backoff at chat-level: предотвращает бесконечный retry перманентной ошибки.
-                # 1 ошибка → 5 мин, 2 → 15 мин, 3+ → 1 час. После 5 — постоянный skip.
+                # 1 ошибка → 5 мин, 2 → 15 мин, 3-5 → 1 час, после 5 → 24 часа (но не permanent —
+                # _llm_no_chat зарезервирован под реальный 409, чтобы не путать).
                 fail_count = state._llm_neg_failures.get(neg_id, 0) + 1
                 state._llm_neg_failures[neg_id] = fail_count
-                if fail_count >= 5:
-                    state._llm_no_chat.add(neg_id)  # permanent skip in this session
-                else:
-                    backoff = {1: 300, 2: 900, 3: 3600, 4: 3600}.get(fail_count, 3600)
-                    key_for_skip = (neg_id, "exception")
-                    state._llm_temp_skip[key_for_skip] = time.time() + backoff
+                backoff = {1: 300, 2: 900, 3: 3600, 4: 3600, 5: 3600}.get(fail_count, 86400)
+                state._llm_temp_skip[(neg_id, "exception")] = time.time() + backoff
 
         state.llm_replied_count += replied
         if replied:

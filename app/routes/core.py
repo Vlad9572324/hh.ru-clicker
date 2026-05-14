@@ -40,12 +40,23 @@ async def index():
 # WEBSOCKET
 # ============================================================
 
-_ALLOWED_WS_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"}
+_DEFAULT_WS_ORIGIN_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"}
+
+
+def _allowed_ws_hosts() -> set:
+    """Loopback + кастомные хосты из HH_BOT_ALLOWED_ORIGINS (через запятую).
+    Нужно для случаев `HH_BOT_HOST=0.0.0.0` + доступ с LAN 192.168.x.x или dev-hostname.
+    """
+    import os
+    extra = os.environ.get("HH_BOT_ALLOWED_ORIGINS", "")
+    extra_hosts = {h.strip().lower() for h in extra.split(",") if h.strip()}
+    return _DEFAULT_WS_ORIGIN_HOSTS | extra_hosts
 
 
 def _ws_origin_allowed(origin: str) -> bool:
     """CSWSH-защита: bind 127.0.0.1 не спасает от того, что произвольный сайт
-    из браузера откроет ws://localhost:8000/ws. Проверяем Origin вручную."""
+    из браузера откроет ws://localhost:8000/ws. Проверяем Origin вручную.
+    Если bind на 0.0.0.0 — добавить хосты через env HH_BOT_ALLOWED_ORIGINS."""
     if not origin:
         # WS-клиент без Origin (curl, скрипт) — пускаем; браузер всегда выставит.
         return True
@@ -54,7 +65,7 @@ def _ws_origin_allowed(origin: str) -> bool:
         host = urlparse(origin).hostname or ""
     except Exception:
         return False
-    return host.lower() in _ALLOWED_WS_ORIGIN_HOSTS
+    return host.lower() in _allowed_ws_hosts()
 
 
 @router.websocket("/ws")
