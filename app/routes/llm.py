@@ -161,7 +161,7 @@ async def api_llm_detect(request: Request):
         resp = requests.get(
             f"{base_url.rstrip('/')}/models",
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=12, verify=False,
+            timeout=12,
         )
         if resp.status_code != 200:
             return {"ok": False, "base_url": base_url, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}

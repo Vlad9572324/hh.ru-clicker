@@ -34,7 +34,7 @@ async def api_debug_session(idx: int):
     }
     loop = asyncio.get_event_loop()
     def _fetch():
-        r = requests.get("https://hh.ru/applicant/resumes", headers=headers, verify=False, timeout=15)
+        r = requests.get("https://hh.ru/applicant/resumes", headers=headers, timeout=15)
         ssr = parse_hh_lux_ssr(r.text)
         preview = {}
         for k, v in ssr.items():

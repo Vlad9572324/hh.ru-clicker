@@ -223,7 +223,7 @@ def auto_decline_discards(acc: dict) -> int:
         for page in range(5):
             r = requests.get(
                 f"https://hh.ru/applicant/negotiations?state=DISCARD&page={page}",
-                headers=headers, cookies=acc["cookies"], verify=False, timeout=15
+                headers=headers, cookies=acc["cookies"], timeout=15
             )
             ssr = parse_hh_lux_ssr(r.text)
             topics = ssr.get("applicantNegotiations", {}).get("topicList", [])
@@ -247,7 +247,7 @@ def auto_decline_discards(acc: dict) -> int:
                     headers=post_headers,
                     cookies=acc["cookies"],
                     data=f"topicId={tid}&_xsrf={xsrf}",
-                    verify=False, timeout=10
+                    timeout=10
                 )
                 if r2.status_code in (200, 302):
                     declined += 1

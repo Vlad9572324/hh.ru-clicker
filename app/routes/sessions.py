@@ -32,7 +32,7 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
         r = requests.get(
             "https://hh.ru/applicant/resumes",
             headers=headers,
-            verify=False,
+            
             timeout=15,
             allow_redirects=True,
         )

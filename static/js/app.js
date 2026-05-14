@@ -2849,7 +2849,7 @@ function dbFillTable(items) {
 }
 
 async function dbDelete(vid, btn) {
-  if (!await showConfirm(`${t('confirm_del_db_pre')} <b>${vid}</b> ${t('confirm_del_db_mid')}<br><span style="color:var(--dim);font-size:12px">${t('confirm_del_db_body')}</span>`)) return;
+  if (!await showConfirm(`${t('confirm_del_db_pre')} ${vid} ${t('confirm_del_db_mid')}\n${t('confirm_del_db_body')}`)) return;
   btn.disabled = true;
   try {
     const res = await fetch(`/api/vacancy/${vid}`, {method:'DELETE'});
@@ -4372,17 +4372,26 @@ function showConfirm(msg, okLabel = null, cancelLabel = null) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
-    overlay.innerHTML = `
-      <div class="confirm-box">
-        <p>${msg}</p>
-        <div class="confirm-btns">
-          <button class="confirm-cancel">${cancelLabel}</button>
-          <button class="confirm-ok">${okLabel}</button>
-        </div>
-      </div>`;
+    const box = document.createElement('div');
+    box.className = 'confirm-box';
+    const p = document.createElement('p');
+    p.textContent = msg;
+    const btns = document.createElement('div');
+    btns.className = 'confirm-btns';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'confirm-cancel';
+    cancelBtn.textContent = cancelLabel;
+    const okBtn = document.createElement('button');
+    okBtn.className = 'confirm-ok';
+    okBtn.textContent = okLabel;
+    btns.appendChild(cancelBtn);
+    btns.appendChild(okBtn);
+    box.appendChild(p);
+    box.appendChild(btns);
+    overlay.appendChild(box);
     document.body.appendChild(overlay);
-    overlay.querySelector('.confirm-ok').onclick = () => { document.body.removeChild(overlay); resolve(true); };
-    overlay.querySelector('.confirm-cancel').onclick = () => { document.body.removeChild(overlay); resolve(false); };
+    okBtn.onclick = () => { document.body.removeChild(overlay); resolve(true); };
+    cancelBtn.onclick = () => { document.body.removeChild(overlay); resolve(false); };
     overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(false); } };
   });
 }

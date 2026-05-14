@@ -18,7 +18,7 @@ def _ensure_chatik_cookies(acc: dict) -> None:
             cookies=acc["cookies"],
             headers={"User-Agent": ua},
             timeout=10,
-            verify=False,
+            
             allow_redirects=True,
         )
         for cookie in r.cookies:
@@ -50,7 +50,7 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
     for page_num in range(max_pages):
         url = f"https://chatik.hh.ru/chatik/api/chats?page={page_num}"
         try:
-            resp = requests.get(url, cookies=acc["cookies"], headers=headers, timeout=15, verify=False)
+            resp = requests.get(url, cookies=acc["cookies"], headers=headers, timeout=15)
             if resp.status_code in (401, 403) or _is_login_page(resp.text):
                 break
             if resp.status_code != 200:
@@ -196,7 +196,7 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
                 "X-XSRFToken": xsrf,
             },
             timeout=15,
-            verify=False,
+            
         )
         if r.status_code != 200:
             log_debug(f"_fetch_chat_history {chat_id}: HTTP {r.status_code}")
@@ -257,7 +257,7 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
             },
             json={"chatId": int(str(neg_id).strip()), "idempotencyKey": str(_uuid.uuid4()), "text": text},
             timeout=15,
-            verify=False,
+            
         )
         log_debug(f"send via chatik/api/send {neg_id}: HTTP {resp.status_code} | {resp.text[:300]}")
         if resp.status_code in (200, 201, 204):
@@ -289,7 +289,7 @@ def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
                      "X-XSRFToken": xsrf},
             cookies=acc["cookies"],
             json={"chatId": cid, "messageId": mid},
-            verify=False, timeout=5
+            timeout=5
         )
     except Exception as e:
         log_debug(f"_mark_chat_read {cid}: {e}")

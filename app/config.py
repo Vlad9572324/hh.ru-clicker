@@ -48,7 +48,7 @@ class Config:
 
     # LLM auto-reply settings
     llm_enabled: bool = False
-    llm_auto_send: bool = True        # True = отправлять, False = только логировать черновик
+    llm_auto_send: bool = False       # True = отправлять, False = только логировать черновик
     llm_use_cover_letter: bool = True  # Передавать сопроводительное письмо в контекст
     llm_use_resume: bool = True        # Включать текст резюме в системный промпт
     llm_api_key: str = ""

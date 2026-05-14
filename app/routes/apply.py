@@ -4,7 +4,6 @@ Manual vacancy apply flow (two-step: check + submit).
 
 import json
 import re
-import ssl
 
 import aiohttp
 from fastapi import APIRouter
@@ -25,17 +24,13 @@ async def _fetch_questionnaire_data(acc: dict, vid: str) -> dict:
     Получает форму опросника и возвращает список вопросов с полями.
     НЕ отправляет отклик.
     """
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": f"https://hh.ru/vacancy/{vid}",
     }
     url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
-    async with aiohttp.ClientSession(cookies=acc["cookies"], connector=connector, headers=headers) as session:
+    async with aiohttp.ClientSession(cookies=acc["cookies"], headers=headers) as session:
         async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
             html = await r.text()
             if r.status in (401, 403) or _is_login_page(html):
@@ -147,13 +142,9 @@ async def api_apply_check(body: dict):
     if custom_letter:
         acc["letter"] = custom_letter
 
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
     try:
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
-            connector=aiohttp.TCPConnector(ssl=ssl_ctx),
             headers=get_headers(acc.get("cookies", {}).get("_xsrf", ""))
         ) as session:
             data = aiohttp.FormData()
@@ -222,15 +213,11 @@ async def api_apply_submit(body: dict):
     if letter:
         acc = {**acc, "letter": letter}
 
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
     url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
     try:
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
-            connector=aiohttp.TCPConnector(ssl=ssl_ctx),
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                      "Accept": "text/html,*/*", "Referer": f"https://hh.ru/vacancy/{vid}"}
         ) as session:

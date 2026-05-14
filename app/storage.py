@@ -121,7 +121,7 @@ def _save_interviews_async():
         return  # другой поток уже сохраняет — пропускаем
     try:
         with _cache_lock:
-            data = _cache_interviews.copy() if _cache_interviews else {}
+            data = copy.deepcopy(_cache_interviews) if _cache_interviews else {}
         tmp = INTERVIEWS_FILE.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)

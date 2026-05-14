@@ -4,7 +4,6 @@ HH.ru apply functions: send response, fill questionnaire, check vacancy, check l
 
 import re
 import json
-import ssl
 import requests
 import aiohttp
 
@@ -44,14 +43,8 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
     data.add_field("lux", "true")
     data.add_field("ignore_postponed", "true")
 
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-
-    connector = aiohttp.TCPConnector(ssl=ssl_context)
-
     try:
-        async with aiohttp.ClientSession(headers=headers, cookies=acc["cookies"], connector=connector) as session:
+        async with aiohttp.ClientSession(headers=headers, cookies=acc["cookies"]) as session:
             async with session.post(
                 "https://hh.ru/applicant/vacancy_response/popup",
                 data=data,
@@ -129,11 +122,6 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
     Поддерживает textarea, radio, checkbox.
     Возвращает (result, info): result = sent | limit | test | error
     """
-    ssl_ctx = ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = ssl.CERT_NONE
-    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-
     headers_get = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -142,7 +130,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
 
     try:
         async with aiohttp.ClientSession(
-            cookies=acc["cookies"], connector=connector,
+            cookies=acc["cookies"],
             headers=headers_get
         ) as session:
             url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
@@ -264,7 +252,7 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
             headers={"User-Agent": ua, "Accept": "application/json, */*",
                      "Referer": f"https://hh.ru/vacancy/{vid}"},
             cookies=acc.get("cookies", {}),
-            timeout=10, verify=False,
+            timeout=10,
         )
         if r.status_code not in (200,):
             return {"ok": True, "reason": ""}  # can't check, allow
@@ -320,7 +308,7 @@ def check_limit(acc: dict) -> bool:
             "https://hh.ru/search/vacancy?text=&area=1&page=0",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                      "Accept": "text/html"},
-            cookies=acc["cookies"], verify=False, timeout=10,
+            cookies=acc["cookies"], timeout=10,
         )
         vids = re.findall(r'/vacancy/(\d+)', r_search.text)
         if not vids:
@@ -331,7 +319,7 @@ def check_limit(acc: dict) -> bool:
             f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                      "Accept": "application/json", "X-Xsrftoken": xsrf},
-            cookies=acc["cookies"], verify=False, timeout=10,
+            cookies=acc["cookies"], timeout=10,
         )
         return "negotiations-limit-exceeded" in r.text
     except Exception:

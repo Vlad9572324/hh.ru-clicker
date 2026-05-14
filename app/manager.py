@@ -4,7 +4,6 @@ BotManager — core bot logic with per-account worker threads.
 
 import asyncio
 import aiohttp
-import ssl
 import re
 import random
 from datetime import datetime, timedelta
@@ -902,7 +901,7 @@ class BotManager:
                         "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                         "Referer": "https://hh.ru/applicant/negotiations",
                     },
-                    cookies=acc.get("cookies", {}), verify=False, timeout=10,
+                    cookies=acc.get("cookies", {}), timeout=10,
                 )
                 if r_offers.status_code == 200:
                     offers_data = r_offers.json()
@@ -1282,11 +1281,7 @@ class BotManager:
         headers = get_headers(xsrf)
         sem = asyncio.Semaphore(CONFIG.max_concurrent * 3)
 
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        connector = aiohttp.TCPConnector(ssl=ssl_context, limit=CONFIG.max_concurrent * 3)
+        connector = aiohttp.TCPConnector(limit=CONFIG.max_concurrent * 3)
 
         all_tasks = []
         url_pages = _url_pages_map()

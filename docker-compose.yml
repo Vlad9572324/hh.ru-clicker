@@ -2,7 +2,9 @@ services:
   hh-bot:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    environment:
+      HH_BOT_HOST: "0.0.0.0"
     volumes:
       - ./data:/app/data
       - ./web_app.py:/app/web_app.py

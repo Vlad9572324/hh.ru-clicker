@@ -434,7 +434,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
         r = requests.get(
             f"https://hh.ru/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
             headers={"User-Agent": ua, "Accept": "text/html"},
-            cookies=acc.get("cookies", {}), verify=False, timeout=15)
+            cookies=acc.get("cookies", {}), timeout=15)
         rich = _parse_questionnaire_rich(r.text)
         resume_text = fetch_resume_text(acc) if CONFIG.llm_use_resume else ""
         answers = generate_llm_questionnaire_answers(rich, f"Vacancy {vacancy_id}", "", resume_text)
@@ -479,7 +479,7 @@ async def api_hot_leads(idx: int):
                 "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                 "Referer": "https://hh.ru/applicant/negotiations",
             },
-            cookies=acc.get("cookies", {}), verify=False, timeout=15,
+            cookies=acc.get("cookies", {}), timeout=15,
         )
         if r.status_code != 200:
             return {"offers": [], "error": f"HTTP {r.status_code}"}
@@ -510,7 +510,7 @@ async def api_remindable(idx: int):
         r = requests.get(
             "https://hh.ru/applicant/negotiations",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-            cookies=acc.get("cookies", {}), verify=False, timeout=15,
+            cookies=acc.get("cookies", {}), timeout=15,
         )
         if r.status_code != 200 or _is_login_page(r.text):
             return {"error": "auth_error", "remindable": []}
@@ -573,7 +573,7 @@ async def api_clone_resume(idx: int, request: Request):
             },
             cookies=acc.get("cookies", {}),
             data=f"resume={resume_hash}&_xsrf={xsrf}",
-            verify=False, timeout=15,
+            timeout=15,
         )
         if r.status_code == 200:
             d = r.json()
@@ -588,7 +588,7 @@ async def api_clone_resume(idx: int, request: Request):
             ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             r_orig = requests.get(f"https://hh.ru/resume/{resume_hash}",
                 headers={"User-Agent": ua, "Accept": "text/html"},
-                cookies=acc.get("cookies", {}), verify=False, timeout=15)
+                cookies=acc.get("cookies", {}), timeout=15)
             orig_data = {}
             m_ssr = re.search(r'<template[^>]*id="HH-Lux-InitialState"[^>]*>([\s\S]*?)</template>', r_orig.text)
             if m_ssr:
@@ -687,7 +687,7 @@ async def api_all_resumes(idx: int):
         r = requests.get(
             "https://hh.ru/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": "https://hh.ru/"},
-            cookies=acc.get("cookies", {}), verify=False, timeout=15,
+            cookies=acc.get("cookies", {}), timeout=15,
         )
         if r.status_code != 200:
             return {"resumes": [], "error": f"HTTP {r.status_code}"}

@@ -86,7 +86,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                 "client_id": _HH_OAUTH_CLIENT_ID,
                 "client_secret": _HH_OAUTH_CLIENT_SECRET,
                 "refresh_token": refresh,
-            }, headers={"User-Agent": ua}, verify=False, timeout=15)
+            }, headers={"User-Agent": ua}, timeout=15)
             if r.status_code == 200:
                 d = r.json()
                 with _oauth_lock:
@@ -110,7 +110,7 @@ def _obtain_oauth_token(acc: dict) -> str:
             "client_id": _HH_OAUTH_CLIENT_ID,
             "redirect_uri": _HH_OAUTH_REDIRECT,
             "state": "botstate",
-        }, headers={"User-Agent": ua}, cookies=cookies, verify=False, timeout=15, allow_redirects=False)
+        }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
 
         code = None
         loc = r1.headers.get("Location", "")
@@ -126,7 +126,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                 "state": "botstate",
                 "action": "approve",
                 "_xsrf": cookies.get("_xsrf", ""),
-            }, headers={"User-Agent": ua}, cookies=cookies, verify=False, timeout=15, allow_redirects=False)
+            }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
             loc2 = r2.headers.get("Location", "")
             m2 = re.search(r"code=([^&]+)", loc2)
             if m2:
@@ -143,7 +143,7 @@ def _obtain_oauth_token(acc: dict) -> str:
             "client_secret": _HH_OAUTH_CLIENT_SECRET,
             "redirect_uri": _HH_OAUTH_REDIRECT,
             "code": code,
-        }, headers={"User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded"}, verify=False, timeout=15)
+        }, headers={"User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
 
         if r3.status_code == 200:
             d = r3.json()
@@ -179,7 +179,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             "https://api.hh.ru/negotiations",
             headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}",
                      "Content-Type": "application/x-www-form-urlencoded"},
-            data=data, verify=False, timeout=15,
+            data=data, timeout=15,
         )
         if r.status_code in (200, 201, 204):
             # Success — try to get vacancy info
@@ -224,7 +224,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
         r = requests.post(
             f"https://api.hh.ru/resumes/{resume_hash}/publish",
             headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}"},
-            verify=False, timeout=15,
+            timeout=15,
         )
         if r.status_code in (200, 204):
             return True, "✅ Резюме поднято через OAuth API!"

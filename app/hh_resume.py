@@ -222,7 +222,7 @@ def fetch_resume_text(acc: dict) -> str:
                 "Referer": "https://hh.ru/applicant/resumes",
             },
             cookies=acc["cookies"],
-            verify=False,
+            
             timeout=15,
         )
         if r.status_code != 200:
@@ -261,7 +261,7 @@ def fetch_resume_stats(acc: dict) -> dict:
     try:
         r = requests.get(
             "https://hh.ru/applicant/resumes",
-            headers=headers, cookies=acc["cookies"], verify=False, timeout=15
+            headers=headers, cookies=acc["cookies"], timeout=15
         )
         ssr = parse_hh_lux_ssr(r.text)
 
@@ -312,7 +312,7 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
     try:
         r = requests.get(
             f"https://hh.ru/applicant/resumeview/history?resumeHash={resume_hash}",
-            headers=headers, cookies=acc["cookies"], verify=False, timeout=15
+            headers=headers, cookies=acc["cookies"], timeout=15
         )
         html = r.text
 
@@ -378,7 +378,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
         r = requests.get(
             f"https://hh.ru/resume/{resume_hash}",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-            cookies=cookies, verify=False, timeout=15,
+            cookies=cookies, timeout=15,
         )
         if r.status_code != 200 or _is_login_page(r.text):
             return {"error": "auth_error"}
@@ -408,7 +408,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
         r2 = requests.get(
             "https://hh.ru/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-            cookies=cookies, verify=False, timeout=15,
+            cookies=cookies, timeout=15,
         )
         stats_data = {}
         if r2.status_code == 200:
@@ -506,7 +506,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             r_clusters = requests.get(
                 f"https://hh.ru/shards/search/resume/clusters?text={encoded_title}&area=1",
                 headers={"User-Agent": ua, "Accept": "application/json"},
-                cookies=cookies, verify=False, timeout=10,
+                cookies=cookies, timeout=10,
             )
             clusters_data = {}
             active_seekers = 0
@@ -543,7 +543,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                 r_vac = requests.get(
                     f"https://hh.ru/search/vacancy?text={encoded_title}&area=1",
                     headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-                    cookies=cookies, verify=False, timeout=10,
+                    cookies=cookies, timeout=10,
                 )
                 if r_vac.status_code == 200:
                     vac_ssr = parse_hh_lux_ssr(r_vac.text)
@@ -641,7 +641,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                     r_vc = requests.get(
                         f"https://hh.ru/search/vacancy?text={enc}&area=1",
                         headers={"User-Agent": ua, "Accept": "text/html"},
-                        cookies=cookies, verify=False, timeout=10,
+                        cookies=cookies, timeout=10,
                     )
                     vc = 0
                     if r_vc.status_code == 200:
@@ -670,7 +670,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             r_neg = requests.get(
                 "https://hh.ru/applicant/negotiations",
                 headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-                cookies=cookies, verify=False, timeout=15,
+                cookies=cookies, timeout=15,
             )
             if r_neg.status_code == 200 and not _is_login_page(r_neg.text):
                 neg_ssr = parse_hh_lux_ssr(r_neg.text)
