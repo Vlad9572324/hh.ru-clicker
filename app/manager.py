@@ -30,6 +30,7 @@ from app.storage import (
 
 from app.oauth import (
     _oauth_apply,
+    get_oauth_status,
 )
 
 from app.hh_api import (
@@ -441,6 +442,7 @@ class BotManager:
                 "consecutive_errors": s.consecutive_errors,
                 "url_stats": dict(s.url_stats),
                 "cookies_expired": s.cookies_expired,
+                "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
                 "llm_replied_count": s.llm_replied_count,
@@ -521,6 +523,7 @@ class BotManager:
                     "consecutive_errors": s.consecutive_errors,
                     "url_stats": dict(s.url_stats),
                     "cookies_expired": s.cookies_expired,
+                    "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
                     "use_oauth": s.use_oauth,
                     "daily_sent": s.daily_sent,
@@ -1207,13 +1210,15 @@ class BotManager:
 
                     elif result == "auth_error":
                         if state.use_oauth or CONFIG.use_oauth_apply:
-                            # OAuth mode — don't stop, just log warning
-                            self._add_log(
-                                state.short, state.color,
-                                "⚠️ Web cookies истекли (OAuth откликов продолжает работать)", "warning",
-                            )
-                            state.consecutive_errors += 1
-                            self._check_auto_pause(state)
+                            # OAuth mode — web cookies expired but OAuth handles apply
+                            # Log once per cycle, don't count as error (OAuth is working)
+                            if not getattr(state, '_web_auth_warned', False):
+                                self._add_log(
+                                    state.short, state.color,
+                                    "⚠️ Web cookies истекли (OAuth откликов продолжает работать)", "warning",
+                                )
+                                state._web_auth_warned = True
+                            state.cookies_expired = True
                         else:
                             state.cookies_expired = True
                             state.paused = True

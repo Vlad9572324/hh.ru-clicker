@@ -2,9 +2,11 @@
 OAuth via official Android app credentials — token management and OAuth-based operations.
 """
 
+import json
 import re
 import time
 import threading
+from pathlib import Path
 import requests
 
 from app.logging_utils import log_debug
@@ -14,8 +16,50 @@ from app.config import CONFIG
 _HH_OAUTH_CLIENT_ID = "HIOMIAS39CA9DICTA7JIO64LQKQJF5AGIK74G9ITJKLNEDAOH5FHS5G1JI7FOEGD"
 _HH_OAUTH_CLIENT_SECRET = "V9M870DE342BGHFRUJ5FTCGCUA1482AN0DI8C5TFI9ULMA89H10N60NOP8I4JMVS"
 _HH_OAUTH_REDIRECT = "hhandroid://oauthresponse"
+_OAUTH_FILE = Path("data/oauth_tokens.json")
 _oauth_tokens: dict = {}  # {resume_hash: {access_token, refresh_token, expires_at}}
 _oauth_lock = threading.Lock()
+
+
+def _load_oauth_tokens():
+    """Load persisted OAuth tokens from disk."""
+    global _oauth_tokens
+    try:
+        if _OAUTH_FILE.exists():
+            with open(_OAUTH_FILE, "r", encoding="utf-8") as f:
+                _oauth_tokens = json.load(f)
+            log_debug(f"OAuth: loaded {len(_oauth_tokens)} tokens from disk")
+    except Exception as e:
+        log_debug(f"OAuth: failed to load tokens: {e}")
+
+
+def _save_oauth_tokens():
+    """Persist OAuth tokens to disk."""
+    try:
+        _OAUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_OAUTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(_oauth_tokens, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log_debug(f"OAuth: failed to save tokens: {e}")
+
+
+# Load on import
+_load_oauth_tokens()
+
+
+def get_oauth_status(resume_hash: str) -> dict:
+    """Return OAuth token status for display: {has_token, expires_hours, has_refresh}"""
+    with _oauth_lock:
+        cached = _oauth_tokens.get(resume_hash, {})
+    if not cached:
+        return {"has_token": False, "expires_hours": 0, "has_refresh": False}
+    exp = cached.get("expires_at", 0)
+    remaining = max(0, int((exp - time.time()) / 3600))
+    return {
+        "has_token": exp > time.time(),
+        "expires_hours": remaining,
+        "has_refresh": bool(cached.get("refresh_token")),
+    }
 
 
 def _obtain_oauth_token(acc: dict) -> str:
@@ -51,6 +95,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                         "refresh_token": d.get("refresh_token", refresh),
                         "expires_at": time.time() + d.get("expires_in", 1209599),
                     }
+                _save_oauth_tokens()
                 log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
                 return d["access_token"]
         except Exception as e:
@@ -108,6 +153,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                     "refresh_token": d.get("refresh_token", ""),
                     "expires_at": time.time() + d.get("expires_in", 1209599),
                 }
+            _save_oauth_tokens()
             log_debug(f"OAuth: obtained token for {resume_hash[:12]}, expires in {d.get('expires_in',0)}s")
             return d["access_token"]
         else:

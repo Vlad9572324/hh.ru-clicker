@@ -1478,16 +1478,22 @@ async function urlAccSave(accIdx, btn) {
 const ACC_COLORS = ['cyan','magenta','green','yellow','blue','red'];
 
 async function accDeleteCard(idx, btn) {
-  if (!await showConfirm(`Удалить аккаунт <b>#${idx}</b>? Действие необратимо.`)) return;
+  // Determine if this is a temp (browser session) account or regular
+  const acc = (State.lastSnapshot?.accounts || []).find(a => a.idx === idx);
+  const isTemp = acc?.temp === true;
+  const url = isTemp ? `/api/session/${idx}` : `/api/account/${idx}/delete`;
+  const label = isTemp ? `сессию <b>${acc?.name || '#'+idx}</b>` : `аккаунт <b>#${idx}</b>`;
+
+  if (!await showConfirm(`Удалить ${label}? Действие необратимо.`)) return;
   if (btn) btn.disabled = true;
   try {
-    const res = await fetch(`/api/account/${idx}/delete`, {method: 'DELETE'});
+    const res = await fetch(url, {method: 'DELETE'});
     const data = await res.json();
-    if (data.ok) {
+    if (data.ok || data.status === 'ok') {
       const card = document.getElementById('card-' + idx);
       if (card) card.remove();
     } else {
-      alert('Ошибка: ' + (data.error || ''));
+      alert('Ошибка: ' + (data.error || data.message || JSON.stringify(data)));
       if (btn) btn.disabled = false;
     }
   } catch(e) {
@@ -1505,9 +1511,10 @@ function buildSessList(snap) {
     el.innerHTML = '<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Нет сессий — добавьте первую ниже.</div>';
     return;
   }
-  // Rebuild only if count changed
-  if (el.dataset.count === String(sessions.length)) return;
-  el.dataset.count = String(sessions.length);
+  // Build fingerprint of session data — rebuild on any change
+  const fingerprint = sessions.map(a => `${a.idx}:${a.bot_active}:${a.cookies_expired}`).join('|');
+  if (el.dataset.fingerprint === fingerprint) return;
+  el.dataset.fingerprint = fingerprint;
   el.innerHTML = '';
   sessions.forEach(acc => {
     const div = document.createElement('div');
@@ -1518,6 +1525,7 @@ function buildSessList(snap) {
         `<div>` +
           `<span style="font-size:12px;font-weight:600;color:var(--yellow)">${esc(acc.name)}</span>` +
           `<span style="font-size:11px;color:var(--dim);margin-left:8px">${acc.bot_active ? t('sess_active') : t('sess_inactive')}</span>` +
+          (acc.cookies_expired ? `<span style="font-size:10px;color:var(--red);margin-left:6px">⚠️ куки</span>` : `<span style="font-size:10px;color:var(--green);margin-left:6px">🍪 ок</span>`) +
         `</div>` +
         `<div style="display:flex;gap:6px">` +
           (!acc.bot_active ? `<button class="btn-sm" style="color:var(--green);border-color:var(--green)" onclick="sessActivate(${acc.idx},this)">▶ Запустить</button>` : '') +
@@ -1766,6 +1774,7 @@ function renderAll(snap) {
   else if (State.currentTab === 'hh') renderHH(snap);
   else if (State.currentTab === 'llm') renderLlmLog(snap);
   else if (State.currentTab === 'views') loadViews();
+  else if (State.currentTab === 'settings') buildSessList(snap);
   else if (State.currentTab === 'apply') {
     applyBuildAccountSelect(snap);
   }
@@ -2256,10 +2265,27 @@ function updateCard(card, acc) {
     }
   }
 
-  // Cookies expired badge
+  // Cookies + OAuth status badge
   const cookiesBadge = document.getElementById('acc-cookiesbadge-' + acc.idx);
   if (cookiesBadge) {
-    cookiesBadge.style.display = acc.cookies_expired ? '' : 'none';
+    const oa = acc.oauth_status || {};
+    if (acc.cookies_expired && oa.has_token) {
+      cookiesBadge.style.display = '';
+      cookiesBadge.innerHTML = `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
+      cookiesBadge.style.color = 'var(--yellow)';
+    } else if (acc.cookies_expired && !oa.has_token) {
+      cookiesBadge.style.display = '';
+      cookiesBadge.innerHTML = `⚠️ Куки протухли | 🔑 OAuth: ❌ нет токена — обновите куки!`;
+      cookiesBadge.style.color = 'var(--red)';
+    } else if (!acc.cookies_expired && oa.has_token) {
+      cookiesBadge.style.display = '';
+      cookiesBadge.innerHTML = `🍪 Куки ✅ | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
+      cookiesBadge.style.color = 'var(--green)';
+    } else {
+      cookiesBadge.style.display = '';
+      cookiesBadge.innerHTML = `🍪 Куки ✅ | 🔑 OAuth: ⏳ будет получен при отклике`;
+      cookiesBadge.style.color = 'var(--dim)';
+    }
   }
 
   // Current vacancy
