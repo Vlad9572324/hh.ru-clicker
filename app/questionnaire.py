@@ -4,6 +4,8 @@ Questionnaire parsing and template-based answer generation.
 
 import re
 
+from bs4 import BeautifulSoup
+
 from app.config import CONFIG
 from app.logging_utils import log_debug
 
@@ -123,21 +125,19 @@ def _parse_questionnaire_rich(html: str) -> list:
     """Парсит форму опросника и возвращает богатую структуру для LLM:
     list of {field, type, text, options: [{value, label}]}
     """
-    q_blocks = re.findall(
-        r'data-qa="task-question">(.*?)(?=data-qa="task-question"|</(?:div|section|form)>)',
-        html, re.DOTALL
-    )
+    soup = BeautifulSoup(html, "html.parser")
+
+    q_blocks = soup.find_all(attrs={"data-qa": "task-question"})
     q_texts = []
     for b in q_blocks:
-        c = re.sub(r'<[^>]+>', ' ', b)
-        c = re.sub(r'&quot;', '"', re.sub(r'&ndash;', '–', re.sub(r'&nbsp;', ' ', c)))
-        c = re.sub(r'\s+', ' ', c).strip()
+        c = b.get_text(separator=' ', strip=True)
         q_texts.append(c)
 
     result = []
     q_idx = 0
 
-    for name in re.findall(r'<textarea[^>]+name="(task_\d+_text)"', html):
+    for textarea in soup.find_all("textarea", attrs={"name": re.compile(r"task_\d+_text")}):
+        name = textarea.get("name")
         result.append({"field": name, "type": "textarea",
                        "text": q_texts[q_idx] if q_idx < len(q_texts) else "", "options": []})
         q_idx += 1
@@ -145,28 +145,22 @@ def _parse_questionnaire_rich(html: str) -> list:
     radio_groups: dict = {}      # name -> [value, ...]
     radio_value_label: dict = {}  # (name, value) -> label_text
     radio_order: list = []
-    # Берём весь input как блок, чтобы вытащить name+value+id одной строкой.
-    for inp in re.findall(r'<input[^>]+type="radio"[^>]+>', html, re.I):
-        nm = re.search(r'name="([^"]+)"', inp)
-        vl = re.search(r'value="([^"]+)"', inp)
-        if not (nm and vl and re.match(r'task_\d+', nm.group(1))):
+    for inp in soup.find_all("input", attrs={"type": "radio", "name": re.compile(r"task_\d+")}):
+        n = inp.get("name")
+        v = inp.get("value")
+        if not (n and v):
             continue
-        n, v = nm.group(1), vl.group(1)
         if n not in radio_groups:
             radio_groups[n] = []
             radio_order.append(n)
         radio_groups[n].append(v)
-        # Лейбл — по id этого конкретного input (может отличаться от value)
-        id_m = re.search(r'\bid="([^"]+)"', inp)
-        if id_m:
-            label_m = re.search(
-                rf'<label[^>]+for="{re.escape(id_m.group(1))}"[^>]*>(.*?)</label>',
-                html, re.DOTALL,
-            )
-            if label_m:
-                lbl = re.sub(r'<[^>]+>', '', label_m.group(1)).strip()
-                if lbl:
-                    radio_value_label[(n, v)] = lbl
+        inp_id = inp.get("id")
+        if inp_id:
+            label = soup.find("label", attrs={"for": inp_id})
+            if label:
+                lbl_text = label.get_text(strip=True)
+                if lbl_text:
+                    radio_value_label[(n, v)] = lbl_text
 
     default_labels = ["да", "нет"]
     for name in radio_order:
@@ -182,15 +176,15 @@ def _parse_questionnaire_rich(html: str) -> list:
 
     checkbox_groups: dict = {}
     checkbox_order: list = []
-    for inp in re.findall(r'<input[^>]+type="checkbox"[^>]+>', html, re.I):
-        nm = re.search(r'name="([^"]+)"', inp)
-        vl = re.search(r'value="([^"]+)"', inp)
-        if nm and vl and re.match(r'task_\d+', nm.group(1)):
-            n, v = nm.group(1), vl.group(1)
-            if n not in checkbox_groups:
-                checkbox_groups[n] = []
-                checkbox_order.append(n)
-            checkbox_groups[n].append(v)
+    for inp in soup.find_all("input", attrs={"type": "checkbox", "name": re.compile(r"task_\d+")}):
+        n = inp.get("name")
+        v = inp.get("value")
+        if not (n and v):
+            continue
+        if n not in checkbox_groups:
+            checkbox_groups[n] = []
+            checkbox_order.append(n)
+        checkbox_groups[n].append(v)
 
     for name in checkbox_order:
         vals = checkbox_groups[name]
@@ -200,13 +194,16 @@ def _parse_questionnaire_rich(html: str) -> list:
         q_idx += 1
 
     # Select (dropdown) fields
-    for m in re.finditer(r'<select[^>]+name="(task_\d+)"[^>]*>([\s\S]*?)</select>', html):
-        sel_name = m.group(1)
-        options_html = m.group(2)
-        options = re.findall(r'<option[^>]+value="([^"]*)"[^>]*>([^<]*)</option>', options_html)
+    for sel in soup.find_all("select", attrs={"name": re.compile(r"task_\d+")}):
+        sel_name = sel.get("name")
+        options = []
+        for opt in sel.find_all("option"):
+            val = opt.get("value", "")
+            label = opt.get_text(strip=True)
+            options.append({"value": val, "label": label})
         q_text = q_texts[q_idx] if q_idx < len(q_texts) else ""
         q_idx += 1
         result.append({"field": sel_name, "type": "select", "text": q_text,
-                       "options": [{"value": v, "label": l} for v, l in options]})
+                       "options": options})
 
     return result

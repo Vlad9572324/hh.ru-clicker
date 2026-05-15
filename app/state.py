@@ -32,14 +32,8 @@ class AccountState:
         self.already_applied = 0
         self.found_vacancies = 0
 
-        self.current_phase = ""
-        self.current_url = ""
-        self.current_url_idx = 0
         self.total_urls = len(acc_data["urls"])
-        self.current_page = 0
-        self.total_pages = CONFIG.pages_per_url
 
-        self.current_vacancy_id = ""
         self.current_vacancy_title = ""
         self.current_vacancy_company = ""
         self.current_vacancy_idx = 0
@@ -69,24 +63,17 @@ class AccountState:
         self.hard_stopped = False  # жёсткая остановка (лимит или daily)
 
         self.resume_touch_enabled = True
-        self.last_resume_touch = None
         self.next_resume_touch = None
         self.resume_touch_status = ""
 
-        self.last_action_time = None
-        self.cycle_start_time = None
-        self.wait_until = None
+
 
         self.action_history = deque(maxlen=20)
         self.recent_responses = deque(maxlen=10)
 
         self.salary_skipped = 0       # Пропущено из-за зарплаты
-        self.schedule_skipped = 0     # Пропущено из-за формата работы
-        self.vacancy_salaries = {}    # {vid: salary_from_rub_or_None}
-        self.vacancy_schedules = {}   # {vid: set_of_schedule_ids}
         self.vacancy_meta = {}        # {vid: {title, company}} из HTML поиска
         self.questionnaire_sent = 0   # Успешно пройдено опросов
-        self.inconsistent_skipped = 0  # Пропущено из-за несовпадения опыта
 
         self.hh_interviews = 0
         self.hh_interviews_recent = 0  # за последние 60 дней

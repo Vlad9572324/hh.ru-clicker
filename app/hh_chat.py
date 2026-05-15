@@ -2,9 +2,12 @@
 HH.ru chat functions: fetch chat list, build threads, send messages, mark read.
 """
 
+import os
 import requests
 
 from app.logging_utils import log_debug, _is_login_page
+
+_CHATIK_BASE = os.environ.get("HH_CHATIK_BASE", "https://chatik.hh.ru")
 
 
 def _ensure_chatik_cookies(acc: dict) -> None:
@@ -42,7 +45,7 @@ def _do_fetch_chatik_cookies(acc: dict) -> None:
             allow_redirects=True,
         )
         for cookie in r.cookies:
-            if cookie.name in ("hhuid", "crypted_hhuid"):
+            if cookie.value and cookie.name not in acc["cookies"]:
                 acc["cookies"][cookie.name] = cookie.value
                 log_debug(f"_ensure_chatik_cookies: got {cookie.name} for {acc.get('name', '?')}")
     except Exception as e:
@@ -59,16 +62,20 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, */*",
-        "Origin": "https://chatik.hh.ru",
-        "Referer": "https://chatik.hh.ru/",
+        "Origin": _CHATIK_BASE,
+        "Referer": f"{_CHATIK_BASE}/",
         "X-XSRFToken": xsrf,
     }
     items_by_id: dict = {}
     display_info: dict = {}
     current_participant_id: str = ""
+    cursor = ""
 
     for page_num in range(max_pages):
-        url = f"https://chatik.hh.ru/chatik/api/chats?page={page_num}"
+        if cursor:
+            url = f"{_CHATIK_BASE}/chatik/api/chats?cursor={cursor}"
+        else:
+            url = f"{_CHATIK_BASE}/chatik/api/chats?page={page_num}"
         try:
             resp = requests.get(url, cookies=acc["cookies"], headers=headers, timeout=15)
             if resp.status_code in (401, 403) or _is_login_page(resp.text):
@@ -91,7 +98,13 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
             if not current_participant_id:
                 current_participant_id = item.get("currentParticipantId", "")
 
-        # Check pagination: if fewer items than perPage, we've reached the end
+        # Pagination: API signals take precedence over heuristics
+        if chats_obj.get("hasNextPage") is False:
+            break
+        next_cursor = chats_obj.get("nextPage")
+        if isinstance(next_cursor, str) and next_cursor:
+            cursor = next_cursor
+            continue
         per_page = chats_obj.get("perPage", 20)
         if len(items) < per_page:
             break
@@ -212,18 +225,17 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
     xsrf = acc["cookies"].get("_xsrf", "")
     try:
         r = requests.get(
-            "https://chatik.hh.ru/chatik/api/chat_data",
+            f"{_CHATIK_BASE}/chatik/api/chat_data",
             params={"chatId": int(chat_id)},
             cookies=acc["cookies"],
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json",
-                "Referer": "https://chatik.hh.ru/",
-                "Origin": "https://chatik.hh.ru",
+                "Referer": f"{_CHATIK_BASE}/",
+                "Origin": _CHATIK_BASE,
                 "X-XSRFToken": xsrf,
             },
             timeout=15,
-            
         )
         if r.status_code != 200:
             log_debug(f"_fetch_chat_history {chat_id}: HTTP {r.status_code}")
@@ -278,19 +290,18 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
 
     try:
         resp = requests.post(
-            "https://chatik.hh.ru/chatik/api/send",
+            f"{_CHATIK_BASE}/chatik/api/send",
             cookies=acc["cookies"],
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json, */*",
                 "Content-Type": "application/json",
-                "Referer": "https://chatik.hh.ru/",
-                "Origin": "https://chatik.hh.ru",
+                "Referer": f"{_CHATIK_BASE}/",
+                "Origin": _CHATIK_BASE,
                 "X-XSRFToken": xsrf,
             },
             json={"chatId": int(str(neg_id).strip()), "idempotencyKey": str(_uuid.uuid4()), "text": text},
             timeout=15,
-            
         )
         log_debug(f"send via chatik/api/send {neg_id}: HTTP {resp.status_code} | {resp.text[:300]}")
         if resp.status_code in (200, 201, 204):
@@ -325,10 +336,10 @@ def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
         requests.post(
-            "https://chatik.hh.ru/chatik/api/mark_read",
+            f"{_CHATIK_BASE}/chatik/api/mark_read",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                      "Accept": "application/json", "Content-Type": "application/json",
-                     "Origin": "https://chatik.hh.ru", "Referer": "https://chatik.hh.ru/",
+                     "Origin": _CHATIK_BASE, "Referer": f"{_CHATIK_BASE}/",
                      "X-XSRFToken": xsrf},
             cookies=acc["cookies"],
             json={"chatId": cid, "messageId": mid},

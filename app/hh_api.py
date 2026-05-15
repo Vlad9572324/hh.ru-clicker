@@ -19,30 +19,33 @@ def get_headers(xsrf: str) -> dict:
     }
 
 
-def parse_ids(html: str) -> set:
+# Single-entry cache so that the 4 thin wrappers share one BeautifulSoup parse
+# when called sequentially with the same html string (typical caller pattern).
+_last_html_ref = None
+_last_parsed_result = None
+
+
+def parse_search_page(html: str) -> dict:
+    """Один BeautifulSoup parse → {ids, meta, salaries, schedules}."""
+    global _last_html_ref, _last_parsed_result
+    if html is _last_html_ref and _last_parsed_result is not None:
+        return _last_parsed_result
+
     try:
         soup = BeautifulSoup(html, "html.parser")
     except Exception as e:
-        log_debug(f"parse_ids: BeautifulSoup failed: {e}")
-        return set()
+        log_debug(f"parse_search_page: BeautifulSoup failed: {e}")
+        return {"ids": set(), "meta": {}, "salaries": {}, "schedules": {}}
+
+    # ---- IDs ---------------------------------------------------------------
     ids = set()
     for link in soup.find_all("a", href=re.compile(r"/vacancy/\d+")):
         m = re.search(r"/vacancy/(\d+)", link["href"])
         if m:
             ids.add(m.group(1))
-    log_debug(f"🔍 Парсинг: найдено {len(ids)} вакансий")
-    return ids
 
-
-def parse_vacancy_meta(html: str) -> dict:
-    """
-    Из HTML страницы поиска извлекает {vacancy_id: {title, company}}.
-    Используется как fallback когда API-ответ не содержит shortVacancy.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    result = {}
-
-    # Основной путь: ищем элементы вакансий по data-qa
+    # ---- Meta --------------------------------------------------------------
+    meta = {}
     for item in soup.find_all(attrs={"data-qa": re.compile(r"vacancy-serp__vacancy$")}):
         title_el = item.find("a", attrs={"data-qa": re.compile(r"serp-item__title|vacancy-serp__vacancy-title")})
         if not title_el:
@@ -59,22 +62,98 @@ def parse_vacancy_meta(html: str) -> dict:
         if comp_el:
             company = comp_el.get_text(strip=True)
         if title:
-            result[vid] = {"title": title, "company": company}
+            meta[vid] = {"title": title, "company": company}
 
-    # Fallback: любая ссылка на вакансию с непустым текстом
-    if not result:
+    if not meta:
         for link in soup.find_all("a", href=re.compile(r"/vacancy/\d+")):
             m = re.search(r"/vacancy/(\d+)", link.get("href", ""))
             if not m:
                 continue
             vid = m.group(1)
-            if vid in result:
+            if vid in meta:
                 continue
             title = link.get_text(strip=True)
             if title and len(title) > 4:
-                result[vid] = {"title": title, "company": ""}
+                meta[vid] = {"title": title, "company": ""}
 
+    # ---- Salaries ----------------------------------------------------------
+    salaries = {}
+    # Safer regex: avoids catastrophic backtracking on nested braces.
+    for m in re.finditer(r'"(?:compensation|salary)"\s*:\s*\{((?:[^{}]|\{[^{}]*\})*)\}', html):
+        comp_str = m.group(1)
+        if '"noCompensation"' in comp_str or '"from"' not in comp_str:
+            continue
+        from_m = re.search(r'"from"\s*:\s*(\d+)', comp_str)
+        if not from_m:
+            continue
+
+        context = html[max(0, m.start() - 2000): m.start()]
+        vid_matches = re.findall(r'/vacancy/(\d+)', context)
+        if not vid_matches:
+            continue
+        vid = vid_matches[-1]
+
+        salary = int(from_m.group(1))
+        curr_m = re.search(r'"currencyCode"\s*:\s*"(\w+)"', comp_str)
+        curr = curr_m.group(1) if curr_m else "RUR"
+        if curr == "USD":
+            salary = salary * 90
+        elif curr == "EUR":
+            salary = salary * 100
+        salaries[vid] = salary
+
+    # ---- Schedules ---------------------------------------------------------
+    schedules = {}
+    for m in re.finditer(r'"(?:workSchedule(?:Type)?s?|scheduleType(?:Name)?s?)"\s*:\s*\[([^\]]{0,500})\]', html):
+        block = m.group(1)
+        context = html[max(0, m.start() - 2000): m.start()]
+        vid_matches = re.findall(r'/vacancy/(\d+)', context)
+        if not vid_matches:
+            continue
+        vid = vid_matches[-1]
+        if vid not in schedules:
+            schedules[vid] = set()
+        for sid in re.findall(r'"id"\s*:\s*"(\w+)"', block):
+            schedules[vid].add(sid)
+        for label in re.findall(r'"([^"]+)"', block):
+            label_lower = label.lower().strip()
+            for key, code in _SCHEDULE_LABELS.items():
+                if key in label_lower:
+                    schedules[vid].add(code)
+                    break
+
+    for m in re.finditer(r'data-qa="[^"]*(?:schedule|work-mode|work-format)[^"]*"[^>]*>([^<]{2,50})<', html):
+        label = m.group(1).strip().lower()
+        context = html[max(0, m.start() - 3000): m.start()]
+        vid_matches = re.findall(r'/vacancy/(\d+)', context)
+        if not vid_matches:
+            continue
+        vid = vid_matches[-1]
+        if vid not in schedules:
+            schedules[vid] = set()
+        for key, code in _SCHEDULE_LABELS.items():
+            if key in label:
+                schedules[vid].add(code)
+                break
+
+    result = {"ids": ids, "meta": meta, "salaries": salaries, "schedules": schedules}
+    _last_html_ref = html
+    _last_parsed_result = result
     return result
+
+
+def parse_ids(html: str) -> set:
+    result = parse_search_page(html)["ids"]
+    log_debug(f"🔍 Парсинг: найдено {len(result)} вакансий")
+    return result
+
+
+def parse_vacancy_meta(html: str) -> dict:
+    """
+    Из HTML страницы поиска извлекает {vacancy_id: {title, company}}.
+    Используется как fallback когда API-ответ не содержит shortVacancy.
+    """
+    return parse_search_page(html)["meta"]
 
 
 def parse_salaries(html: str, ids: set) -> dict:
@@ -86,35 +165,10 @@ def parse_salaries(html: str, ids: set) -> dict:
     result = {vid: None for vid in ids}
     if not ids or not CONFIG.min_salary:
         return result
-
-    # Ищем все блоки compensation/salary в HTML и смотрим какая вакансия была упомянута
-    # ближайшей по тексту перед каждым блоком
-    for m in re.finditer(r'"(?:compensation|salary)"\s*:\s*\{([^}]{0,1500})\}', html):
-        comp_str = m.group(1)
-        if '"noCompensation"' in comp_str or '"from"' not in comp_str:
-            continue
-        from_m = re.search(r'"from"\s*:\s*(\d+)', comp_str)
-        if not from_m:
-            continue
-
-        # Ищем последний упомянутый vacancy ID в 2000 символах перед этим блоком
-        context = html[max(0, m.start() - 2000): m.start()]
-        vid_matches = re.findall(r'/vacancy/(\d+)', context)
-        if not vid_matches:
-            continue
-        vid = vid_matches[-1]
-        if vid not in result or result[vid] is not None:
-            continue
-
-        salary = int(from_m.group(1))
-        curr_m = re.search(r'"currencyCode"\s*:\s*"(\w+)"', comp_str)
-        curr = curr_m.group(1) if curr_m else "RUR"
-        if curr == "USD":
-            salary = salary * 90
-        elif curr == "EUR":
-            salary = salary * 100
-        result[vid] = salary
-
+    all_salaries = parse_search_page(html)["salaries"]
+    for vid in ids:
+        if vid in all_salaries:
+            result[vid] = all_salaries[vid]
     return result
 
 
@@ -135,43 +189,10 @@ def parse_work_schedules(html: str, ids: set) -> dict:
     result = {vid: set() for vid in ids}
     if not ids or not CONFIG.allowed_schedules:
         return result
-
-    # Approach 1: JSON — ищем "workSchedules":[{"id":"remote"}] или "scheduleTypeNames":["Удалённая"]
-    for m in re.finditer(r'"(?:workSchedule(?:Type)?s?|scheduleType(?:Name)?s?)"\s*:\s*\[([^\]]{0,500})\]', html):
-        block = m.group(1)
-        # Ищем ближайший vacancy ID перед этим блоком
-        context = html[max(0, m.start() - 2000): m.start()]
-        vid_matches = re.findall(r'/vacancy/(\d+)', context)
-        if not vid_matches:
-            continue
-        vid = vid_matches[-1]
-        if vid not in result:
-            continue
-        # Извлекаем id из JSON-объектов {"id":"remote"} или строк "Удалённая работа"
-        for sid in re.findall(r'"id"\s*:\s*"(\w+)"', block):
-            result[vid].add(sid)
-        for label in re.findall(r'"([^"]+)"', block):
-            label_lower = label.lower().strip()
-            for key, code in _SCHEDULE_LABELS.items():
-                if key in label_lower:
-                    result[vid].add(code)
-                    break
-
-    # Approach 2: HTML labels — data-qa элементы с расписанием
-    for m in re.finditer(r'data-qa="[^"]*(?:schedule|work-mode|work-format)[^"]*"[^>]*>([^<]{2,50})<', html):
-        label = m.group(1).strip().lower()
-        context = html[max(0, m.start() - 3000): m.start()]
-        vid_matches = re.findall(r'/vacancy/(\d+)', context)
-        if not vid_matches:
-            continue
-        vid = vid_matches[-1]
-        if vid not in result:
-            continue
-        for key, code in _SCHEDULE_LABELS.items():
-            if key in label:
-                result[vid].add(code)
-                break
-
+    all_schedules = parse_search_page(html)["schedules"]
+    for vid in ids:
+        if vid in all_schedules:
+            result[vid] = all_schedules[vid]
     return result
 
 

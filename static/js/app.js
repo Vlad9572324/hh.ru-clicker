@@ -246,6 +246,18 @@ const T = {
     smart_filter_low_comp: '<10 откликов',
     smart_filter_no_agency: 'Без агентств',
     smart_filter_auto_tests: 'Авто-тесты',
+    smart_filter_pre_check: 'Пре-чек опыта',
+    smart_filter_freshness: 'Свежесть:',
+    smart_filter_llm_interval: 'LLM каждые:',
+    smart_filter_daily_limit: 'Лимит/день:',
+    audit_exp: 'Опыт',
+    audit_salary: 'Зарплата',
+    audit_photo: 'Фото',
+    audit_resume_status: 'Статус резюме',
+    audit_format: 'Формат:',
+    audit_schedule: 'График:',
+    audit_employment: 'Занятость:',
+    audit_roles: 'Роли:',
     llm_st_off: 'LLM выключен',
     llm_st_paused: 'На паузе',
     llm_st_on: 'LLM работает',
@@ -493,6 +505,18 @@ const T = {
     smart_filter_low_comp: '<10 replies',
     smart_filter_no_agency: 'No agencies',
     smart_filter_auto_tests: 'Auto-tests',
+    smart_filter_pre_check: 'Pre-check experience',
+    smart_filter_freshness: 'Freshness:',
+    smart_filter_llm_interval: 'LLM every:',
+    smart_filter_daily_limit: 'Daily limit:',
+    audit_exp: 'Experience',
+    audit_salary: 'Salary',
+    audit_photo: 'Photo',
+    audit_resume_status: 'Resume status',
+    audit_format: 'Format:',
+    audit_schedule: 'Schedule:',
+    audit_employment: 'Employment:',
+    audit_roles: 'Roles:',
     llm_st_off: 'LLM off',
     llm_st_paused: 'Paused',
     llm_st_on: 'LLM running',
@@ -558,7 +582,6 @@ const State = {
   currentTab: 'main',
   reconnectDelay: 1000,
   reconnectTimer: null,
-  logNodeCount: 0,
   MAX_LOG_NODES: 100,
   prevInterviews: {},      // {acc_idx: count} — для браузерных уведомлений
   prevLimitState: {},      // {acc_idx: bool}
@@ -990,24 +1013,6 @@ function updateLlmStatusBar(snap) {
   const sentCount = llmLog.filter(l => l.sent).length;
   const draftCount = llmLog.filter(l => !l.sent).length;
   stReplied.textContent = `✅ ${sentCount} отправлено · 📝 ${draftCount} черновиков`;
-}
-
-async function llmRunNow() {
-  try {
-    const r = await fetch('/api/llm_run_now', {method: 'POST'});
-    const d = await r.json();
-    if (d.started) {
-      // Visual feedback
-      document.querySelectorAll('.btn-sm').forEach(b => {
-        if (b.textContent.includes('Сейчас')) b.textContent = '🔄 ...';
-      });
-      setTimeout(() => {
-        document.querySelectorAll('.btn-sm').forEach(b => {
-          if (b.textContent.includes('...')) b.textContent = '🔄 Сейчас';
-        });
-      }, 5000);
-    }
-  } catch(e) {}
 }
 
 function oauthToggleAccount(idx, btn) {
@@ -2126,24 +2131,24 @@ function buildCardHTML(acc) {
             <input type="checkbox" class="smart-filter-cb" data-key="filter_agencies" style="accent-color:var(--yellow)"> 🏢 ${t('smart_filter_no_agency')}
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
-            <input type="checkbox" class="smart-filter-cb" data-key="skip_inconsistent" style="accent-color:var(--cyan)"> ⚡ Пре-чек опыта
+            <input type="checkbox" class="smart-filter-cb" data-key="skip_inconsistent" style="accent-color:var(--cyan)"> ⚡ ${t('smart_filter_pre_check')}
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
             <input type="checkbox" class="smart-filter-cb" data-key="auto_apply_tests" style="accent-color:var(--magenta)"> 🧪 ${t('smart_filter_auto_tests')}
           </label>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px">
-          <label style="display:flex;align-items:center;gap:4px">📅 Свежесть:
+          <label style="display:flex;align-items:center;gap:4px">📅 ${t('smart_filter_freshness')}
             <select class="smart-filter-sel" data-key="search_period_days" style="font-size:10px;padding:1px 4px">
               <option value="0">Все</option><option value="1">1д</option><option value="3">3д</option><option value="7">7д</option><option value="14">14д</option>
             </select>
           </label>
-          <label style="display:flex;align-items:center;gap:4px">💬 LLM каждые:
+          <label style="display:flex;align-items:center;gap:4px">💬 ${t('smart_filter_llm_interval')}
             <select class="smart-filter-sel" data-key="llm_check_interval" style="font-size:10px;padding:1px 4px">
               <option value="2">2м</option><option value="5">5м</option><option value="10">10м</option><option value="15">15м</option><option value="30">30м</option>
             </select>
           </label>
-          <label style="display:flex;align-items:center;gap:4px">🛑 Лимит/день:
+          <label style="display:flex;align-items:center;gap:4px">🛑 ${t('smart_filter_daily_limit')}
             <input type="number" class="smart-filter-num" data-key="daily_apply_limit" min="0" max="500" style="width:50px;font-size:10px;padding:1px 4px" placeholder="0">
           </label>
         </div>
@@ -2892,7 +2897,7 @@ function dbFillTable(items) {
   if (!tbody) return;
   tbody.innerHTML = items.map(item => {
     const [icon, labelKey, cls] = DB_STATUS[item.status] || ['❓', null, 'c-dim'];
-    const label = labelKey ? t(labelKey) : item.status;
+    const label = labelKey ? t(labelKey) : esc(item.status);
     const dt = item.at
       ? new Date(item.at).toLocaleString('ru-RU', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
       : '';
@@ -3560,28 +3565,28 @@ function renderAuditResult(d) {
           <div style="color:${pctColor};font-weight:600">${d.percent || 0}%</div>
         </div>
         <div class="audit-card">
-          <div class="audit-label">Опыт</div>
+          <div class="audit-label">${t('audit_exp')}</div>
           <div>${expStr}</div>
         </div>
         <div class="audit-card">
-          <div class="audit-label">Зарплата</div>
+          <div class="audit-label">${t('audit_salary')}</div>
           <div>${d.salary ? d.salary + ' ₽' : '<span style="color:var(--red)">не указана</span>'}</div>
         </div>
         <div class="audit-card">
-          <div class="audit-label">Фото</div>
+          <div class="audit-label">${t('audit_photo')}</div>
           <div>${d.has_photo ? '<span style="color:var(--green)">Есть</span>' : '<span style="color:var(--red)">Нет</span>'}</div>
         </div>
         <div class="audit-card">
-          <div class="audit-label">Статус резюме</div>
+          <div class="audit-label">${t('audit_resume_status')}</div>
           <div style="color:${d.status === 'published' ? 'var(--green)' : 'var(--red)'}">${esc(d.status || '?')}</div>
         </div>
       </div>
 
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:12px">
-        <div><span style="color:var(--dim)">Формат:</span> ${(d.work_formats || []).map(esc).join(', ') || '—'}</div>
-        <div><span style="color:var(--dim)">График:</span> ${(d.work_schedule || []).map(esc).join(', ') || '—'}</div>
-        <div><span style="color:var(--dim)">Занятость:</span> ${(d.employment || []).map(esc).join(', ') || '—'}</div>
-        <div><span style="color:var(--dim)">Роли:</span> ${(d.roles || []).map(r => esc(r)).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">${t('audit_format')}</span> ${(d.work_formats || []).map(esc).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">${t('audit_schedule')}</span> ${(d.work_schedule || []).map(esc).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">${t('audit_employment')}</span> ${(d.employment || []).map(esc).join(', ') || '—'}</div>
+        <div><span style="color:var(--dim)">${t('audit_roles')}</span> ${(d.roles || []).map(r => esc(r)).join(', ') || '—'}</div>
       </div>
 
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:12px">

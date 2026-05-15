@@ -803,7 +803,6 @@ class BotManager:
 
                     if success:
                         state.resume_touch_status = "✅ Поднято!"
-                        state.last_resume_touch = now
                         state.next_resume_touch = now + timedelta(hours=4)
                         self._add_log(
                             state.short, state.color,
@@ -864,7 +863,6 @@ class BotManager:
 
             state.status = "collecting"
             state.status_detail = "Начинаю параллельный сбор..."
-            state.cycle_start_time = now
             state.vacancies_by_url = {}
             state.vacancy_meta = {}  # Сброс метаданных вакансий для нового цикла
 
@@ -884,8 +882,6 @@ class BotManager:
                 state.status_detail = f"Ошибка сбора: {str(e)[:50]}"
                 time.sleep(60)
                 continue
-            state.vacancy_salaries = salary_map
-            state.vacancy_schedules = schedule_map
 
             all_vacancies = []
             for url in effective_urls:
@@ -920,7 +916,6 @@ class BotManager:
                     continue
                 state.status = "waiting"
                 state.status_detail = "Нет вакансий"
-                state.wait_until = now + timedelta(minutes=2)
                 self._add_log(
                     state.short, state.color,
                     "⚠️ Не найдено ни одной вакансии, пауза 2 мин",
@@ -948,7 +943,6 @@ class BotManager:
                     sched = schedule_map.get(vid, set())
                     if sched and not sched.intersection(CONFIG.allowed_schedules):
                         schedule_skipped += 1
-                        state.schedule_skipped += 1
                     elif CONFIG.min_salary > 0:
                         sal = salary_map.get(vid)
                         if sal is None or sal < CONFIG.min_salary:
@@ -979,7 +973,6 @@ class BotManager:
             if not filtered:
                 state.status = "waiting"
                 state.status_detail = "Нет новых вакансий"
-                state.wait_until = now + timedelta(minutes=2)
                 self._add_log(
                     state.short, state.color,
                     f"⚠️ Все вакансии уже обработаны ({already_count} откликов, {test_count} тестов), пауза 2 мин",
@@ -1080,7 +1073,6 @@ class BotManager:
                         if not precheck["ok"]:
                             meta = state.vacancy_meta.get(vid, {})
                             display_title = (meta.get("title") or vid)[:40]
-                            state.inconsistent_skipped += 1
                             self._add_log(state.short, state.color,
                                 f"⏭ {display_title}: пропуск ({precheck['reason']})", "warning")
                         else:
@@ -1150,7 +1142,6 @@ class BotManager:
                         continue
 
                     result, info = result_data
-                    state.current_vacancy_id = vid
 
                     if result == "sent":
                         state.sent += 1
@@ -1340,7 +1331,6 @@ class BotManager:
                     time.sleep(CONFIG.response_delay)
 
             # Очистка
-            state.current_vacancy_id = ""
             state.current_vacancy_title = ""
             state.current_vacancy_company = ""
             if state.short in self.vacancy_queues:
@@ -1353,7 +1343,6 @@ class BotManager:
             if not state.limit_exceeded:
                 state.status = "waiting"
                 state.status_detail = "Цикл завершён"
-                state.wait_until = datetime.now() + timedelta(seconds=CONFIG.pause_between_cycles)
                 self._add_log(
                     state.short, state.color,
                     f"⏳ Цикл завершён, пауза {CONFIG.pause_between_cycles}с",
@@ -1418,9 +1407,6 @@ class BotManager:
                     return url, set(), {}, {}, {}
                 html = await fetch_page(session, page_url, sem)
                 completed += 1
-                state.current_url_idx = url_idx
-                state.current_url = url
-                state.current_page = page + 1
                 state.status_detail = f"Загрузка {completed}/{total_tasks}"
                 if html and _is_login_page(html):
                     if not (state.use_oauth or CONFIG.use_oauth_apply):

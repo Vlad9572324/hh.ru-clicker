@@ -107,6 +107,10 @@ class Config:
 CONFIG = Config()
 CONFIG.llm_profiles = []
 
+# Cache for _url_pages_map — invalidated in save_config() when url_pool mutates.
+_url_pages_map_cache: dict | None = None
+_url_pool_version: int = 0
+
 
 def _url_entry(item) -> dict:
     """Нормализует элемент url_pool в {url, pages}."""
@@ -117,7 +121,10 @@ def _url_entry(item) -> dict:
 
 def _url_pages_map() -> dict:
     """Возвращает {url_str: pages} из CONFIG.url_pool."""
-    return {e["url"]: e["pages"] for u in CONFIG.url_pool for e in [_url_entry(u)]}
+    global _url_pages_map_cache
+    if _url_pages_map_cache is None:
+        _url_pages_map_cache = {e["url"]: e["pages"] for u in CONFIG.url_pool for e in [_url_entry(u)]}
+    return _url_pages_map_cache
 
 
 _CONFIG_KEYS = [
@@ -131,6 +138,7 @@ _CONFIG_KEYS = [
 
 def save_config():
     """Сохранить текущий CONFIG на диск."""
+    global _url_pages_map_cache, _url_pool_version
     data = {k: getattr(CONFIG, k) for k in _CONFIG_KEYS}
     data["questionnaire_templates"] = CONFIG.questionnaire_templates
     data["letter_templates"] = CONFIG.letter_templates
@@ -148,6 +156,8 @@ def save_config():
     data["llm_system_prompt"] = CONFIG.llm_system_prompt
     data["llm_profiles"] = CONFIG.llm_profiles
     data["llm_profile_mode"] = CONFIG.llm_profile_mode
+    _url_pool_version += 1
+    _url_pages_map_cache = None
     def _write():
         with _config_write_lock:
             tmp = CONFIG_FILE.with_suffix(".tmp")
