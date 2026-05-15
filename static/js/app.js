@@ -1,5 +1,7 @@
 // ── i18n ──────────────────────────────────────────────────────
-let lang = localStorage.getItem('hh-lang') || 'ru';
+// Невалидный/протухший lang в localStorage не должен ломать UI всеми raw-ключами.
+const _storedLang = localStorage.getItem('hh-lang');
+let lang = (_storedLang === 'ru' || _storedLang === 'en') ? _storedLang : 'ru';
 
 const T = {
   ru: {
@@ -1429,7 +1431,7 @@ function syncAccUrlChecks(snap) {
       return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
         <label style="display:flex;align-items:flex-start;gap:5px;cursor:pointer;font-size:11px;flex:1;min-width:0">
           <input type="checkbox" value="${esc(url)}" ${checked} style="margin-top:2px;flex-shrink:0">
-          <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${badge}${countInfo}</span>
+          <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(badge)}${countInfo}</span>
         </label>
         <input type="number" class="apply-input acc-url-pages-inp" data-url="${esc(url)}"
           min="1" max="200" placeholder="${poolPages}"
@@ -1718,6 +1720,12 @@ function applySettings() {
 
 // ── WebSocket ──────────────────────────────────────────────────
 function connect() {
+  // Защита от flapping (error→close→error): иначе несколько setTimeout повисают
+  // и плодят дубликаты соединений.
+  if (State.reconnectTimer) {
+    clearTimeout(State.reconnectTimer);
+    State.reconnectTimer = null;
+  }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   State.ws = ws;
@@ -1802,27 +1810,32 @@ function updatePageTitle(snap) {
 
 function checkNotifications(snap) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // На первом snapshot инициализируем prev-state без алертов — иначе любой
+  // reload страницы с уже-в-лимите аккаунтом стреляет нотификацией заново.
+  const isFirstSnapshot = !State.notificationsInited;
   (snap.accounts || []).forEach(acc => {
-    const prev = State.prevInterviews[acc.idx] ?? acc.hh_interviews;
-    if (acc.hh_interviews > prev) {
+    const prevInv = State.prevInterviews[acc.idx] ?? acc.hh_interviews;
+    if (!isFirstSnapshot && acc.hh_interviews > prevInv) {
       sendBotNotification(
         `${t('notif_new_inv')}${acc.short}`,
-        `${t('notif_inv_count_pre')} ${acc.hh_interviews} ${t('notif_inv_count_mid')}${acc.hh_interviews - prev})`
+        `${t('notif_inv_count_pre')} ${acc.hh_interviews} ${t('notif_inv_count_mid')}${acc.hh_interviews - prevInv})`
       );
     }
     State.prevInterviews[acc.idx] = acc.hh_interviews;
+
     const wasLimit = State.prevLimitState[acc.idx];
-    if (acc.status === 'limit' && !wasLimit) {
+    if (!isFirstSnapshot && acc.status === 'limit' && !wasLimit) {
       sendBotNotification(`${t('notif_limit')}${acc.short}`, t('notif_limit_body'));
     }
     State.prevLimitState[acc.idx] = acc.status === 'limit';
-    // Cookies expired detection
+
     const wasExpired = State.prevCookiesExpired[acc.idx];
-    if (acc.cookies_expired && !wasExpired) {
+    if (!isFirstSnapshot && acc.cookies_expired && !wasExpired) {
       sendBotNotification(`${t('notif_cookies')}${acc.short}`, t('notif_cookies_body'));
     }
     State.prevCookiesExpired[acc.idx] = acc.cookies_expired;
   });
+  State.notificationsInited = true;
 }
 
 function sendBotNotification(title, body) {
@@ -2888,10 +2901,10 @@ async function loadTests() {
       const resumeLink = item.resume_hash
         ? `<a href="https://hh.ru/resume/${encodeURIComponent(item.resume_hash)}" target="_blank" style="font-size:11px;color:var(--cyan)">${esc(accShort)}</a>`
         : `<span class="c-dim">${esc(accShort) || '—'}</span>`;
-      // Applied by list
+      // Applied by list — каждое имя через esc() (account name может прийти от пользователя)
       const appliedBy = item.applied_by || [];
       const appliedCell = appliedBy.length
-        ? `<span style="color:var(--green)">✅ ${appliedBy.map(a => a.replace(/^.*?\((.+?)\).*$/, '$1') || a).join(', ')}</span>`
+        ? `<span style="color:var(--green)">✅ ${appliedBy.map(a => esc(a.replace(/^.*?\((.+?)\).*$/, '$1') || a)).join(', ')}</span>`
         : `<span class="c-dim">—</span>`;
       return `<tr>
         <td class="c-dim">${dt}</td>
@@ -2899,7 +2912,7 @@ async function loadTests() {
         <td>${esc(item.company)}</td>
         <td>${resumeLink}</td>
         <td>${appliedCell}</td>
-        <td><a href="${esc(item.url)}" target="_blank">hh.ru/vacancy/${item.vacancy_id}</a></td>
+        <td><a href="${esc(item.url || '')}" target="_blank">hh.ru/vacancy/${esc(item.vacancy_id)}</a></td>
       </tr>`;
     }).join('');
   } catch(e) {}
@@ -3283,18 +3296,20 @@ function applyRenderQuestionnaire(data) {
       <div class="apply-q-text">${esc(q.text)}</div>
     `;
 
+    // q.field — scraped from HH HTML, может быть атакером. esc() для атрибутов.
+    const fieldAttr = esc(q.field);
     if (q.type === 'radio') {
       html += `<div class="apply-radio-opts">`;
       q.options.forEach(opt => {
         const checked = opt.value === q.suggested ? 'checked' : '';
         html += `<label class="apply-radio-opt">
-          <input type="radio" name="aq_${q.field}" value="${esc(opt.value)}" ${checked}>
+          <input type="radio" name="aq_${fieldAttr}" value="${esc(opt.value)}" ${checked}>
           ${esc(opt.label)}
         </label>`;
       });
       html += `</div>`;
     } else if (q.type === 'textarea') {
-      html += `<textarea class="apply-q-answer" id="aq_${q.field}" rows="3">${esc(q.suggested)}</textarea>`;
+      html += `<textarea class="apply-q-answer" id="aq_${fieldAttr}" rows="3">${esc(q.suggested)}</textarea>`;
     }
     html += `</div>`;
   });

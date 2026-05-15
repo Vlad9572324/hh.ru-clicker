@@ -7,6 +7,11 @@ import threading
 from pathlib import Path
 
 from app.logging_utils import log_debug
+# Используем storage executor вместо своего fire-and-forget thread per save.
+try:
+    from app.storage import _schedule_save
+except Exception:
+    _schedule_save = None  # cycle-safe fallback
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -153,7 +158,7 @@ def save_config():
             except Exception as e:
                 log_debug(f"save_config error: {e}")
                 tmp.unlink(missing_ok=True)
-    threading.Thread(target=_write, daemon=True).start()
+    (_schedule_save(_write) if _schedule_save else threading.Thread(target=_write, daemon=True).start())
 
 
 def load_config():
@@ -216,7 +221,7 @@ def save_accounts():
             except Exception as e:
                 log_debug(f"save_accounts error: {e}")
                 tmp.unlink(missing_ok=True)
-    threading.Thread(target=_write, daemon=True).start()
+    (_schedule_save(_write) if _schedule_save else threading.Thread(target=_write, daemon=True).start())
 
 
 def load_accounts():

@@ -83,7 +83,10 @@ async def fetch_page(session, url, sem):
             await asyncio.sleep(0.05)
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 html = await r.text()
-                log_debug(f"✅ URL: {url} | Статус: {r.status} | Размер: {len(html)}")
+                # Логируем только не-200 и аномальные размеры — иначе hundreds
+                # of disk writes per cycle давят RotatingFileHandler (swarm-16 #9).
+                if r.status != 200 or len(html) < 1000:
+                    log_debug(f"⚠️ URL: {url} | Статус: {r.status} | Размер: {len(html)}")
                 return html
         except Exception as e:
             log_debug(f"❌ ОШИБКА при загрузке: {url} | {type(e).__name__}: {e}")
@@ -1478,7 +1481,7 @@ class BotManager:
             # Early check: chat locked via text/flags (employer disabled messaging or invite-only)
             if _check_chat_locked(item):
                 skipped_locked += 1
-                log_debug(f"LLM [{state.short}] {item_id}: чат заблокирован, пропуск кандидата «{last_text}»")
+                log_debug(f"LLM [{state.short}] {item_id}: чат заблокирован, пропуск кандидата len={len(last_text)}")
                 continue
             # Early check: writePossibility from chatik API
             write_poss = (item.get("writePossibility") or {}).get("name", "")
@@ -1491,14 +1494,14 @@ class BotManager:
                     last_msg_id_early = str((item.get("lastMessage") or {}).get("id", ""))
                     key_early = (str(item_id), last_msg_id_early)
                     if key_early not in state.llm_replied_msgs:
-                        log_debug(f"LLM [{state.short}] {item_id}: unread=0 но от работодателя, не отвечали — добавляю кандидатом: «{last_text}»")
+                        log_debug(f"LLM [{state.short}] {item_id}: unread=0 но от работодателя, не отвечали — добавляю кандидатом: len={len(last_text)}")
                     else:
                         skipped_read += 1
                         di = display_info.get(str(item_id), {})
                         upsert_interview(str(item_id), acc=state.short, acc_color=state.color,
                                          employer=di.get("subtitle", ""), vacancy_title=di.get("title", ""),
                                          chat_status="waiting_hr")
-                        log_debug(f"LLM [{state.short}] {item_id}: unread=0, от работодателя, уже отвечали, пропуск: «{last_text}»")
+                        log_debug(f"LLM [{state.short}] {item_id}: unread=0, от работодателя, уже отвечали, пропуск: len={len(last_text)}")
                         continue
                 else:
                     skipped_read += 1
@@ -1518,9 +1521,8 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, системное событие wf={wf_id!r}, пропуск")
                     continue
                 log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, wf.id={wf_id!r} (числовой, реальное сообщение)")
-            log_debug(f"LLM [{state.short}] {item_id}: ✅ кандидат unread={unread}, от={sender_id}, «{last_text}» | "
-                      f"keys={list(item.keys())} canSend={item.get('canSendMessage')} state={item.get('state')} "
-                      f"permissions={item.get('permissions')} actions={item.get('actions')}")
+            # Не флудим логи структурой каждого item — только метаданные кандидата (swarm-16 #8).
+            log_debug(f"LLM [{state.short}] {item_id}: ✅ кандидат unread={unread}, sender={sender_id}, len={len(last_text)}")
             candidates.append(item_id)
 
         log_debug(f"LLM [{state.short}]: {len(candidates)} кандидатов (прочитанных: {skipped_read}, наших: {skipped_ours}, системных: {skipped_system})")

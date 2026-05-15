@@ -6,6 +6,7 @@ In-memory cache with async disk persistence.
 import json
 import copy
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,21 @@ APPLIED_FILE = DATA_DIR / "applied_vacancies.json"
 TESTS_FILE = DATA_DIR / "test_required_vacancies.json"
 INTERVIEWS_FILE = DATA_DIR / "interviews.json"
 SESSIONS_FILE = DATA_DIR / "browser_sessions.json"
+
+# Единый pool для всех async-сохранений вместо fire-and-forget threading.Thread.
+# Без pool каждый upsert/save спавнит новый thread (8MB stack) под нагрузкой растёт без bound (swarm-11 #2).
+_save_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="storage-save")
+
+
+def _schedule_save(fn):
+    """Async-save: submit на shared pool вместо нового Thread каждый раз.
+    Per-save lock с blocking=False уже защищает от concurrent дублей.
+    """
+    try:
+        _save_executor.submit(fn)
+    except RuntimeError:
+        # pool shutdown — игнорируем (происходит при stop()).
+        pass
 
 
 # ============================================================
@@ -196,7 +212,7 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
         else:
             record["status"] = "pending_reply"
         _cache_interviews[neg_id] = record
-    threading.Thread(target=_save_interviews_async, daemon=True).start()
+    _schedule_save(_save_interviews_async)
 
 
 def get_no_chat_neg_ids() -> set:
@@ -283,7 +299,7 @@ def add_applied(account_name: str, vacancy_id: str, info: dict = None):
             "salary_to": new_info.get("salary_to") or existing.get("salary_to"),
             "at": datetime.now().isoformat()
         }
-    threading.Thread(target=_save_applied_async, daemon=True).start()
+    _schedule_save(_save_applied_async)
 
 
 def add_test_vacancy(vacancy_id: str, title: str = "", company: str = "",
@@ -299,7 +315,7 @@ def add_test_vacancy(vacancy_id: str, title: str = "", company: str = "",
                 "resume_hash": resume_hash,
                 "at": datetime.now().isoformat()
             }
-    threading.Thread(target=_save_tests_async, daemon=True).start()
+    _schedule_save(_save_tests_async)
 
 
 def is_applied(account_name: str, vacancy_id: str) -> bool:
