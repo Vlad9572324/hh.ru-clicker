@@ -15,7 +15,9 @@ router = APIRouter()
 
 class ConfigUpdate(BaseModel):
     key: str
-    value: Union[bool, int, float, str]
+    # Pydantic union resolves left-to-right; bool(300000)=True раньше int → коэрсия
+    # рушит integer config keys. Порядок: int → float → bool → str (kimi-r14-4 #5).
+    value: Union[int, float, bool, str]
 
 
 def _safe_cast(key: str, value):
@@ -154,15 +156,19 @@ async def api_raw_accounts_set(request: Request):
                 continue
             # In-place mutation (НЕ replace reference): workers держат ссылку на
             # state.acc и stale dict иначе (r13-1 #5). Cookies_lock сохраняем явно.
-            cookies_lock = state.acc.get("_cookies_lock")
-            keep_keys = set(new_acc.keys()) | {"_cookies_lock"}
-            for k in list(state.acc.keys()):
-                if k not in keep_keys:
-                    state.acc.pop(k, None)
-            state.acc.update(new_acc)
-            if cookies_lock is not None:
-                state.acc["_cookies_lock"] = cookies_lock
-            state.cookies_expired = False
+            # Pop+update должны быть атомарными — иначе reader увидит частично-
+            # очищенный dict (например, отсутствие cookies в момент HTTP-запроса).
+            # Держим state._state_lock на всю последовательность (kimi-r14-1 #5).
+            with state._state_lock:
+                cookies_lock = state.acc.get("_cookies_lock")
+                keep_keys = set(new_acc.keys()) | {"_cookies_lock"}
+                for k in list(state.acc.keys()):
+                    if k not in keep_keys:
+                        state.acc.pop(k, None)
+                state.acc.update(new_acc)
+                if cookies_lock is not None:
+                    state.acc["_cookies_lock"] = cookies_lock
+                state.cookies_expired = False
     except Exception as e:
         log_debug(f"api_raw_accounts_set live-sync error: {e}")
     return {

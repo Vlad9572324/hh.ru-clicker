@@ -2,8 +2,9 @@
 AccountState — per-account state object for the bot.
 """
 
+import random
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 
 from app.config import CONFIG
@@ -65,9 +66,7 @@ class AccountState:
         self.resume_touch_enabled = True
         # Startup jitter: первый touch отсрочен на 0-120s, чтобы 100 аккаунтов
         # не ударили hh.ru/oauth/token одновременно (kimi-r13-2 #7, r13-3 #10).
-        import random as _r
-        from datetime import datetime as _dt, timedelta as _td
-        self.next_resume_touch = _dt.now() + _td(seconds=_r.uniform(0, 120))
+        self.next_resume_touch = datetime.now() + timedelta(seconds=random.uniform(0, 120))
         self.resume_touch_status = ""
 
 

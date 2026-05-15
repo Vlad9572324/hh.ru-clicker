@@ -3077,8 +3077,9 @@ function safeHref(url) {
   if (!url) return '#';
   let s = String(url).trim();
   // Decode percent-encoded префикс: `j%61vascript:` → `javascript:` (kimi-r13-4 #5).
-  // Делаем до 3 декодов на случай вложенного %25 → %.
-  for (let i = 0; i < 3; i++) {
+  // Декодируем до стабилизации (4+ вложенных %25 обходили предел 3, kimi-r14-1 #6).
+  // Hard cap 10 — защита от пат. входов; 10 достаточно для любого реального URL.
+  for (let i = 0; i < 10; i++) {
     try {
       const dec = decodeURIComponent(s);
       if (dec === s) break;

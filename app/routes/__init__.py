@@ -27,12 +27,15 @@ async def _lifespan(_app: FastAPI):
     жить ЗДЕСЬ, иначе бот не загрузит accounts и не запустит воркеров (r13-1 #1).
     """
     # ── startup ──
+    broadcast_task = None
     try:
         from app.config import load_accounts
         load_accounts()
         bot.start()
         from app.routes.core import broadcast_loop
-        asyncio.create_task(broadcast_loop())
+        # Сохраняем handle: иначе task может быть garbage-collected до завершения
+        # (Python docs warn) и shutdown не может его отменить (kimi-r14-1 #1).
+        broadcast_task = asyncio.create_task(broadcast_loop(), name="broadcast_loop")
         log_debug("lifespan: startup ok — accounts loaded, bot started, broadcast_loop scheduled")
     except Exception as e:
         log_debug(f"lifespan startup error: {e}")
@@ -41,6 +44,14 @@ async def _lifespan(_app: FastAPI):
     yield
 
     # ── shutdown ──
+    if broadcast_task is not None:
+        broadcast_task.cancel()
+        try:
+            await broadcast_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log_debug(f"lifespan broadcast_task error: {e}")
     try:
         log_debug("lifespan: stopping bot...")
         bot.stop()
@@ -96,7 +107,11 @@ async def api_key_middleware(request: Request, call_next):
         presented = request.headers.get("X-API-Key", "")
     if not presented or not secrets.compare_digest(str(presented), str(_API_KEY)):
         log_debug(f"auth_denied path={path} method={request.method} ip={request.client.host if request.client else '?'}")
-        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+        # 401 тоже должен иметь security headers — clickjacking/MIME-sniffing
+        # одинаково опасны на error responses (kimi-r14-1 #9).
+        resp = JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+        _set_security_headers(resp)
+        return resp
     resp = await call_next(request)
     _set_security_headers(resp)
     return resp

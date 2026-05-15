@@ -53,11 +53,16 @@ _cache_applied: dict = None
 _cache_tests: dict = None
 _cache_interviews: dict = None  # keyed by neg_id
 _cache_lock = threading.Lock()
+_tmp_cleaned = False  # _cleanup_stale_tmp should run once, not on every _load_cache (kimi-r14-1 #4)
 
 
 def _cleanup_stale_tmp():
     """Удалить .tmp файлы оставшиеся от прерванной записи (process crash mid-replace).
     Иначе они копятся бесконечно (kimi-r13-2 #6)."""
+    global _tmp_cleaned
+    if _tmp_cleaned:
+        return
+    _tmp_cleaned = True
     for fpath in (APPLIED_FILE, TESTS_FILE, INTERVIEWS_FILE, SESSIONS_FILE):
         tmp = fpath.with_suffix(".tmp")
         try:

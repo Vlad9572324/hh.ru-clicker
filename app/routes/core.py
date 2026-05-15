@@ -180,6 +180,11 @@ async def broadcast_loop():
             if manager.active:
                 snapshot = bot.get_state_snapshot()
                 await manager.broadcast(snapshot)
+        except asyncio.CancelledError:
+            # Shutdown через lifespan — пробрасываем чтобы task завершился корректно
+            # (kimi-r14-1 #8). `except Exception` молча глотал бы это.
+            log_debug("broadcast_loop cancelled")
+            raise
         except Exception as e:
             log_debug(f"broadcast_loop error: {e}")
         await asyncio.sleep(0.3)

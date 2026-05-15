@@ -147,7 +147,11 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                 max_tokens=300,
                 temperature=0.7,
             )
-            result = resp.choices[0].message.content.strip()
+            # Guard: некоторые провайдеры могут вернуть пустой choices при ratelimit/abuse (r14-4 #10).
+            if not getattr(resp, "choices", None):
+                log_debug(f"generate_llm_reply: empty choices from provider")
+                return ""
+            result = (resp.choices[0].message.content or "").strip()
             # Логируем token usage для аудита cost (swarm-16 #5)
             usage = getattr(resp, "usage", None)
             tokens_in = getattr(usage, "prompt_tokens", "?") if usage else "?"
@@ -172,7 +176,11 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                     max_tokens=300,
                     temperature=0.7,
                 )
-                result = resp.choices[0].message.content.strip()
+                # Guard: некоторые провайдеры могут вернуть пустой choices при ratelimit/abuse (r14-4 #10).
+                if not getattr(resp, "choices", None):
+                    log_debug(f"generate_llm_reply: empty choices from {pname}")
+                    continue
+                result = (resp.choices[0].message.content or "").strip()
                 log_debug(f"generate_llm_reply: {pname} → {len(result)} симв.")
                 _track_usage(account_key, "reply")
                 return result
@@ -287,7 +295,10 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
             resp = client.chat.completions.create(
                 model=model, messages=messages, max_tokens=600, temperature=0.3,
             )
-            raw = resp.choices[0].message.content.strip()
+            if not getattr(resp, "choices", None):
+                log_debug(f"generate_llm_questionnaire_answers: empty choices")
+                continue
+            raw = (resp.choices[0].message.content or "").strip()
             log_debug(f"generate_llm_questionnaire_answers raw: {raw[:300]}")
             _increment_questionnaire_quota(account_key)
             _track_usage(account_key, "questionnaire")
