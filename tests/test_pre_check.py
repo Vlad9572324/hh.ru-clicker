@@ -41,8 +41,9 @@ def test_h1_429_returns_retry_not_skip():
 
 
 def test_h1_502_returns_retry_not_skip():
-    """5xx ≠ permanent skip."""
-    with patch("app.hh_apply.requests.get", return_value=_mock_resp(502, "")):
+    """5xx ≠ permanent skip. После _with_retry дёргает HTTP несколько раз — патчим sleep."""
+    with patch("app.hh_apply.time.sleep"), \
+         patch("app.hh_apply.requests.get", return_value=_mock_resp(502, "")):
         result = _check_vacancy_before_apply({"cookies": {}}, "123")
     assert result["skip_reason"] == "retry"
 
@@ -64,8 +65,9 @@ def test_h1_bad_json_fails_closed():
 
 
 def test_h1_exception_fails_closed():
-    """Network error → не пропускаем (fail-closed)."""
-    with patch("app.hh_apply.requests.get", side_effect=ConnectionError("net")):
+    """Network error → не пропускаем (fail-closed). ConnectionError ретраится → no sleep."""
+    with patch("app.hh_apply.time.sleep"), \
+         patch("app.hh_apply.requests.get", side_effect=ConnectionError("net")):
         result = _check_vacancy_before_apply({"cookies": {}}, "123")
     assert result["ok"] is False
     assert result["skip_reason"] == "exception"

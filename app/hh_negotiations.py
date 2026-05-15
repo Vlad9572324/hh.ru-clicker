@@ -53,12 +53,12 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
 
             # Extract negotiation IDs: HH renders items as buttons (no href links),
             # IDs are stored as chatId in the page's embedded JSON
-            page_neg_ids = re.findall(r'"chatId"\s*:\s*(\d+)', body)
+            page_neg_ids = re.findall(r'"chatId"\s*:\s*"?(\d+)"?', body)
             for nid in page_neg_ids:
                 if nid not in result["neg_ids"]:
                     result["neg_ids"].append(nid)
 
-            parts = re.split(r'data-qa="negotiations-item"', body)
+            parts = re.split(r'''data-qa\s*=\s*["']negotiations-item["']''', body)
             if len(parts) <= 1:
                 break
 
@@ -69,7 +69,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 item = re.sub(r'^[^>]*>', '', item, count=1)
 
                 # chatId per item — дедуп по нему, чтобы повторная страница не накручивала interview
-                neg_id_match = re.search(r'"chatId"\s*:\s*(\d+)', item)
+                neg_id_match = re.search(r'"chatId"\s*:\s*"?(\d+)"?', item)
                 item_neg_id = neg_id_match.group(1) if neg_id_match else ""
                 if item_neg_id:
                     if item_neg_id in seen_interview_ids:
@@ -94,12 +94,20 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 date_str = ""
                 is_recent = True
                 if date_match:
+                    date_raw = date_match.group(1)
                     try:
-                        dt = datetime.fromisoformat(date_match.group(1).replace("Z", "+00:00"))
+                        dt = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
                         date_str = dt.strftime("%d.%m")
                         is_recent = dt >= cutoff
-                    except Exception:
-                        date_str = date_match.group(1)[:10]
+                    except ValueError:
+                        m = re.search(r'(\d{4}-\d{2}-\d{2})', date_raw)
+                        if m:
+                            dt = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=cutoff.tzinfo)
+                            date_str = dt.strftime("%d.%m")
+                            is_recent = dt >= cutoff
+                        else:
+                            date_str = date_raw[:10]
+                        log_debug(f"fetch_hh_negotiations_stats: unsupported date format {date_raw!r}")
                 if is_recent:
                     result["recent_interview"] += 1
                 result["interviews_list"].append({
@@ -150,7 +158,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
                 except Exception:
                     pass
 
-            parts = re.split(r'data-qa="negotiations-item"', body)
+            parts = re.split(r'''data-qa\s*=\s*["']negotiations-item["']''', body)
             if len(parts) <= 1:
                 break
 
@@ -158,26 +166,45 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
             new_items_on_page = 0
             for item in parts[1:]:
                 items_on_page += 1
+                # Primary signal: CSS status classes (before stripping tag)
+                status_class = ""
+                cls_m = re.search(r'''class\s*=\s*["']([^"']*negotiations-item-[^"']*)["']''', item)
+                if cls_m:
+                    cls = cls_m.group(1)
+                    if 'negotiations-item-discard' in cls:
+                        status_class = 'discard'
+                    elif 'negotiations-item-viewed' in cls:
+                        status_class = 'viewed'
+                    elif 'negotiations-item-interview' in cls or 'negotiations-item-invitation' in cls:
+                        status_class = 'interview'
+
                 item = re.sub(r'^[^>]*>', '', item, count=1)
                 # Dedup by chatId — HH иногда повторяет страницы
-                neg_id_match = re.search(r'"chatId"\s*:\s*(\d+)', item)
+                neg_id_match = re.search(r'"chatId"\s*:\s*"?(\d+)"?', item)
                 key = neg_id_match.group(1) if neg_id_match else f"page{page}_idx{items_on_page}"
                 if key in seen_general_keys:
                     continue
                 seen_general_keys.add(key)
                 new_items_on_page += 1
 
-                clean = re.sub(r'<svg[\s\S]*?</svg>', '', item)
-                clean = re.sub(r'<[^>]*>', ' ', clean, flags=re.DOTALL)
-                clean = re.sub(r'\s+', ' ', clean).strip()
-                first_word = clean.split(' ')[0] if clean else ''
-
-                if first_word in ('Отказ', 'Отклонено', 'Отклонён'):
+                if status_class == 'discard':
                     result["discard"] += 1
-                elif clean.startswith('Просмотрен'):
+                elif status_class == 'viewed':
                     result["viewed"] += 1
-                elif first_word not in ('Собеседование', 'Приглашение', 'Интервью'):
-                    result["not_viewed"] += 1
+                elif status_class == 'interview':
+                    pass  # already counted in step 1
+                else:
+                    clean = re.sub(r'<svg[\s\S]*?</svg>', '', item)
+                    clean = re.sub(r'<[^>]*>', ' ', clean, flags=re.DOTALL)
+                    clean = re.sub(r'\s+', ' ', clean).strip()
+                    first_word = clean.split(' ')[0] if clean else ''
+
+                    if first_word in ('Отказ', 'Отклонено', 'Отклонён'):
+                        result["discard"] += 1
+                    elif clean.startswith('Просмотрен'):
+                        result["viewed"] += 1
+                    elif first_word not in ('Собеседование', 'Приглашение', 'Интервью'):
+                        result["not_viewed"] += 1
 
             if items_on_page == 0 or new_items_on_page == 0:
                 break

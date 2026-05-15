@@ -2,6 +2,7 @@
 OAuth via official Android app credentials — token management and OAuth-based operations.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ _HH_OAUTH_CLIENT_SECRET = os.environ.get(
 )
 _HH_OAUTH_REDIRECT = "hhandroid://oauthresponse"
 _OAUTH_FILE = Path("data/oauth_tokens.json")
-_oauth_tokens: dict = {}  # {resume_hash: {access_token, refresh_token, expires_at}}
+_oauth_tokens: dict = {}  # {resume_hash or resume_hash::account_key: {access_token, refresh_token, expires_at}}
 _oauth_lock = threading.Lock()
 _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чтобы не интерливить файл
 
@@ -35,6 +36,20 @@ _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чт�
 # HH ротирует refresh tokens — второй запрос получит invalid_grant. (swarm-7 #1)
 _oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
 _oauth_refresh_locks_lock = threading.Lock()
+
+
+def _account_key(acc: dict) -> str:
+    """Stable per-account hash based on hhtoken cookie or short name."""
+    raw = acc.get("cookies", {}).get("hhtoken", "") or acc.get("short", "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _token_key(acc: dict) -> str:
+    """Composite key to isolate tokens per-account even when resume_hash is shared."""
+    resume_hash = acc.get("resume_hash", "")
+    if not resume_hash:
+        return ""
+    return f"{resume_hash}::{_account_key(acc)}"
 
 
 def _get_refresh_lock(resume_hash: str) -> threading.Lock:
@@ -46,20 +61,35 @@ def _get_refresh_lock(resume_hash: str) -> threading.Lock:
         return lock
 
 
-def invalidate_oauth_token(resume_hash: str) -> None:
+def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
     """Удалить кэшированный токен (на 401/403 от API). После вызова следующий
     `_obtain_oauth_token` сделает свежий refresh или authorize."""
     if not resume_hash:
         return
     with _oauth_lock:
+        removed = False
         if resume_hash in _oauth_tokens:
             _oauth_tokens.pop(resume_hash, None)
+            removed = True
+        if acc:
+            comp = _token_key(acc)
+            if comp in _oauth_tokens:
+                _oauth_tokens.pop(comp, None)
+                removed = True
+        else:
+            prefix = f"{resume_hash}::"
+            for k in list(_oauth_tokens.keys()):
+                if k.startswith(prefix):
+                    _oauth_tokens.pop(k, None)
+                    removed = True
+        if removed:
             _save_oauth_tokens()
             log_debug(f"OAuth: invalidated token for {resume_hash[:12]} (auth_error)")
 
 
 def _load_oauth_tokens():
-    """Load persisted OAuth tokens from disk."""
+    """Load persisted OAuth tokens from disk.
+    Backward compatible: supports both plain resume_hash keys and composite keys."""
     global _oauth_tokens
     try:
         if _OAUTH_FILE.exists():
@@ -97,6 +127,13 @@ def get_oauth_status(resume_hash: str) -> dict:
     """Return OAuth token status for display: {has_token, expires_hours, has_refresh}"""
     with _oauth_lock:
         cached = _oauth_tokens.get(resume_hash, {})
+        if not cached:
+            # fallback to composite key
+            prefix = f"{resume_hash}::"
+            for k, v in _oauth_tokens.items():
+                if k.startswith(prefix):
+                    cached = v
+                    break
     if not cached:
         return {"has_token": False, "expires_hours": 0, "has_refresh": False}
     exp = cached.get("expires_at", 0)
@@ -113,10 +150,28 @@ def _obtain_oauth_token(acc: dict) -> str:
     resume_hash = acc.get("resume_hash", "")
     if not resume_hash:
         return ""
+    key = _token_key(acc)
+
+    def _is_cached_valid(cached: dict) -> bool:
+        if not cached:
+            return False
+        exp = cached.get("expires_at", 0)
+        if exp <= time.time() + 300:
+            return False
+        mono = cached.get("_expires_monotonic")
+        if mono is not None and time.monotonic() >= mono:
+            return False
+        return True
 
     with _oauth_lock:
-        cached = _oauth_tokens.get(resume_hash)
-        if cached and cached.get("expires_at", 0) > time.time() + 300:
+        cached = _oauth_tokens.get(key)
+        if not cached:
+            # Migrate old plain-key token if present
+            old = _oauth_tokens.get(resume_hash)
+            if old:
+                _oauth_tokens[key] = dict(old)
+                cached = _oauth_tokens[key]
+        if _is_cached_valid(cached):
             return cached["access_token"]
 
     # Сериализуем refresh/authorize per-account: один поток делает HTTP, остальные ждут.
@@ -124,15 +179,20 @@ def _obtain_oauth_token(acc: dict) -> str:
     with refresh_lock:
         # Double-checked: пока ждали лок, другой поток мог уже обновить токен.
         with _oauth_lock:
-            cached = _oauth_tokens.get(resume_hash)
-            if cached and cached.get("expires_at", 0) > time.time() + 300:
+            cached = _oauth_tokens.get(key)
+            if not cached:
+                old = _oauth_tokens.get(resume_hash)
+                if old:
+                    _oauth_tokens[key] = dict(old)
+                    cached = _oauth_tokens[key]
+            if _is_cached_valid(cached):
                 return cached["access_token"]
 
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         # Try refresh first
         with _oauth_lock:
-            cached = _oauth_tokens.get(resume_hash, {})
+            cached = _oauth_tokens.get(key, {})
         refresh = cached.get("refresh_token", "")
         if refresh:
             try:
@@ -144,17 +204,28 @@ def _obtain_oauth_token(acc: dict) -> str:
                 }, headers={"User-Agent": ua}, timeout=15)
                 if r.status_code == 200:
                     d = r.json()
-                    # Не перетираем валидный refresh_token пустым (HH может опустить).
-                    new_refresh = d.get("refresh_token") or refresh
-                    with _oauth_lock:
-                        _oauth_tokens[resume_hash] = {
-                            "access_token": d["access_token"],
+                    access_token = d.get("access_token")
+                    if not access_token:
+                        log_debug(f"OAuth: refresh response missing access_token for {resume_hash[:12]}")
+                    else:
+                        # Не перетираем валидный refresh_token пустым (HH может опустить).
+                        new_refresh = d.get("refresh_token") or refresh
+                        expires_in = d.get("expires_in", 1209599)
+                        token_data = {
+                            "access_token": access_token,
                             "refresh_token": new_refresh,
-                            "expires_at": time.time() + d.get("expires_in", 1209599),
+                            "expires_at": time.time() + expires_in,
+                            "_expires_monotonic": time.monotonic() + expires_in,
                         }
-                    _save_oauth_tokens()
-                    log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
-                    return d["access_token"]
+                        with _oauth_lock:
+                            _oauth_tokens[key] = token_data
+                            # backward-compat plain key for external readers
+                            _oauth_tokens[resume_hash] = {
+                                k: v for k, v in token_data.items() if not k.startswith("_")
+                            }
+                        _save_oauth_tokens()
+                        log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
+                        return access_token
             except Exception as e:
                 log_debug(f"OAuth refresh error: {e}")
 
@@ -214,15 +285,29 @@ def _obtain_oauth_token(acc: dict) -> str:
 
             if r3.status_code == 200:
                 d = r3.json()
+                access_token = d.get("access_token")
+                if not access_token:
+                    log_debug(f"OAuth: authorize response missing access_token for {resume_hash[:12]}")
+                    return ""
+                # Не сохраняем пустой refresh_token поверх существующего.
+                existing_refresh = cached.get("refresh_token", "")
+                new_refresh = d.get("refresh_token") or existing_refresh
+                expires_in = d.get("expires_in", 1209599)
+                token_data = {
+                    "access_token": access_token,
+                    "refresh_token": new_refresh,
+                    "expires_at": time.time() + expires_in,
+                    "_expires_monotonic": time.monotonic() + expires_in,
+                }
                 with _oauth_lock:
+                    _oauth_tokens[key] = token_data
+                    # backward-compat plain key for external readers
                     _oauth_tokens[resume_hash] = {
-                        "access_token": d["access_token"],
-                        "refresh_token": d.get("refresh_token", ""),
-                        "expires_at": time.time() + d.get("expires_in", 1209599),
+                        k: v for k, v in token_data.items() if not k.startswith("_")
                     }
                 _save_oauth_tokens()
-                log_debug(f"OAuth: obtained token for {resume_hash[:12]}, expires in {d.get('expires_in',0)}s")
-                return d["access_token"]
+                log_debug(f"OAuth: obtained token for {resume_hash[:12]}, expires in {d.get('expires_in', 0)}s")
+                return access_token
             else:
                 # Логируем только status, не raw body (может содержать code в URL → leak).
                 log_debug(f"OAuth: token exchange failed {r3.status_code} for {resume_hash[:12]}")
@@ -275,14 +360,20 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
         elif r.status_code in (401, 403):
             # Очищаем кэшированный токен: иначе manager на каждом следующем apply
             # будет переиспользовать тот же rejected токен → бесконечная петля 401.
-            invalidate_oauth_token(resume_hash)
+            log_debug(f"OAuth apply auth_error for {resume_hash[:12]} vid={vid}")
+            invalidate_oauth_token(resume_hash, acc)
             return "auth_error", {}
         elif r.status_code == 404:
             return "error", {"raw": "Вакансия не найдена"}
         elif r.status_code == 429:
             # Rate-limit от HH — не считаем permanent error (раньше manager
             # auto-pause'ил account на 429 как на consecutive_errors).
-            return "limit", {"retry_after": r.headers.get("Retry-After", "")}
+            retry_after = 0
+            try:
+                retry_after = int(r.headers.get("Retry-After", "0"))
+            except (ValueError, TypeError):
+                pass
+            return "limit", {"retry_after": retry_after}
         elif r.status_code in (502, 503, 504):
             return "error", {"raw": f"HH transient {r.status_code}", "transient": True}
         else:

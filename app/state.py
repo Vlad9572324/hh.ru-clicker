@@ -157,3 +157,14 @@ class AccountState:
         self.acc["_cookies_lock"] = self._cookies_lock
         # Reason for pause — manual vs auto vs limit — чтобы midnight reset не сбрасывал manual pause.
         self.paused_reason: str = ""  # "", "manual", "auto_errors", "limit"
+
+    def reset_vacancy_meta(self):
+        """Clear vacancy_meta before each collection cycle to prevent unbounded growth."""
+        self.vacancy_meta = {}
+
+    def cleanup_old_failures(self, max_size=500):
+        """Trim _llm_neg_failures to max_size by removing oldest entries."""
+        excess = len(self._llm_neg_failures) - max_size
+        if excess > 0:
+            for k in list(self._llm_neg_failures.keys())[:excess]:
+                self._llm_neg_failures.pop(k, None)

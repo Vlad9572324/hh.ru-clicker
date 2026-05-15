@@ -89,6 +89,7 @@ def _save_applied_async():
     lock = _save_applied_lock  # local ref на случай reload модуля
     if not lock.acquire(blocking=False):
         return  # another save in progress
+    tmp = None
     try:
         with _cache_lock:
             data = copy.deepcopy(_cache_applied) if _cache_applied else {}
@@ -98,10 +99,11 @@ def _save_applied_async():
         tmp.replace(APPLIED_FILE)
     except Exception as e:
         log_debug(f"_save_applied_async error: {e}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
     finally:
         lock.release()
 
@@ -113,6 +115,7 @@ def _save_tests_async():
     lock = _save_tests_lock
     if not lock.acquire(blocking=False):
         return
+    tmp = None
     try:
         with _cache_lock:
             data = copy.deepcopy(_cache_tests) if _cache_tests else {}
@@ -122,10 +125,11 @@ def _save_tests_async():
         tmp.replace(TESTS_FILE)
     except Exception as e:
         log_debug(f"_save_tests_async error: {e}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
     finally:
         lock.release()
 

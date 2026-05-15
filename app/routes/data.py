@@ -29,8 +29,19 @@ async def api_tests(limit: int = 300):
 
 
 @router.get("/api/interviews")
-async def api_interviews(acc: str = "", limit: int = 2000, status: str = ""):
-    return get_interviews_list(acc=acc, limit=limit, status=status)
+async def api_interviews(acc: str = "", limit: int = 2000, status: str = "", redact: bool = False):
+    items = get_interviews_list(acc=acc, limit=limit, status=status)
+    if not redact:
+        return items
+    redacted = []
+    for item in items:
+        copy = dict(item)
+        for field in ("llm_reply", "employer_last_msg"):
+            val = copy.get(field)
+            if isinstance(val, str) and len(val) > 80:
+                copy[field] = val[:80] + "…"
+        redacted.append(copy)
+    return redacted
 
 
 @router.get("/api/vacancies")

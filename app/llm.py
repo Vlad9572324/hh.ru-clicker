@@ -6,6 +6,7 @@ import re
 import json
 import random
 import threading
+import time as _time_mod
 
 from app.logging_utils import log_debug
 from app.config import CONFIG
@@ -16,8 +17,58 @@ try:
 except ImportError:
     _openai_available = False
 
-_llm_rr_index = 0  # round-robin counter for multi-profile LLM
+try:
+    from app.manager import _today_msk
+except Exception:
+    def _today_msk():
+        return str(_time_mod.gmtime().tm_yday)
+
+_llm_rr_index: dict[str, int] = {}  # round-robin counter per account key
 _llm_rr_lock = threading.Lock()
+
+_LLM_DAILY_QUESTIONNAIRE_LIMIT = getattr(CONFIG, 'llm_daily_questionnaire_limit', 100)
+
+_questionnaire_counters: dict[str, dict] = {}
+_questionnaire_lock = threading.Lock()
+
+_llm_usage_counters: dict[str, dict[str, int]] = {}
+_llm_usage_lock = threading.Lock()
+
+
+def _get_today_str() -> str:
+    try:
+        return _today_msk()
+    except Exception:
+        return str(_time_mod.gmtime().tm_yday)
+
+
+def _check_questionnaire_quota(account_key: str) -> bool:
+    today = _get_today_str()
+    key = account_key or "__global__"
+    with _questionnaire_lock:
+        entry = _questionnaire_counters.get(key)
+        if not entry or entry.get("day") != today:
+            _questionnaire_counters[key] = {"day": today, "count": 0}
+            return True
+        return entry["count"] < _LLM_DAILY_QUESTIONNAIRE_LIMIT
+
+
+def _increment_questionnaire_quota(account_key: str) -> None:
+    key = account_key or "__global__"
+    with _questionnaire_lock:
+        _questionnaire_counters[key]["count"] += 1
+
+
+def _track_usage(account_key: str, kind: str) -> None:
+    key = account_key or "__global__"
+    with _llm_usage_lock:
+        _llm_usage_counters.setdefault(key, {"reply": 0, "questionnaire": 0})
+        _llm_usage_counters[key][kind] += 1
+
+
+def get_llm_usage() -> dict:
+    with _llm_usage_lock:
+        return {k: dict(v) for k, v in _llm_usage_counters.items()}
 
 
 def _randomize_text(template: str) -> str:
@@ -28,7 +79,7 @@ def _randomize_text(template: str) -> str:
     return re.sub(r'\{([^}]+\|[^}]+)\}', pick, template)
 
 
-def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "") -> str:
+def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "") -> str:
     """Generate a reply to employer using configured LLM (OpenAI-compatible API)."""
     global _llm_rr_index
     if not _openai_available:
@@ -80,8 +131,8 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
     if mode == "roundrobin":
         # Pick one profile by round-robin, try only that one
         with _llm_rr_lock:
-            idx = _llm_rr_index % len(profiles)
-            _llm_rr_index += 1
+            idx = _llm_rr_index.get(account_key, 0) % len(profiles)
+            _llm_rr_index[account_key] = idx + 1
         profile = profiles[idx]
         pname = profile.get("name") or profile.get("model") or f"профиль {idx}"
         model = profile.get("model") or "gpt-4o-mini"
@@ -100,6 +151,7 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
             tokens_in = getattr(usage, "prompt_tokens", "?") if usage else "?"
             tokens_out = getattr(usage, "completion_tokens", "?") if usage else "?"
             log_debug(f"generate_llm_reply: {pname} → {len(result)} симв., tokens in/out={tokens_in}/{tokens_out}")
+            _track_usage(account_key, "reply")
             return result
         except Exception as e:
             log_debug(f"generate_llm_reply roundrobin {pname} error: {e}")
@@ -120,6 +172,7 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                 )
                 result = resp.choices[0].message.content.strip()
                 log_debug(f"generate_llm_reply: {pname} → {len(result)} симв.")
+                _track_usage(account_key, "reply")
                 return result
             except Exception as e:
                 log_debug(f"generate_llm_reply fallback {pname} error: {e}")
@@ -128,8 +181,35 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
         return ""
 
 
+def _extract_json(raw: str) -> dict | None:
+    """Извлекает JSON из ответа LLM: greedy, затем first balanced block."""
+    # greedy
+    m = re.search(r'\{[\s\S]*\}', raw)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+    # fallback: first balanced {}
+    start = raw.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(raw)):
+        if raw[i] == '{':
+            depth += 1
+        elif raw[i] == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(raw[start:i+1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str = "", company: str = "",
-                                       resume_text: str = "") -> dict:
+                                       resume_text: str = "", account_key: str = "") -> dict:
     """Заполняет ответы на опросник работодателя через LLM.
     rich_questions — список из _parse_questionnaire_rich().
     resume_text — опционально текст резюме для контекста.
@@ -137,6 +217,12 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
     """
     if not _openai_available or not rich_questions:
         return {}
+
+    # Check daily quota
+    if not _check_questionnaire_quota(account_key):
+        log_debug(f"generate_llm_questionnaire_answers: quota exceeded for {account_key or 'global'}")
+        return {}
+
     profiles = [p for p in (CONFIG.llm_profiles or []) if p.get("enabled", True) and p.get("api_key")]
     if not profiles:
         if not CONFIG.llm_api_key:
@@ -201,10 +287,11 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
             )
             raw = resp.choices[0].message.content.strip()
             log_debug(f"generate_llm_questionnaire_answers raw: {raw[:300]}")
+            _increment_questionnaire_quota(account_key)
+            _track_usage(account_key, "questionnaire")
             # Извлекаем JSON — ищем {} блок
-            json_m = re.search(r'\{[\s\S]*\}', raw)
-            if json_m:
-                answers = json.loads(json_m.group())
+            answers = _extract_json(raw)
+            if answers is not None:
                 # Сохраняем list (checkbox с несколькими значениями) — иначе M3-фикс в hh_apply не сработает.
                 # Остальные типы приводим к str для единообразия.
                 out = {}

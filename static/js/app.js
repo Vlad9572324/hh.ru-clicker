@@ -236,6 +236,20 @@ const T = {
     confirm_del_db_mid: 'из базы?',
     confirm_del_db_body: 'Бот сможет откликнуться повторно.',
     confirm_del_sess: 'Удалить браузерную сессию?',
+    // Audit / Smart filters / LLM status
+    audit_search_status: 'Статус поиска',
+    audit_filled: 'Заполненность',
+    audit_recommendations: 'Рекомендации',
+    audit_no_issues: 'Проблем не найдено — резюме в хорошей форме!',
+    audit_market_analysis: 'Анализ рынка',
+    smart_filters: 'Умные фильтры',
+    smart_filter_low_comp: '<10 откликов',
+    smart_filter_no_agency: 'Без агентств',
+    smart_filter_auto_tests: 'Авто-тесты',
+    llm_st_off: 'LLM выключен',
+    llm_st_paused: 'На паузе',
+    llm_st_on: 'LLM работает',
+    llm_st_no_acc: 'Нет аккаунтов с LLM',
   },
   en: {
     // Tabs
@@ -469,6 +483,20 @@ const T = {
     confirm_del_db_mid: 'from DB?',
     confirm_del_db_body: 'Bot will be able to apply again.',
     confirm_del_sess: 'Delete browser session?',
+    // Audit / Smart filters / LLM status
+    audit_search_status: 'Search status',
+    audit_filled: 'Completeness',
+    audit_recommendations: 'Recommendations',
+    audit_no_issues: 'No issues found — resume looks good!',
+    audit_market_analysis: 'Market analysis',
+    smart_filters: 'Smart filters',
+    smart_filter_low_comp: '<10 replies',
+    smart_filter_no_agency: 'No agencies',
+    smart_filter_auto_tests: 'Auto-tests',
+    llm_st_off: 'LLM off',
+    llm_st_paused: 'Paused',
+    llm_st_on: 'LLM running',
+    llm_st_no_acc: 'No accounts with LLM',
   }
 };
 
@@ -537,6 +565,7 @@ const State = {
   prevCookiesExpired: {},  // {acc_idx: bool}
   compactCards: new Set(), // idx карточек в компактном режиме
   logLevel: '',          // фильтр уровня лога
+  lastResponsesHash: '',
 };
 let _llmSettingsEditing = false;
 let _llmSettingsEditTimer = null;
@@ -935,16 +964,16 @@ function updateLlmStatusBar(snap) {
 
   // State
   if (!globalOn) {
-    stState.textContent = '⏹ LLM выключен';
+    stState.textContent = '⏹ ' + t('llm_st_off');
     stState.style.color = 'var(--dim)';
   } else if (paused) {
-    stState.textContent = '⏸ На паузе';
+    stState.textContent = '⏸ ' + t('llm_st_paused');
     stState.style.color = 'var(--yellow)';
   } else if (anyAccOn) {
-    stState.textContent = '✅ LLM работает';
+    stState.textContent = '✅ ' + t('llm_st_on');
     stState.style.color = 'var(--green)';
   } else {
-    stState.textContent = '⚠️ Нет аккаунтов с LLM';
+    stState.textContent = '⚠️ ' + t('llm_st_no_acc');
     stState.style.color = 'var(--yellow)';
   }
 
@@ -1733,6 +1762,9 @@ function connect() {
   ws.onopen = () => {
     document.getElementById('conn-dot').classList.add('connected');
     State.reconnectDelay = 1000;
+    document.querySelectorAll('.btn-sm, .apply-btn, button[onclick]').forEach(b => {
+      if (b.id !== 'pause-btn') b.disabled = false;
+    });
   };
 
   ws.onmessage = (ev) => {
@@ -1755,6 +1787,9 @@ function connect() {
 
   ws.onclose = () => {
     document.getElementById('conn-dot').classList.remove('connected');
+    document.querySelectorAll('.btn-sm, .apply-btn, button[onclick]').forEach(b => {
+      if (b.id !== 'pause-btn') b.disabled = true;
+    });
     State.reconnectTimer = setTimeout(() => {
       State.reconnectDelay = Math.min(State.reconnectDelay * 2, 30000);
       connect();
@@ -2081,20 +2116,20 @@ function buildCardHTML(acc) {
       </div>
     </details>
     <details class="acc-letter-wrap">
-      <summary>🧠 Умные фильтры</summary>
+      <summary>🧠 ${t('smart_filters')}</summary>
       <div class="acc-letter-body" style="font-size:11px">
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px">
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
-            <input type="checkbox" class="smart-filter-cb" data-key="filter_low_competition" style="accent-color:var(--green)"> 🎯 <10 откликов
+            <input type="checkbox" class="smart-filter-cb" data-key="filter_low_competition" style="accent-color:var(--green)"> 🎯 ${t('smart_filter_low_comp')}
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
-            <input type="checkbox" class="smart-filter-cb" data-key="filter_agencies" style="accent-color:var(--yellow)"> 🏢 Без агентств
+            <input type="checkbox" class="smart-filter-cb" data-key="filter_agencies" style="accent-color:var(--yellow)"> 🏢 ${t('smart_filter_no_agency')}
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
             <input type="checkbox" class="smart-filter-cb" data-key="skip_inconsistent" style="accent-color:var(--cyan)"> ⚡ Пре-чек опыта
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
-            <input type="checkbox" class="smart-filter-cb" data-key="auto_apply_tests" style="accent-color:var(--magenta)"> 🧪 Авто-тесты
+            <input type="checkbox" class="smart-filter-cb" data-key="auto_apply_tests" style="accent-color:var(--magenta)"> 🧪 ${t('smart_filter_auto_tests')}
           </label>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px">
@@ -2385,7 +2420,12 @@ function updateCard(card, acc) {
   // Apply tests checkbox
   const skipCb = document.getElementById('acc-apply-cb-' + acc.idx);
   const skipLabel = document.getElementById('acc-apply-label-' + acc.idx);
-  if (skipCb && skipCb.checked !== !!acc.apply_tests) skipCb.checked = !!acc.apply_tests;
+  if (skipCb) {
+    const localToggleAt = parseInt(skipCb.dataset.localToggleAt || '0', 10);
+    if (Date.now() - localToggleAt > 2000 && skipCb.checked !== !!acc.apply_tests) {
+      skipCb.checked = !!acc.apply_tests;
+    }
+  }
   if (skipLabel) {
     if (acc.apply_tests) skipLabel.classList.add('active');
     else skipLabel.classList.remove('active');
@@ -2504,8 +2544,13 @@ function renderRecentResponses(snap) {
   if (!list) return;
   if (!snap.recent_responses.length) {
     list.innerHTML = `<div class="c-dim" style="padding:8px;font-size:11px">${t('recent_empty')}</div>`;
+    State.lastResponsesHash = '';
     return;
   }
+  const first = snap.recent_responses[0];
+  const hash = snap.recent_responses.length + '|' + (first?.time || '') + '|' + (first?.id || '');
+  if (hash === State.lastResponsesHash) return;
+  State.lastResponsesHash = hash;
   list.innerHTML = snap.recent_responses.slice(0, 50).map(r => {
     const title = r.title ? r.title.substring(0, 35) + (r.title.length > 35 ? '…' : '') : `ID:${r.id}`;
     return `
@@ -3232,7 +3277,10 @@ function applyHideQuestionnaire() {
 
 async function applyCheck() {
   if (ApplyState.checking) return;
-  const accIdx = parseInt(document.getElementById('apply-account').value || '0');
+  const accSel = document.getElementById('apply-account');
+  if (!accSel || !accSel.options.length) { applyShowResult('Сначала добавьте аккаунт', 'err'); return; }
+  const accIdx = parseInt(accSel.value);
+  if (isNaN(accIdx)) { applyShowResult('Сначала добавьте аккаунт', 'err'); return; }
   const raw = document.getElementById('apply-vacancy').value.trim();
   if (!raw) { applyShowResult('Введите ссылку или ID вакансии', 'err'); return; }
 
@@ -3327,6 +3375,10 @@ function applyRenderQuestionnaire(data) {
 
 async function applySubmit() {
   if (ApplyState.submitting) return;
+  if (isNaN(ApplyState.accIdx)) {
+    applyShowResult('Сначала добавьте аккаунт', 'err');
+    return;
+  }
   ApplyState.submitting = true;
   const statusEl = document.getElementById('apply-submit-status');
   if (statusEl) statusEl.textContent = '⏳ Отправляю...';
@@ -3500,11 +3552,11 @@ function renderAuditResult(d) {
 
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:14px">
         <div class="audit-card">
-          <div class="audit-label">Статус поиска</div>
+          <div class="audit-label">${t('audit_search_status')}</div>
           <div style="color:${statusColor};font-weight:600">${esc(d.job_search_status_label || '?')}</div>
         </div>
         <div class="audit-card">
-          <div class="audit-label">Заполненность</div>
+          <div class="audit-label">${t('audit_filled')}</div>
           <div style="color:${pctColor};font-weight:600">${d.percent || 0}%</div>
         </div>
         <div class="audit-card">
@@ -3542,7 +3594,7 @@ function renderAuditResult(d) {
     </div>`;
 
   if (issues.length) {
-    html += `<div style="font-size:13px;font-weight:700;margin-bottom:8px">Рекомендации (${issues.length})</div>`;
+    html += `<div style="font-size:13px;font-weight:700;margin-bottom:8px">${t('audit_recommendations')} (${issues.length})</div>`;
     html += issues.map(iss => `
       <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:6px;display:flex;gap:8px;align-items:flex-start">
         <div style="flex-shrink:0;font-size:14px">${levelIcon[iss.level] || '❓'}</div>
@@ -3553,7 +3605,7 @@ function renderAuditResult(d) {
       </div>
     `).join('');
   } else {
-    html += '<div style="color:var(--green);font-size:13px">✅ Проблем не найдено — резюме в хорошей форме!</div>';
+    html += '<div style="color:var(--green);font-size:13px">✅ ' + t('audit_no_issues') + '</div>';
   }
 
   // Market analytics
@@ -3561,7 +3613,7 @@ function renderAuditResult(d) {
   if (m && (m.vacancy_count || m.active_seekers)) {
     const ratioColor = m.supply_demand_ratio > 5 ? 'var(--red)' : m.supply_demand_ratio > 2 ? 'var(--yellow)' : 'var(--green)';
     html += `
-      <div style="font-size:13px;font-weight:700;margin-top:16px;margin-bottom:8px">Анализ рынка</div>
+      <div style="font-size:13px;font-weight:700;margin-top:16px;margin-bottom:8px">${t('audit_market_analysis')}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:14px">
         <div class="audit-card">
           <div class="audit-label">Вакансий</div>
@@ -4016,6 +4068,7 @@ async function declineDiscards(idx, btn) {
 }
 
 async function applyTestsToggle(idx, cb) {
+  cb.dataset.localToggleAt = String(Date.now());
   try {
     const res = await fetch(`/api/account/${idx}/apply_tests`, {method:'POST'});
     const data = await res.json();

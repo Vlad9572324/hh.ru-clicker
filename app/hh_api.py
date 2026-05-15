@@ -20,7 +20,11 @@ def get_headers(xsrf: str) -> dict:
 
 
 def parse_ids(html: str) -> set:
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception as e:
+        log_debug(f"parse_ids: BeautifulSoup failed: {e}")
+        return set()
     ids = set()
     for link in soup.find_all("a", href=re.compile(r"/vacancy/\d+")):
         m = re.search(r"/vacancy/(\d+)", link["href"])
@@ -83,9 +87,9 @@ def parse_salaries(html: str, ids: set) -> dict:
     if not ids or not CONFIG.min_salary:
         return result
 
-    # Ищем все блоки compensation в HTML и смотрим какая вакансия была упомянута
+    # Ищем все блоки compensation/salary в HTML и смотрим какая вакансия была упомянута
     # ближайшей по тексту перед каждым блоком
-    for m in re.finditer(r'"compensation"\s*:\s*\{([^}]{0,400})\}', html):
+    for m in re.finditer(r'"(?:compensation|salary)"\s*:\s*\{([^}]{0,1500})\}', html):
         comp_str = m.group(1)
         if '"noCompensation"' in comp_str or '"from"' not in comp_str:
             continue

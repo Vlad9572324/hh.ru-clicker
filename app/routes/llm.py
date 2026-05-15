@@ -226,6 +226,13 @@ def _is_safe_llm_base_url(url: str) -> bool:
     return host in _LLM_DETECT_ALLOWED_HOSTS
 
 
+@router.get("/api/llm/usage")
+async def api_llm_usage():
+    """Вернуть агрегированные счётчики использования LLM по аккаунтам."""
+    from app.llm import get_llm_usage
+    return {"per_account": get_llm_usage()}
+
+
 @router.post("/api/llm_detect")
 async def api_llm_detect(request: Request):
     """Определить провайдера по ключу и получить список доступных моделей."""

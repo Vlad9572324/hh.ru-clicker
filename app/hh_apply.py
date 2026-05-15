@@ -4,6 +4,7 @@ HH.ru apply functions: send response, fill questionnaire, check vacancy, check l
 
 import re
 import json
+import time
 import requests
 import aiohttp
 
@@ -22,6 +23,47 @@ try:
     _openai_available = True
 except ImportError:
     _openai_available = False
+
+
+_HH_DEFAULT_TIMEOUT = 15
+
+
+def _parse_retry_after(value: str) -> int | None:
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+        return max(0, int(dt.timestamp() - time.time()))
+    except Exception:
+        return None
+
+
+def _with_retry(func, retries=3, backoff_base=2.0):
+    def wrapper(*args, **kwargs):
+        for attempt in range(retries + 1):
+            try:
+                resp = func(*args, **kwargs)
+                if hasattr(resp, "status_code") and resp.status_code in (502, 503, 504):
+                    if attempt == retries:
+                        return resp
+                    sleep = backoff_base * (2 ** attempt)
+                    log_debug(f"_with_retry {getattr(func, '__name__', 'unknown')}: HTTP {resp.status_code}, sleep {sleep}s ({attempt+1}/{retries+1})")
+                    time.sleep(sleep)
+                    continue
+                return resp
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt == retries:
+                    raise
+                sleep = backoff_base * (2 ** attempt)
+                log_debug(f"_with_retry {getattr(func, '__name__', 'unknown')}: {type(e).__name__}, sleep {sleep}s ({attempt+1}/{retries+1})")
+                time.sleep(sleep)
+        return func(*args, **kwargs)
+    wrapper.__name__ = getattr(func, "__name__", "unknown")
+    return wrapper
 
 
 def classify_apply_response(status_code: int, txt: str) -> tuple:
@@ -76,6 +118,9 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
             return "sent", info
         return "error", {"raw": txt[:200], **info}
 
+    if status_code in (502, 503, 504):
+        return "error", {"raw": txt[:200], "transient": True, **info}
+
     return "error", {"raw": txt[:200], **info}
 
 
@@ -103,7 +148,7 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
             async with session.post(
                 "https://hh.ru/applicant/vacancy_response/popup",
                 data=data,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)
             ) as r:
                 txt = await r.text()
                 status_code = r.status
@@ -137,7 +182,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
             url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
             # Шаг 1: GET форма опроса
-            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)) as r:
                 html = await r.text()
                 status_code = r.status
 
@@ -248,7 +293,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 url_form,
                 headers={"X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""), "Referer": url_form},
                 data=data,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT),
                 allow_redirects=False,
             ) as r2:
                 status = r2.status
@@ -286,19 +331,24 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
     """
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
-        r = requests.get(
-            f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
-            headers={"User-Agent": ua, "Accept": "application/json, */*",
-                     "Referer": f"https://hh.ru/vacancy/{vid}"},
-            cookies=acc.get("cookies", {}),
-            timeout=10,
-        )
+        r = _with_retry(
+            lambda: requests.get(
+                f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
+                headers={"User-Agent": ua, "Accept": "application/json, */*",
+                         "Referer": f"https://hh.ru/vacancy/{vid}"},
+                cookies=acc.get("cookies", {}),
+                timeout=_HH_DEFAULT_TIMEOUT,
+            ),
+            retries=3, backoff_base=2.0,
+        )()
         if r.status_code in (401, 403) or _is_login_page(r.text):
             return {"ok": False, "reason": "auth_error", "skip_reason": "auth"}
         if r.status_code == 429:
-            # Rate-limit — transient, не permanent skip.
-            return {"ok": False, "reason": "rate_limit", "skip_reason": "retry",
-                    "retry_after": r.headers.get("Retry-After", "")}
+            retry_after = _parse_retry_after(r.headers.get("Retry-After", ""))
+            result = {"ok": False, "reason": "rate_limit", "skip_reason": "retry"}
+            if retry_after is not None:
+                result["retry_after_seconds"] = retry_after
+            return result
         if r.status_code >= 500:
             # HH server issue — попробовать позже.
             return {"ok": False, "reason": f"http_{r.status_code}", "skip_reason": "retry"}
@@ -358,23 +408,29 @@ def check_limit(acc: dict) -> bool:
     if not xsrf:
         return True
     try:
-        r_search = requests.get(
-            "https://hh.ru/search/vacancy?text=&area=1&page=0",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                     "Accept": "text/html"},
-            cookies=acc["cookies"], timeout=10,
-        )
+        r_search = _with_retry(
+            lambda: requests.get(
+                "https://hh.ru/search/vacancy?text=&area=1&page=0",
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                         "Accept": "text/html"},
+                cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
+            ),
+            retries=3, backoff_base=2.0,
+        )()
         vids = re.findall(r'/vacancy/(\d+)', r_search.text)
         if not vids:
             return True
         vid = vids[0]
         # Use GET popup — safe, no side effects
-        r = requests.get(
-            f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                     "Accept": "application/json", "X-Xsrftoken": xsrf},
-            cookies=acc["cookies"], timeout=10,
-        )
+        r = _with_retry(
+            lambda: requests.get(
+                f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                         "Accept": "application/json", "X-Xsrftoken": xsrf},
+                cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
+            ),
+            retries=3, backoff_base=2.0,
+        )()
         return "negotiations-limit-exceeded" in r.text
     except Exception:
         return True
@@ -406,13 +462,16 @@ def touch_resume(acc: dict) -> tuple:
     }
 
     try:
-        response = requests.post(
-            "https://hh.ru/applicant/resumes/touch",
-            headers=headers,
-            cookies=acc["cookies"],
-            files=touch_files,
-            timeout=10
-        )
+        response = _with_retry(
+            lambda: requests.post(
+                "https://hh.ru/applicant/resumes/touch",
+                headers=headers,
+                cookies=acc["cookies"],
+                files=touch_files,
+                timeout=_HH_DEFAULT_TIMEOUT
+            ),
+            retries=3, backoff_base=2.0,
+        )()
 
         if response.status_code == 200:
             return True, "Резюме поднято (web)!"

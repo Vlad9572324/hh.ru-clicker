@@ -107,17 +107,20 @@ _LOCKED_CHAT_PHRASES = (
 
 def _check_chat_locked(item: dict) -> str:
     """Return lock reason string if chat has messaging disabled, else empty string."""
+    # Primary: API booleans and state
+    if item.get("canSendMessage") is False:
+        return "canSendMessage=false"
+    state = str(item.get("state") or item.get("chatState") or "").lower()
+    if state in ("archived", "closed", "rejected", "locked", "disabled", "invitation_required"):
+        return f"state={state}"
+    if item.get("locked") is True:
+        return "locked=true"
+    # Fallback: phrase scan in last message text
     last_msg = item.get("lastMessage") or {}
     last_text = (last_msg.get("text") or "").lower()
     for phrase in _LOCKED_CHAT_PHRASES:
         if phrase in last_text:
             return last_text[:80]
-    # Also check item-level flags (canSendMessage, locked, state, etc.)
-    if item.get("canSendMessage") is False or item.get("locked") is True:
-        return "canSendMessage=false"
-    state = str(item.get("state") or item.get("chatState") or "").lower()
-    if state in ("locked", "closed", "disabled", "invitation_required"):
-        return f"state={state}"
     return ""
 
 
@@ -145,8 +148,12 @@ def _build_thread_from_chat_item(item: dict, display_info: dict, cur_pid: str, n
         return result
 
     # Sender: compare participantId with currentParticipantId
-    sender_id = last_msg.get("participantId", "")
-    from_employer = bool(sender_id and cur_pid and sender_id != cur_pid)
+    sender_id = str(last_msg.get("participantId") or "").strip()
+    cur_pid_norm = str(cur_pid or "").strip()
+    if not sender_id:
+        from_employer = True
+    else:
+        from_employer = bool(cur_pid_norm and sender_id != cur_pid_norm)
 
     # Check for workflow transitions: skip only string-type workflow events (REJECTION, APPLICATION, etc.)
     # Numeric wf.id = internal message reference, not a system event — real employer text
@@ -238,8 +245,14 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
             wf_id = wf.get("id", "") if isinstance(wf, dict) else ""
             if isinstance(wf_id, str) and wf_id:
                 continue
-            sender_pid = str(msg.get("participantId", ""))
-            sender = "applicant" if (cur_pid and sender_pid == cur_pid) else "employer"
+            sender_pid = str(msg.get("participantId") or "").strip()
+            cur_pid_norm = str(cur_pid or "").strip()
+            if not sender_pid:
+                sender = "employer"
+            elif cur_pid_norm and sender_pid == cur_pid_norm:
+                sender = "applicant"
+            else:
+                sender = "employer"
             pd = msg.get("participantDisplay") or {}
             conversation.append({
                 "sender": sender, "text": text,
@@ -283,8 +296,18 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
         if resp.status_code in (200, 201, 204):
             return True
         if resp.status_code == 409:
-            # Chat no longer exists (archived/closed negotiation)
-            return "chat_not_found"
+            try:
+                body_json = resp.json()
+            except Exception:
+                body_json = {}
+            err_type = str(body_json.get("error") or body_json.get("type") or "").lower()
+            err_msg = str(body_json.get("message") or body_json.get("description") or "").lower()
+            full_text = (resp.text or "").lower()
+            if "duplicate" in err_msg or "rate" in err_msg or "duplicate" in full_text or "rate" in full_text:
+                return False
+            if err_type in ("chat_not_found", "archived", "closed") or "chat_not_found" in full_text or "archived" in full_text:
+                return "chat_not_found"
+            return False
         return False
     except Exception as e:
         log_debug(f"send_negotiation_message {neg_id} error: {e}")

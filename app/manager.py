@@ -115,6 +115,7 @@ class BotManager:
         # Global dedup across all accounts: {(cur_pid, neg_id, last_msg_id)}
         # Prevents double-sends when multiple accounts share the same HH user (same cur_pid)
         self._llm_sent_global: set = set()
+        self._llm_sent_by_neg_id: dict = {}  # индекс neg_id -> set(global_key) для O(1) очистки
         self._llm_sent_lock = threading.Lock()
         # HR contacts collected from contactInfo during pre-checks
         self.hr_contacts: list = []  # capped at 500
@@ -375,6 +376,16 @@ class BotManager:
                         "error",
                     )
 
+    def _maybe_roll_daily_counter(self, state: AccountState) -> bool:
+        today = _today_msk()
+        with state._state_lock:
+            if state.daily_date != today:
+                state.daily_sent = 0
+                state.daily_date = today
+                state.hard_stopped = False
+                return True
+        return False
+
     def _add_response(
         self,
         state: AccountState,
@@ -430,23 +441,39 @@ class BotManager:
                     f"{ago}м назад" if ago < 60 else f"{ago // 60}ч{ago % 60}м назад"
                 )
 
+            with s._state_lock:
+                _status = s.status
+                _status_detail = s.status_detail
+                _hh_interviews = s.hh_interviews
+                _hh_interviews_recent = s.hh_interviews_recent
+                _hh_viewed = s.hh_viewed
+                _hh_discards = s.hh_discards
+                _hh_not_viewed = s.hh_not_viewed
+                _hh_unread_by_employer = s.hh_unread_by_employer
+                _hh_interviews_list = s.hh_interviews_list[:20]
+                _current_vacancy_idx = s.current_vacancy_idx
+                _total_vacancies = s.total_vacancies
+
+            with _cache_lock:
+                _total_applied = len((_cache_applied or {}).get(s.name, {}))
+
             accounts.append({
                 "idx": i,
                 "name": s.name,
                 "short": s.short,
                 "color": s.color,
-                "status": s.status,
-                "status_detail": s.status_detail,
+                "status": _status,
+                "status_detail": _status_detail,
                 "sent": s.sent,
-                "total_applied": len((_cache_applied or {}).get(s.name, {})),
+                "total_applied": _total_applied,
                 "tests": s.tests,
                 "errors": s.errors,
                 "already_applied": s.already_applied,
                 "found_vacancies": s.found_vacancies,
                 "current_vacancy_title": s.current_vacancy_title,
                 "current_vacancy_company": s.current_vacancy_company,
-                "current_vacancy_idx": s.current_vacancy_idx,
-                "total_vacancies": s.total_vacancies,
+                "current_vacancy_idx": _current_vacancy_idx,
+                "total_vacancies": _total_vacancies,
                 "salary_skipped": s.salary_skipped,
                 "questionnaire_sent": s.questionnaire_sent,
                 "limit_exceeded": s.limit_exceeded,
@@ -457,15 +484,15 @@ class BotManager:
                 "letter": s.acc.get("letter", ""),
                 "urls": s.acc.get("urls", []),
                 "url_pages": s.acc.get("url_pages", {}),
-                "hh_interviews": s.hh_interviews,
-                "hh_interviews_recent": s.hh_interviews_recent,
-                "hh_viewed": s.hh_viewed,
-                "hh_discards": s.hh_discards,
-                "hh_not_viewed": s.hh_not_viewed,
-                "hh_unread_by_employer": s.hh_unread_by_employer,
+                "hh_interviews": _hh_interviews,
+                "hh_interviews_recent": _hh_interviews_recent,
+                "hh_viewed": _hh_viewed,
+                "hh_discards": _hh_discards,
+                "hh_not_viewed": _hh_not_viewed,
+                "hh_unread_by_employer": _hh_unread_by_employer,
                 "hh_stats_updated": hh_updated_str,
                 "hh_stats_loading": s.hh_stats_loading,
-                "hh_interviews_list": s.hh_interviews_list[:20],
+                "hh_interviews_list": _hh_interviews_list,
                 "hh_possible_offers": s.hh_possible_offers[:10],
                 "action_history": list(s.action_history),
                 "resume_views_7d": s.resume_views_7d,
@@ -508,6 +535,22 @@ class BotManager:
                     ts_hh_updated_str = (
                         f"{ago}м назад" if ago < 60 else f"{ago // 60}ч{ago % 60}м назад"
                     )
+                with s._state_lock:
+                    _status = s.status
+                    _status_detail = s.status_detail
+                    _hh_interviews = s.hh_interviews
+                    _hh_interviews_recent = s.hh_interviews_recent
+                    _hh_viewed = s.hh_viewed
+                    _hh_discards = s.hh_discards
+                    _hh_not_viewed = s.hh_not_viewed
+                    _hh_unread_by_employer = s.hh_unread_by_employer
+                    _hh_interviews_list = s.hh_interviews_list[:20]
+                    _current_vacancy_idx = s.current_vacancy_idx
+                    _total_vacancies = s.total_vacancies
+
+                with _cache_lock:
+                    _total_applied = len((_cache_applied or {}).get(s.acc["name"], {}))
+
                 accounts.append({
                     "idx": idx,
                     "name": s.acc["name"],
@@ -519,18 +562,18 @@ class BotManager:
                     "letter": s.acc.get("letter", ""),
                     "urls": s.acc.get("urls", []),
                     "url_pages": s.acc.get("url_pages", {}),
-                    "status": s.status,
-                    "status_detail": s.status_detail,
+                    "status": _status,
+                    "status_detail": _status_detail,
                     "sent": s.sent,
-                    "total_applied": len((_cache_applied or {}).get(s.acc["name"], {})),
+                    "total_applied": _total_applied,
                     "tests": s.tests,
                     "errors": s.errors,
                     "already_applied": s.already_applied,
                     "found_vacancies": s.found_vacancies,
                     "current_vacancy_title": s.current_vacancy_title,
                     "current_vacancy_company": s.current_vacancy_company,
-                    "current_vacancy_idx": s.current_vacancy_idx,
-                    "total_vacancies": s.total_vacancies,
+                    "current_vacancy_idx": _current_vacancy_idx,
+                    "total_vacancies": _total_vacancies,
                     "salary_skipped": s.salary_skipped,
                     "questionnaire_sent": s.questionnaire_sent,
                     "limit_exceeded": s.limit_exceeded,
@@ -538,15 +581,15 @@ class BotManager:
                     "next_resume_touch": nrt,
                     "resume_touch_status": s.resume_touch_status,
                     "resume_touch_enabled": s.resume_touch_enabled,
-                    "hh_interviews": s.hh_interviews,
-                    "hh_interviews_recent": s.hh_interviews_recent,
-                    "hh_viewed": s.hh_viewed,
-                    "hh_discards": s.hh_discards,
-                    "hh_not_viewed": s.hh_not_viewed,
-                    "hh_unread_by_employer": s.hh_unread_by_employer,
+                    "hh_interviews": _hh_interviews,
+                    "hh_interviews_recent": _hh_interviews_recent,
+                    "hh_viewed": _hh_viewed,
+                    "hh_discards": _hh_discards,
+                    "hh_not_viewed": _hh_not_viewed,
+                    "hh_unread_by_employer": _hh_unread_by_employer,
                     "hh_stats_updated": ts_hh_updated_str,
                     "hh_stats_loading": s.hh_stats_loading,
-                    "hh_interviews_list": s.hh_interviews_list[:20],
+                    "hh_interviews_list": _hh_interviews_list,
                     "hh_possible_offers": s.hh_possible_offers[:10],
                     "action_history": list(s.action_history),
                     "resume_views_7d": s.resume_views_7d,
@@ -611,6 +654,18 @@ class BotManager:
 
         storage_stats = get_stats()
 
+        _vacancy_queues = {}
+        for s in all_states:
+            with s._state_lock:
+                _current_vacancy_idx = s.current_vacancy_idx
+                _vacancies_queue = list(s.vacancies_queue)
+            _vacancy_queues[s.short] = {
+                "remaining": max(0, len(_vacancies_queue) - _current_vacancy_idx),
+                "next": _vacancies_queue[_current_vacancy_idx: _current_vacancy_idx + 5]
+                if _vacancies_queue
+                else [],
+            }
+
         return {
             "type": "state_update",
             "uptime_seconds": uptime,
@@ -664,15 +719,7 @@ class BotManager:
                 "storage_total": storage_stats["total"],
                 "storage_tests": storage_stats["tests"],
             },
-            "vacancy_queues": {
-                s.short: {
-                    "remaining": max(0, len(s.vacancies_queue) - s.current_vacancy_idx),
-                    "next": s.vacancies_queue[s.current_vacancy_idx: s.current_vacancy_idx + 5]
-                    if s.vacancies_queue
-                    else [],
-                }
-                for s in all_states
-            },
+            "vacancy_queues": _vacancy_queues,
         }
 
     def _run_account_worker(self, idx: int, state: AccountState) -> None:
@@ -701,11 +748,7 @@ class BotManager:
             while (self.paused or state.paused) and not self._stop_event.is_set() and not state._deleted:
                 # Auto-reset daily limit pause when new day starts
                 if state.hard_stopped:
-                    today = _today_msk()
-                    if state.daily_date != today:
-                        state.daily_sent = 0
-                        state.daily_date = today
-                        state.hard_stopped = False
+                    if self._maybe_roll_daily_counter(state):
                         # Не снимаем manual pause — если юзер сам остановил аккаунт,
                         # midnight-rollover не должен его перезапускать (swarm-12 #8).
                         if state.paused_reason != "manual":
@@ -866,6 +909,15 @@ class BotManager:
             )
 
             if not unique_vacancies:
+                if state.cookies_expired:
+                    state.paused = True
+                    state.paused_reason = "auth"
+                    self._add_log(
+                        state.short, state.color,
+                        "⚠️ Куки протухли! Обновите куки и снимите паузу.", "error",
+                    )
+                    self._add_acc_event(state, "⚠️", "error", "Авторизация", "", "Обновите куки")
+                    continue
                 state.status = "waiting"
                 state.status_detail = "Нет вакансий"
                 state.wait_until = now + timedelta(minutes=2)
@@ -1004,11 +1056,7 @@ class BotManager:
                     self.vacancy_queues[state.short]["current"] = i
 
                 # Daily limit check
-                today = _today_msk()
-                if state.daily_date != today:
-                    state.daily_sent = 0
-                    state.daily_date = today
-                    state.hard_stopped = False
+                if self._maybe_roll_daily_counter(state):
                     # Cleanup unbounded dicts on new day
                     if len(state._test_failures) > 500:
                         state._test_failures.clear()
@@ -1107,11 +1155,7 @@ class BotManager:
                     if result == "sent":
                         state.sent += 1
                         # Daily counter
-                        today = _today_msk()
-                        if state.daily_date != today:
-                            state.daily_sent = 0
-                            state.daily_date = today
-                            state.hard_stopped = False
+                        self._maybe_roll_daily_counter(state)
                         state.daily_sent += 1
                         state.consecutive_errors = 0  # сброс счётчика ошибок
                         # Дополняем info мета-данными из поиска если API не вернул title
@@ -1182,11 +1226,7 @@ class BotManager:
                                 state.questionnaire_sent += 1
                                 state.consecutive_errors = 0
                                 # Daily counter
-                                today = _today_msk()
-                                if state.daily_date != today:
-                                    state.daily_sent = 0
-                                    state.daily_date = today
-                                    state.hard_stopped = False
+                                self._maybe_roll_daily_counter(state)
                                 state.daily_sent += 1
                                 state.current_vacancy_title = title
                                 state.current_vacancy_company = company
@@ -1319,7 +1359,8 @@ class BotManager:
                     f"⏳ Цикл завершён, пауза {CONFIG.pause_between_cycles}с",
                     "info",
                 )
-                time.sleep(CONFIG.pause_between_cycles)
+                if self._stop_event.wait(CONFIG.pause_between_cycles):
+                    return
 
     async def _collect_all_urls_parallel(self, state: AccountState) -> tuple:
         """
@@ -1373,6 +1414,8 @@ class BotManager:
         ) as session:
             async def fetch_one(url_idx, url, page, page_url):
                 nonlocal completed
+                if state._deleted:
+                    return url, set(), {}, {}, {}
                 html = await fetch_page(session, page_url, sem)
                 completed += 1
                 state.current_url_idx = url_idx
@@ -1450,6 +1493,10 @@ class BotManager:
         with self._llm_sent_lock:
             if len(self._llm_sent_global) > 10000:
                 self._llm_sent_global = set(list(self._llm_sent_global)[-5000:])
+                # перестраиваем индекс после массовой обрезки
+                self._llm_sent_by_neg_id = {}
+                for gk in self._llm_sent_global:
+                    self._llm_sent_by_neg_id.setdefault(gk[1], set()).add(gk)
 
         # Fetch recent chat pages sorted by last activity. Chats needing reply
         # (employer just wrote) will always be near the top.
@@ -1727,6 +1774,7 @@ class BotManager:
                             state.llm_replied_msgs.add(key)
                             continue
                         self._llm_sent_global.add(global_key)
+                        self._llm_sent_by_neg_id.setdefault(neg_id, set()).add(global_key)
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] отправляю: «{reply_text[:60]}»", "info", neg_id=neg_id)
                     log_debug(f"LLM [{state.short}] {neg_id}: отправляю сообщение в chatik")
@@ -1734,6 +1782,7 @@ class BotManager:
                     if ok == "chat_not_found":
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
+                            self._llm_sent_by_neg_id.get(neg_id, set()).discard(global_key)
                         state.llm_replied_msgs.add(key)
                         state._llm_no_chat.add(neg_id)
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
@@ -1761,6 +1810,7 @@ class BotManager:
                     else:
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
+                            self._llm_sent_by_neg_id.get(neg_id, set()).discard(global_key)
                         state._llm_temp_skip[key] = time.time() + 1800
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                          llm_reply=reply_text, llm_sent=False)
@@ -1790,7 +1840,7 @@ class BotManager:
                 log_debug(f"_process_llm_replies {neg_id}: {e}")
                 try:
                     with self._llm_sent_lock:
-                        to_remove = {gk for gk in self._llm_sent_global if gk[1] == neg_id}
+                        to_remove = self._llm_sent_by_neg_id.pop(neg_id, set())
                         self._llm_sent_global -= to_remove
                 except Exception:
                     pass
@@ -1908,7 +1958,8 @@ class BotManager:
                 if self.paused or state.paused:
                     log_debug(f"LLM [{state.short}]: пропуск — на паузе")
                     state.hh_stats_loading = False
-                    time.sleep(max(CONFIG.llm_check_interval * 60, 120))
+                    if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):
+                        return
                     continue
 
                 _has_llm = CONFIG.llm_api_key or any(
@@ -1932,4 +1983,5 @@ class BotManager:
             finally:
                 state.hh_stats_loading = False
 
-            time.sleep(max(CONFIG.llm_check_interval * 60, 120))
+            if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):
+                return

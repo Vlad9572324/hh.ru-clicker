@@ -17,6 +17,21 @@ from app.config import CONFIG
 _resume_cache: dict = {}   # {resume_hash: (text, timestamp)}
 _resume_cache_lock = threading.Lock()
 _RESUME_CACHE_TTL = 4 * 3600  # 4 hours
+_RESUME_CACHE_MAX = 200
+
+
+def _cleanup_resume_cache(now: float):
+    """Remove expired entries and enforce size cap."""
+    with _resume_cache_lock:
+        # Expired cleanup (max 50 per call)
+        expired = [k for k, (_, ts) in list(_resume_cache.items()) if now - ts >= _RESUME_CACHE_TTL]
+        for k in expired[:50]:
+            _resume_cache.pop(k, None)
+        # Size cap: evict oldest 50 by timestamp if over limit
+        if len(_resume_cache) > _RESUME_CACHE_MAX:
+            sorted_items = sorted(_resume_cache.items(), key=lambda x: x[1][1])
+            for k, _ in sorted_items[:50]:
+                _resume_cache.pop(k, None)
 
 
 def parse_hh_lux_ssr(html: str) -> dict:
@@ -207,10 +222,7 @@ def fetch_resume_text(acc: dict) -> str:
             text, ts = cached
             if now - ts < _RESUME_CACHE_TTL:
                 return text
-        # Clean expired entries periodically (max 50 per call)
-        expired = [k for k, (_, ts) in list(_resume_cache.items()) if now - ts >= _RESUME_CACHE_TTL]
-        for k in expired:
-            _resume_cache.pop(k, None)
+    _cleanup_resume_cache(now)
 
     try:
         r = requests.get(
@@ -222,7 +234,6 @@ def fetch_resume_text(acc: dict) -> str:
                 "Referer": "https://hh.ru/applicant/resumes",
             },
             cookies=acc["cookies"],
-            
             timeout=15,
         )
         if r.status_code != 200:
@@ -232,6 +243,7 @@ def fetch_resume_text(acc: dict) -> str:
         if text:
             with _resume_cache_lock:
                 _resume_cache[resume_hash] = (text, now)
+            _cleanup_resume_cache(now)
             log_debug(f"fetch_resume_text: ✅ {len(text)} симв. для {resume_hash[:8]}")
         else:
             log_debug(f"fetch_resume_text: ⚠️ пустой результат для {resume_hash[:8]}")
