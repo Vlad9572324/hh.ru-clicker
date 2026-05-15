@@ -89,6 +89,9 @@ class BotManager:
         self.activity_log: deque = deque(maxlen=100)
         self.recent_responses: deque = deque(maxlen=100)
         self.llm_log: deque = deque(maxlen=200)    # LLM reply history
+        # Защищает list(deque) snapshot от race с concurrent appendleft.
+        # В CPython deque.appendleft атомарен, но `list(deque)` иногда падает с RuntimeError при гонке.
+        self._deque_lock = threading.Lock()
         self.vacancy_queues: dict = {}
         self._start_time: datetime = None
         self.temp_sessions: list = load_browser_sessions()  # сессии из браузера (персистентные)
@@ -230,19 +233,26 @@ class BotManager:
         else:
             temp_idx = idx - len(self.account_states)
             state = self.temp_states.get(temp_idx)
-        if state:
+        if not state:
+            return
+        with state._state_lock:
             state.paused = not state.paused
             if not state.paused:
                 # Reset hard stop / limit so worker can continue
                 state.hard_stopped = False
                 state.limit_exceeded = False
                 state.limit_reset_time = None
-            msg = (
-                f"⏸️ Аккаунт {state.short} приостановлен"
-                if state.paused
-                else f"▶️ Аккаунт {state.short} возобновлён"
-            )
-            self._add_log(state.short, state.color, msg, "warning" if state.paused else "success")
+                # Иначе следующая ошибка снова auto-pause'нет account (state_machine #6).
+                state.consecutive_errors = 0
+                state.paused_reason = ""
+            else:
+                state.paused_reason = "manual"
+        msg = (
+            f"⏸️ Аккаунт {state.short} приостановлен"
+            if state.paused
+            else f"▶️ Аккаунт {state.short} возобновлён"
+        )
+        self._add_log(state.short, state.color, msg, "warning" if state.paused else "success")
 
     def toggle_account_llm(self, idx: int):
         state = None
@@ -313,29 +323,37 @@ class BotManager:
         }
         if neg_id:
             entry["neg_id"] = str(neg_id)
-        self.activity_log.appendleft(entry)
+        with self._deque_lock:
+            self.activity_log.appendleft(entry)
 
     def _add_acc_event(self, state: AccountState, icon: str, etype: str,
                         title: str, company: str, extra: str = ""):
-        state.acc_event_log.appendleft({
-            "time": datetime.now().strftime("%H:%M"),
-            "icon": icon,
-            "type": etype,
-            "title": title[:45],
-            "company": company[:25],
-            "extra": extra[:70],
-        })
+        with state._deque_lock:
+            state.acc_event_log.appendleft({
+                "time": datetime.now().strftime("%H:%M"),
+                "icon": icon,
+                "type": etype,
+                "title": title[:45],
+                "company": company[:25],
+                "extra": extra[:70],
+            })
 
     def _check_auto_pause(self, state: AccountState):
         """Авто-пауза при превышении лимита ошибок подряд."""
         n = CONFIG.auto_pause_errors
         if n > 0 and state.consecutive_errors >= n:
-            state.paused = True
-            self._add_log(
-                state.short, state.color,
-                f"⛔ Авто-пауза: {n} ошибок подряд. Снимите вручную.",
-                "error",
-            )
+            with state._state_lock:
+                # Не перетираем manual pause: если пользователь только что снял паузу,
+                # `toggle_account_pause` обнулил `consecutive_errors`. Если он стоит на 0,
+                # auto-pause не должен срабатывать заново.
+                if state.consecutive_errors >= n and not state.paused:
+                    state.paused = True
+                    state.paused_reason = "auto_errors"
+                    self._add_log(
+                        state.short, state.color,
+                        f"⛔ Авто-пауза: {n} ошибок подряд. Снимите вручную.",
+                        "error",
+                    )
 
     def _add_response(
         self,
@@ -1284,7 +1302,12 @@ class BotManager:
         headers = get_headers(xsrf)
         sem = asyncio.Semaphore(CONFIG.max_concurrent * 3)
 
-        connector = aiohttp.TCPConnector(limit=CONFIG.max_concurrent * 3)
+        # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
+        # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
+        connector = aiohttp.TCPConnector(
+            limit=CONFIG.max_concurrent * 3,
+            enable_cleanup_closed=True,
+        )
 
         all_tasks = []
         url_pages = _url_pages_map()
@@ -1311,8 +1334,11 @@ class BotManager:
         salary_map = {}
         completed = 0
 
+        # connector передаётся явно — ClientSession его НЕ закрывает,
+        # нужен ручной close, иначе утечка socket'ов на каждый цикл (swarm-11 #1).
         async with aiohttp.ClientSession(
-            headers=headers, cookies=acc["cookies"], connector=connector
+            headers=headers, cookies=acc["cookies"], connector=connector,
+            connector_owner=True,  # делегируем close обратно сессии
         ) as session:
             async def fetch_one(url_idx, url, page, page_url):
                 nonlocal completed
@@ -1754,18 +1780,37 @@ class BotManager:
             state.llm_status = f"⏳ {len(candidates)} чатов, 0 отправлено"
 
     def _fetch_hh_stats_worker(self, idx: int, state: AccountState) -> None:
-        """Thread worker for HH stats polling"""
-        try:
-            self._fetch_hh_stats_worker_inner(idx, state)
-        except Exception as e:
-            log_debug(f"STATS WORKER CRASHED [{state.short}]: {e}")
-            import traceback
-            log_debug(traceback.format_exc())
+        """Thread worker for HH stats polling — auto-restarts on crash.
+
+        Без этого цикла один краш парсинга / network exception → у аккаунта
+        НАВСЕГДА выключаются stats + LLM до перезапуска процесса (swarm-1 critical).
+        """
+        import traceback
+        while not self._stop_event.is_set() and not getattr(state, "_deleted", False):
+            try:
+                self._fetch_hh_stats_worker_inner(idx, state)
+                return  # inner вышел нормально (stop_event / _deleted) — выходим из restart-loop
+            except Exception as e:
+                log_debug(f"STATS WORKER CRASHED [{state.short}]: {e}\n{traceback.format_exc()}")
+                self._add_log(
+                    state.short, state.color,
+                    f"⚠️ Stats worker упал: {str(e)[:80]} — рестарт через 30с",
+                    "error",
+                )
+                # Используем wait вместо sleep, чтобы shutdown будил быстро.
+                if self._stop_event.wait(30):
+                    return
 
     def _fetch_hh_stats_worker_inner(self, idx: int, state: AccountState) -> None:
         while not self._stop_event.is_set():
-            while self.paused and not self._stop_event.is_set() and not getattr(state, '_deleted', False):
-                time.sleep(2)
+            # state.paused тоже учитываем — иначе paused account продолжает hammer HH APIs (swarm-12 #7).
+            while (
+                (self.paused or state.paused or getattr(state, "hard_stopped", False))
+                and not self._stop_event.is_set()
+                and not getattr(state, "_deleted", False)
+            ):
+                if self._stop_event.wait(2):
+                    return
             if self._stop_event.is_set() or getattr(state, '_deleted', False):
                 break
 

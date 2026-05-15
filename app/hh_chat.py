@@ -8,9 +8,30 @@ from app.logging_utils import log_debug, _is_login_page
 
 
 def _ensure_chatik_cookies(acc: dict) -> None:
-    """Fetch hhuid/crypted_hhuid from hh.ru if missing, storing them in acc['cookies'] in-place."""
+    """Fetch hhuid/crypted_hhuid from hh.ru if missing, storing them in acc['cookies'] in-place.
+
+    Сериализовано через acc.get('_cookies_lock') если AccountState прокинул его в acc —
+    иначе несколько workers одного аккаунта (apply+stats+LLM) могут одновременно
+    перепрошивать куки и затирать друг друга → 401 (swarm-1 #8).
+    """
     if acc["cookies"].get("hhuid"):
         return
+    lock = acc.get("_cookies_lock")
+    if lock is not None:
+        # double-checked locking — пока ждали лок, другой воркер мог уже выставить
+        if not lock.acquire(timeout=10):
+            return
+        try:
+            if acc["cookies"].get("hhuid"):
+                return
+            _do_fetch_chatik_cookies(acc)
+        finally:
+            lock.release()
+    else:
+        _do_fetch_chatik_cookies(acc)
+
+
+def _do_fetch_chatik_cookies(acc: dict) -> None:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
         r = requests.get(
@@ -18,7 +39,6 @@ def _ensure_chatik_cookies(acc: dict) -> None:
             cookies=acc["cookies"],
             headers={"User-Agent": ua},
             timeout=10,
-            
             allow_redirects=True,
         )
         for cookie in r.cookies:

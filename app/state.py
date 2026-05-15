@@ -15,6 +15,10 @@ class AccountState:
 
     def __init__(self, acc_data: dict):
         self.acc = acc_data
+        # Прокидываем cookies_lock в acc, чтобы hh_chat / hh_apply могли
+        # сериализовать мутации acc["cookies"] (defensive — см. _ensure_chatik_cookies).
+        # Сам lock создаётся ниже как self._cookies_lock; ставим shared reference.
+        # Делаем это сразу до использования self чтобы AccountState видна.
         self.name = acc_data["name"]
         self.short = acc_data["short"]
         self.color = acc_data["color"]
@@ -140,3 +144,16 @@ class AccountState:
         self._llm_lock = threading.Lock()    # prevents concurrent _process_llm_replies for this account
         self._msg_consecutive: dict = {}     # {neg_id: count} consecutive applicant messages without HR reply
         self._test_failures: dict = {}       # {vid: fail_count} questionnaire fill failures
+
+        # Защита deques от race с broadcast loop (list(deque) при concurrent appendleft → RuntimeError).
+        # Используется в _add_log/_add_response/_add_acc_event + snapshot reader.
+        self._deque_lock = threading.Lock()
+        # Защищает простые композитные read'ы (status+status_detail, hh-stats группой, vacancies_queue+idx).
+        self._state_lock = threading.Lock()
+        # Сериализует мутации acc["cookies"] между workers одного аккаунта.
+        self._cookies_lock = threading.Lock()
+        # Прокидываем lock в сам acc dict — чтобы hh_chat._ensure_chatik_cookies
+        # мог найти его без знания о AccountState.
+        self.acc["_cookies_lock"] = self._cookies_lock
+        # Reason for pause — manual vs auto vs limit — чтобы midnight reset не сбрасывал manual pause.
+        self.paused_reason: str = ""  # "", "manual", "auto_errors", "limit"

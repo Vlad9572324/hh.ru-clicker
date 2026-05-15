@@ -137,16 +137,38 @@ async def api_llm_config(request: Request):
     return {"ok": True}
 
 
+_llm_run_now_lock = threading.Lock()
+_llm_run_now_last: float = 0.0
+_LLM_RUN_NOW_COOLDOWN = 60  # сек — минимум между принудительными запусками
+
+
 @router.post("/api/llm_run_now")
 async def api_llm_run_now():
-    """Принудительно запустить LLM авто-ответы для всех аккаунтов прямо сейчас (в фоне)."""
+    """Принудительно запустить LLM авто-ответы для всех аккаунтов прямо сейчас (в фоне).
+
+    Rate-limit: cooldown между запусками + одновременно может идти только один _run,
+    чтобы spam endpoint'а не плодил daemon-thread'ы и не жёг токены (swarm-3 #7).
+    """
+    global _llm_run_now_last
+    import time as _time
+    now = _time.time()
+    if now - _llm_run_now_last < _LLM_RUN_NOW_COOLDOWN:
+        wait = int(_LLM_RUN_NOW_COOLDOWN - (now - _llm_run_now_last))
+        return {"started": False, "error": f"Cooldown — повторите через {wait}с"}
+    if not _llm_run_now_lock.acquire(blocking=False):
+        return {"started": False, "error": "Предыдущий запуск ещё идёт"}
+    _llm_run_now_last = now
+
     def _run():
-        states = list(bot.account_states) + list(bot.temp_states.values())
-        for state in states:
-            try:
-                bot._process_llm_replies(state)
-            except Exception as e:
-                log_debug(f"llm_run_now {state.short}: {e}")
+        try:
+            states = list(bot.account_states) + list(bot.temp_states.values())
+            for state in states:
+                try:
+                    bot._process_llm_replies(state)
+                except Exception as e:
+                    log_debug(f"llm_run_now {state.short}: {e}")
+        finally:
+            _llm_run_now_lock.release()
     threading.Thread(target=_run, daemon=True).start()
     return {"started": True, "accounts": len(bot.account_states) + len(bot.temp_states)}
 

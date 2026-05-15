@@ -1048,7 +1048,7 @@ async function llmInterviewsLoad() {
     const empMsg = esc(r.employer_last_msg || '—').replace(/\n/g, '<br>');
     const botReply = esc(r.llm_reply || '').replace(/\n/g, '<br>');
     const negLink = r.neg_id
-      ? `<a href="https://hh.ru/chat/${r.neg_id}" target="_blank" style="font-size:10px;color:var(--cyan)">🔗</a>` : '';
+      ? `<a href="https://hh.ru/chat/${encodeURIComponent(r.neg_id)}" target="_blank" style="font-size:10px;color:var(--cyan)">🔗</a>` : '';
     const dateStr = (r.last_seen || r.first_seen || '').replace('T', ' ').slice(0, 16);
     return `<tr>
       <td style="font-size:11px;color:var(--dim);white-space:nowrap">${dateStr}</td>
@@ -1202,7 +1202,7 @@ function renderLlmLog(snap) {
       ? '<span style="color:var(--dim)">Нет LLM-записей в логе. Первый запуск через ~15 мин после старта HH-статистики.</span>'
       : debugEntries.map(e => {
           const lvlColor = e.level === 'error' ? 'var(--red)' : e.level === 'warning' ? 'var(--yellow)' : e.level === 'success' ? 'var(--green)' : 'var(--dim)';
-          const chatLink = e.neg_id ? `<a href="https://hh.ru/chat/${e.neg_id}" target="_blank" style="color:var(--cyan);text-decoration:none" title="Открыть чат">🔗</a> ` : '';
+          const chatLink = e.neg_id ? `<a href="https://hh.ru/chat/${encodeURIComponent(e.neg_id)}" target="_blank" style="color:var(--cyan);text-decoration:none" title="Открыть чат">🔗</a> ` : '';
           return `<div style="line-height:1.5"><span style="color:var(--dim)">${esc(e.time||'')}</span> <span style="color:${colorVar(e.color)}">${esc(e.acc||'')}</span> ${chatLink}<span style="color:${lvlColor}">${esc(e.message||'')}</span></div>`;
         }).join('');
     // Restore scroll: if was at bottom stay at bottom, otherwise restore position
@@ -1485,9 +1485,13 @@ async function accDeleteCard(idx, btn) {
   // showConfirm теперь textContent — никаких HTML-тегов, иначе они показываются буквально.
   const label = isTemp ? `сессию ${acc?.name || '#'+idx}` : `аккаунт #${idx}`;
 
-  if (!await showConfirm(`Удалить ${label}? Действие необратимо.`)) return;
+  // Защита от double-click: блокируем кнопку ДО показа диалога.
   if (btn) btn.disabled = true;
   try {
+    if (!await showConfirm(`Удалить ${label}? Действие необратимо.`)) {
+      if (btn) btn.disabled = false;
+      return;
+    }
     const res = await fetch(url, {method: 'DELETE'});
     const data = await res.json();
     if (data.ok || data.status === 'ok') {
@@ -1835,10 +1839,12 @@ function fmtUptime(s) {
 
 function renderHeader(snap) {
   document.getElementById('uptime').textContent = '⏱ ' + fmtUptime(snap.uptime_seconds);
-  document.getElementById('global-found').textContent = snap.global_stats.total_found;
-  document.getElementById('global-sent').textContent = snap.global_stats.total_sent;
-  document.getElementById('storage-total').textContent = snap.global_stats.storage_total;
-  document.getElementById('storage-tests').textContent = snap.global_stats.storage_tests;
+  // Без optional chaining упавший snapshot (missing global_stats) валит весь UI.
+  const gs = snap.global_stats || {};
+  document.getElementById('global-found').textContent = gs.total_found ?? 0;
+  document.getElementById('global-sent').textContent = gs.total_sent ?? 0;
+  document.getElementById('storage-total').textContent = gs.storage_total ?? 0;
+  document.getElementById('storage-tests').textContent = gs.storage_tests ?? 0;
 
   // Daily counter
   const dailyEl = document.getElementById('hdr-daily-counter');
@@ -2590,7 +2596,7 @@ function renderHH(snap) {
       if (acc.hh_interviews_list && acc.hh_interviews_list.length) {
         body += `<div style="font-weight:700;margin-bottom:6px;color:var(--green)">${t('hh_inv_list')}</div>`;
         body += acc.hh_interviews_list.map(item => {
-          const url = item.neg_id ? `https://hh.ru/applicant/negotiations/${item.neg_id}` : '';
+          const url = item.neg_id ? `https://hh.ru/applicant/negotiations/${encodeURIComponent(item.neg_id)}` : '';
           const textEl = url
             ? `<a class="hh-interview-text" href="${url}" target="_blank" rel="noopener">${esc(item.text || '')}</a>`
             : `<span class="hh-interview-text">${esc(item.text || '')}</span>`;
@@ -2613,7 +2619,8 @@ function renderHH(snap) {
       }
     }
 
-    const colorStyle = `color:var(--${acc.color === 'magenta' ? 'magenta' : acc.color || 'text'})`;
+    // Whitelist цветов — иначе acc.color мог бы быть `foo" onmouseover="alert(1)`.
+    const colorStyle = `color:${colorVar(acc.color || '')}`;
     return `
       <div class="hh-account-block">
         <div class="hh-account-title" style="${colorStyle}">${esc(acc.name)}</div>
@@ -2879,7 +2886,7 @@ async function loadTests() {
       const accFull = item.account_name || '';
       const accShort = accFull.replace(/^.*?\((.+?)\).*$/, '$1') || accFull;
       const resumeLink = item.resume_hash
-        ? `<a href="https://hh.ru/resume/${item.resume_hash}" target="_blank" style="font-size:11px;color:var(--cyan)">${accShort}</a>`
+        ? `<a href="https://hh.ru/resume/${encodeURIComponent(item.resume_hash)}" target="_blank" style="font-size:11px;color:var(--cyan)">${esc(accShort)}</a>`
         : `<span class="c-dim">${esc(accShort) || '—'}</span>`;
       // Applied by list
       const appliedBy = item.applied_by || [];
@@ -3339,10 +3346,11 @@ async function applySubmit() {
     } else {
       applyShowResult(`❌ ${data.message}`, 'err');
     }
-    if (statusEl) statusEl.textContent = '';
   } catch(e) {
     applyShowResult('❌ Ошибка: ' + e, 'err');
   } finally {
+    // Спиннер чистим всегда — иначе network error оставлял "⏳ Отправляю..." навсегда.
+    if (statusEl) statusEl.textContent = '';
     ApplyState.submitting = false;
   }
 }
@@ -3716,7 +3724,7 @@ async function loadHrContacts(btn) {
     let html = '<table style="width:100%;border-collapse:collapse;font-size:11px">';
     html += '<tr style="color:var(--dim);border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 6px">Время</th><th style="text-align:left;padding:4px 6px">Вакансия</th><th style="text-align:left;padding:4px 6px">Компания</th><th style="text-align:left;padding:4px 6px">ФИО</th><th style="text-align:left;padding:4px 6px">Email</th><th style="text-align:left;padding:4px 6px">Телефон</th></tr>';
     contacts.slice().reverse().forEach(c => {
-      const link = c.vacancy_id ? `<a href="https://hh.ru/vacancy/${c.vacancy_id}" target="_blank" style="color:var(--cyan)">${esc(c.title || c.vacancy_id)}</a>` : esc(c.title || '?');
+      const link = c.vacancy_id ? `<a href="https://hh.ru/vacancy/${encodeURIComponent(c.vacancy_id)}" target="_blank" style="color:var(--cyan)">${esc(c.title || c.vacancy_id)}</a>` : esc(c.title || '?');
       html += `<tr style="border-bottom:1px solid rgba(48,54,61,0.5)">
         <td style="padding:4px 6px;color:var(--dim);white-space:nowrap">${esc(c.time || '')}</td>
         <td style="padding:4px 6px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${link}</td>
