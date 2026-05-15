@@ -26,7 +26,7 @@ def _get_logger() -> logging.Logger:
         return logging.getLogger("hh_bot_null")
     _logger_lock_init = True
     try:
-        DATA_DIR.mkdir(exist_ok=True)
+        DATA_DIR.mkdir(exist_ok=True, mode=0o700)
         lg = logging.getLogger("hh_bot")
         lg.setLevel(logging.DEBUG)
         handler = RotatingFileHandler(

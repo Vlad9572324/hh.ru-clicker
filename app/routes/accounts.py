@@ -75,7 +75,11 @@ def _parse_cookies_str(raw: str) -> tuple:
         part = part.strip()
         if "=" in part:
             k, v = part.split("=", 1)
-            cookies[k.strip()] = v.strip()
+            # Stripping NUL и control chars (CRLF) — иначе header injection
+            # или requests/http.client крашится навсегда на этой сессии (kimi-search-3 #5,#8).
+            k = k.strip()
+            v = "".join(ch for ch in v.strip() if ch == "\t" or 0x20 <= ord(ch) < 0x7f or ord(ch) >= 0xa0)
+            cookies[k] = v
 
     return cookies, raw_line
 

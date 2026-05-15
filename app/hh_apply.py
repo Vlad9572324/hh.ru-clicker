@@ -209,8 +209,18 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 rich_qs = _parse_questionnaire_rich(html)
                 resume_text = ""
                 if CONFIG.llm_use_resume:
-                    resume_text = fetch_resume_text(acc)
-                llm_ans = generate_llm_questionnaire_answers(rich_qs, vacancy_title, company, resume_text=resume_text)
+                    # fetch_resume_text — sync requests.get с 15s timeout.
+                    # В async-функции блокирует event loop → выносим в executor.
+                    import asyncio as _aio
+                    resume_text = await _aio.get_event_loop().run_in_executor(None, fetch_resume_text, acc)
+                # generate_llm_questionnaire_answers тоже sync (OpenAI client).
+                import asyncio as _aio2
+                llm_ans = await _aio2.get_event_loop().run_in_executor(
+                    None,
+                    lambda: generate_llm_questionnaire_answers(
+                        rich_qs, vacancy_title, company, resume_text=resume_text
+                    ),
+                )
                 if llm_ans:
                     # Validate LLM answers against actual options
                     rich_fields = {q["field"]: q for q in rich_qs}

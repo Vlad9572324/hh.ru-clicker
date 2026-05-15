@@ -4,7 +4,10 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
+      # bind 0.0.0.0 ВНУТРИ контейнера, наружу всё равно мапится только на 127.0.0.1
+      # хост-машины (см. ports выше). UNSAFE_EXPOSE=1 обходит web_app._resolve_host check.
       HH_BOT_HOST: "0.0.0.0"
+      HH_BOT_UNSAFE_EXPOSE: "1"
     volumes:
       - ./data:/app/data
       - ./web_app.py:/app/web_app.py

@@ -14,7 +14,7 @@ except Exception:
     _schedule_save = None  # cycle-safe fallback
 
 DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True, mode=0o700)
 
 CONFIG_FILE = DATA_DIR / "config.json"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

@@ -412,6 +412,9 @@ class BotManager:
                 if state.paused and state.paused_reason in ("limit", "auto_errors"):
                     state.paused = False
                     state.paused_reason = ""
+                    # Также сбрасываем счётчик ошибок — иначе следующая ошибка
+                    # сразу re-pause'нет аккаунт (consistency с toggle_account_pause).
+                    state.consecutive_errors = 0
                 return True
         return False
 
@@ -1613,6 +1616,8 @@ class BotManager:
             if not state.llm_enabled or not CONFIG.llm_enabled:
                 self._add_log(state.short, state.color, f"\U0001f916 LLM: выключен в процессе цикла, прерываю", "warning")
                 break
+            # Reset per-iteration: иначе exception на новой итерации видит global_key из ПРЕДЫДУЩЕЙ.
+            global_key = None
             try:
                 if neg_id in state._llm_no_chat:
                     item = items_by_id.get(neg_id, {})
@@ -1904,15 +1909,14 @@ class BotManager:
             except Exception as e:
                 log_exception(f"_process_llm_replies {neg_id}", e)
                 try:
-                    # Чистим ТОЛЬКО текущий global_key, а не все для neg_id —
-                    # другие аккаунты могли уже успешно ответить тут (kimi-search-1 #8).
-                    gk_local = locals().get("global_key")
-                    if gk_local is not None:
+                    # Чистим только текущий global_key. На иммедиатных exception'ах
+                    # (до reserve блока) он = None — ничего не трогаем.
+                    if global_key is not None:
                         with self._llm_sent_lock:
-                            self._llm_sent_global.discard(gk_local)
+                            self._llm_sent_global.discard(global_key)
                             bucket = self._llm_sent_by_neg_id.get(neg_id)
                             if bucket is not None:
-                                bucket.discard(gk_local)
+                                bucket.discard(global_key)
                                 if not bucket:
                                     self._llm_sent_by_neg_id.pop(neg_id, None)
                 except Exception:

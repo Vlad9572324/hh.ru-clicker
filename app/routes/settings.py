@@ -137,7 +137,7 @@ async def api_raw_accounts_set(request: Request):
         acc = dict(acc)
         acc["cookies"] = merged_cookies
         merged.append(acc)
-    accounts_data.clear()
-    accounts_data.extend(merged)
+    # Atomic swap: clear()+extend() — non-atomic, readers могут увидеть [] между ними.
+    accounts_data[:] = merged
     save_accounts()
     return {"ok": True, "count": len(merged)}

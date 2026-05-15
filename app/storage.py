@@ -13,7 +13,7 @@ from pathlib import Path
 from app.logging_utils import log_debug
 
 DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True, mode=0o700)
 
 APPLIED_FILE = DATA_DIR / "applied_vacancies.json"
 TESTS_FILE = DATA_DIR / "test_required_vacancies.json"
@@ -294,8 +294,9 @@ def load_browser_sessions() -> list:
         try:
             with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            # Раньше swallowили silently — пользователь терял ВСЕ сессии без сообщения.
+            log_debug(f"⚠️ Не могу прочитать {SESSIONS_FILE}: {type(e).__name__}: {e}")
     return []
 
 
