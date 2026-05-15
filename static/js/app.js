@@ -3040,6 +3040,15 @@ function esc(s) {
     .replace(/`/g, '&#96;');
 }
 
+// Safe href: блокирует javascript:/data:/vbscript: URL — esc() не защищает от них,
+// потому что HTML-entity escape не меняет схему (kimi-search-3 #7).
+function safeHref(url) {
+  if (!url) return '#';
+  const s = String(url).trim();
+  if (/^(javascript|data|vbscript|file):/i.test(s)) return '#';
+  return s;
+}
+
 function setText(id, val) {
   const el = document.getElementById(id);
   if (el) el.textContent = val;

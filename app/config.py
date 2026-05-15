@@ -163,8 +163,13 @@ def save_config():
             tmp = CONFIG_FILE.with_suffix(".tmp")
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
                 tmp.replace(CONFIG_FILE)
+                try:
+                    import os as _os
+                    _os.chmod(CONFIG_FILE, 0o600)  # PII (phone, telegram в letter_templates)
+                except Exception:
+                    pass
             except Exception as e:
                 log_debug(f"save_config error: {e}")
                 tmp.unlink(missing_ok=True)
@@ -226,8 +231,13 @@ def save_accounts():
             tmp = ACCOUNTS_FILE.with_suffix(".tmp")
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                    json.dump(snapshot, f, ensure_ascii=False, indent=2, default=str)
                 tmp.replace(ACCOUNTS_FILE)
+                try:
+                    import os as _os
+                    _os.chmod(ACCOUNTS_FILE, 0o600)  # cookies — owner-only
+                except Exception:
+                    pass
             except Exception as e:
                 log_debug(f"save_accounts error: {e}")
                 tmp.unlink(missing_ok=True)

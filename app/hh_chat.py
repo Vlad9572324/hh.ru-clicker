@@ -7,7 +7,26 @@ import requests
 
 from app.logging_utils import log_debug, _is_login_page
 
-_CHATIK_BASE = os.environ.get("HH_CHATIK_BASE", "https://chatik.hh.ru")
+# Allowlist для HH_CHATIK_BASE: env injection (`HH_CHATIK_BASE=evil.com`)
+# не должен утечь куки/_xsrf на attacker domain (kimi-search-3 #7).
+_CHATIK_ALLOWED_BASES = frozenset({
+    "https://chatik.hh.ru",
+    "https://chatik.hh.kz",  # KZ зеркало
+})
+
+
+def _validated_chatik_base() -> str:
+    val = os.environ.get("HH_CHATIK_BASE", "https://chatik.hh.ru").strip().rstrip("/")
+    if val not in _CHATIK_ALLOWED_BASES:
+        log_debug(f"HH_CHATIK_BASE={val!r} not in allowlist — falling back to default")
+        return "https://chatik.hh.ru"
+    return val
+
+
+_CHATIK_BASE = _validated_chatik_base()
+# Известные имена cookies от chatik — больше не пропускаем всё подряд
+# (kimi-search-3 #7: defense-in-depth против injection в chatik response).
+_CHATIK_COOKIE_WHITELIST = frozenset({"hhuid", "crypted_hhuid", "hhrole", "GMT"})
 
 
 def _ensure_chatik_cookies(acc: dict) -> None:
@@ -45,6 +64,10 @@ def _do_fetch_chatik_cookies(acc: dict) -> None:
             allow_redirects=True,
         )
         for cookie in r.cookies:
+            # Whitelist: не пускаем произвольные cookies из ответа HH в acc
+            # (kimi-search-3 #7: blind cookie injection vector).
+            if cookie.name not in _CHATIK_COOKIE_WHITELIST:
+                continue
             if cookie.value and cookie.name not in acc["cookies"]:
                 acc["cookies"][cookie.name] = cookie.value
                 log_debug(f"_ensure_chatik_cookies: got {cookie.name} for {acc.get('name', '?')}")

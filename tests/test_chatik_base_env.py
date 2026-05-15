@@ -12,20 +12,37 @@ def test_chatik_base_default():
     assert _CHATIK_BASE == "https://chatik.hh.ru"
 
 
-def test_chatik_base_env_override(monkeypatch):
+def test_chatik_base_env_override_allowed(monkeypatch):
+    """HH_CHATIK_BASE из allowlist принимается (chatik.hh.kz — KZ зеркало)."""
     import importlib
     import os
     import app.hh_chat as hh_chat
 
-    monkeypatch.setenv("HH_CHATIK_BASE", "https://custom.chatik.ru")
+    monkeypatch.setenv("HH_CHATIK_BASE", "https://chatik.hh.kz")
     importlib.reload(hh_chat)
     try:
-        assert hh_chat._CHATIK_BASE == "https://custom.chatik.ru"
+        assert hh_chat._CHATIK_BASE == "https://chatik.hh.kz"
     finally:
         if "HH_CHATIK_BASE" in os.environ:
             del os.environ["HH_CHATIK_BASE"]
         importlib.reload(hh_chat)
         assert hh_chat._CHATIK_BASE == "https://chatik.hh.ru"
+
+
+def test_chatik_base_env_unsafe_falls_back(monkeypatch):
+    """HH_CHATIK_BASE=evil.com (НЕ в allowlist) → falls back to default."""
+    import importlib
+    import os
+    import app.hh_chat as hh_chat
+
+    monkeypatch.setenv("HH_CHATIK_BASE", "https://evil.com")
+    importlib.reload(hh_chat)
+    try:
+        assert hh_chat._CHATIK_BASE == "https://chatik.hh.ru"
+    finally:
+        if "HH_CHATIK_BASE" in os.environ:
+            del os.environ["HH_CHATIK_BASE"]
+        importlib.reload(hh_chat)
 
 
 def test_send_negotiation_message_url_respects_chatik_base(monkeypatch):

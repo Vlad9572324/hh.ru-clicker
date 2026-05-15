@@ -115,6 +115,10 @@ def _save_oauth_tokens():
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(snapshot, f, ensure_ascii=False, indent=2)
                 tmp.replace(_OAUTH_FILE)
+                try:
+                    os.chmod(_OAUTH_FILE, 0o600)  # secrets — owner-only
+                except Exception:
+                    pass
             except Exception as e:
                 log_debug(f"OAuth: failed to save tokens: {e}")
                 tmp.unlink(missing_ok=True)

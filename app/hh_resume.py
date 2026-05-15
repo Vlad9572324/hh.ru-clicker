@@ -15,7 +15,9 @@ from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG
 
 _resume_cache: dict = {}   # {resume_hash: (text, timestamp)}
-_resume_cache_lock = threading.Lock()
+# RLock — reentrant: fetch_resume_text держит лок, потом вызывает _cleanup_resume_cache,
+# который тоже хочет его взять. С Lock — deadlock; с RLock одна и та же нитка проходит.
+_resume_cache_lock = threading.RLock()
 _RESUME_CACHE_TTL = 4 * 3600  # 4 hours
 _RESUME_CACHE_MAX = 200
 

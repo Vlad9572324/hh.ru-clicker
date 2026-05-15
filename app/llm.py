@@ -20,8 +20,10 @@ except ImportError:
 try:
     from app.manager import _today_msk
 except Exception:
+    # ISO YYYY-MM-DD вместо tm_yday — иначе на 1 января нового года ключ совпадает
+    # с прошлогодним и счётчики не сбрасываются (kimi-search-1 #6).
     def _today_msk():
-        return str(_time_mod.gmtime().tm_yday)
+        return _time_mod.strftime("%Y-%m-%d", _time_mod.gmtime())
 
 _llm_rr_index: dict[str, int] = {}  # round-robin counter per account key
 _llm_rr_lock = threading.Lock()
@@ -39,7 +41,7 @@ def _get_today_str() -> str:
     try:
         return _today_msk()
     except Exception:
-        return str(_time_mod.gmtime().tm_yday)
+        return _time_mod.strftime("%Y-%m-%d", _time_mod.gmtime())
 
 
 def _check_questionnaire_quota(account_key: str) -> bool:

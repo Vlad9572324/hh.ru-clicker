@@ -302,20 +302,37 @@ def load_browser_sessions() -> list:
 _save_sessions_lock = threading.Lock()
 
 
+def _strip_sensitive_session_fields(s: dict) -> dict:
+    """Удалить raw cookie line из сохранённого snapshot — иначе он лежит в
+    browser_sessions.json в открытом виде (kimi-search-3 #8)."""
+    out = {k: v for k, v in s.items() if k not in ("_raw_cookie_line", "raw_cookie_line")}
+    return out
+
+
 def save_browser_sessions(sessions: list):
     """Сохранить браузерные сессии в файл (в фоновом потоке)."""
-    snapshot = copy.deepcopy(sessions)
+    snapshot = [_strip_sensitive_session_fields(copy.deepcopy(s)) for s in sessions]
     def _write():
         with _save_sessions_lock:
             tmp = SESSIONS_FILE.with_suffix(".tmp")
             try:
                 with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(snapshot, f, ensure_ascii=False, indent=2)
+                    json.dump(snapshot, f, ensure_ascii=False, indent=2, default=str)
                 tmp.replace(SESSIONS_FILE)
+                _restrict_perms(SESSIONS_FILE)
             except Exception as e:
                 log_debug(f"save_browser_sessions error: {e}")
                 tmp.unlink(missing_ok=True)
-    threading.Thread(target=_write, daemon=True).start()
+    _schedule_save(_write)
+
+
+def _restrict_perms(path):
+    """0o600 на чувствительные файлы: oauth_tokens, browser_sessions, config, accounts."""
+    try:
+        import os as _os
+        _os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 
 def add_applied(account_name: str, vacancy_id: str, info: dict = None):

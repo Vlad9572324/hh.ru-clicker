@@ -126,13 +126,20 @@ class BotManager:
         self._hr_contacts_lock = threading.Lock()
         # Guards activate_session against concurrent WS calls spawning duplicate workers
         self._activate_lock = threading.Lock()
+        # Сериализация append к data/llm_log.jsonl (kimi-search-1 #5).
+        self._llm_log_write_lock = threading.Lock()
 
     def _persist_llm_log(self, entry: dict):
-        """Append-only JSONL write-through for LLM reply events (async via _schedule_save)."""
+        """Append-only JSONL write-through for LLM reply events (async via _schedule_save).
+        Сериализуем через _llm_log_write_lock — иначе concurrent appends могут интерливить
+        большие JSON-строки (>PIPE_BUF на Linux) и корраптить JSONL (kimi-search-1 #5).
+        """
         def _write():
             try:
-                with open(LLM_LOG_FILE, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+                with self._llm_log_write_lock:
+                    with open(LLM_LOG_FILE, "a", encoding="utf-8") as f:
+                        f.write(line)
             except Exception as e:
                 log_debug(f"llm_log persist error: {e}")
         _schedule_save(_write)
@@ -397,6 +404,14 @@ class BotManager:
                 state.daily_sent = 0
                 state.daily_date = today
                 state.hard_stopped = False
+                # Сбрасываем и limit-флаги: иначе после rollover остаёмся в limit-check
+                # block с уже обнулённым счётчиком (kimi-search-1 #9).
+                state.limit_exceeded = False
+                state.limit_reset_time = None
+                # Сбрасываем paused если он был auto/limit (kimi-search-1 #9 extra) — но НЕ manual.
+                if state.paused and state.paused_reason in ("limit", "auto_errors"):
+                    state.paused = False
+                    state.paused_reason = ""
                 return True
         return False
 
@@ -1889,9 +1904,17 @@ class BotManager:
             except Exception as e:
                 log_exception(f"_process_llm_replies {neg_id}", e)
                 try:
-                    with self._llm_sent_lock:
-                        to_remove = self._llm_sent_by_neg_id.pop(neg_id, set())
-                        self._llm_sent_global -= to_remove
+                    # Чистим ТОЛЬКО текущий global_key, а не все для neg_id —
+                    # другие аккаунты могли уже успешно ответить тут (kimi-search-1 #8).
+                    gk_local = locals().get("global_key")
+                    if gk_local is not None:
+                        with self._llm_sent_lock:
+                            self._llm_sent_global.discard(gk_local)
+                            bucket = self._llm_sent_by_neg_id.get(neg_id)
+                            if bucket is not None:
+                                bucket.discard(gk_local)
+                                if not bucket:
+                                    self._llm_sent_by_neg_id.pop(neg_id, None)
                 except Exception:
                     pass
                 # Backoff at chat-level: предотвращает бесконечный retry перманентной ошибки.
