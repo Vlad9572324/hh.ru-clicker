@@ -23,6 +23,7 @@ const T = {
     // Tabs
     tab_main: '📊 Главная',
     tab_log: '📜 Лог',
+    tab_llm: '🤖 LLM Ответы',
     tab_applied: '✅ Отклики',
     tab_tests: '🧪 Тесты',
     tab_db: '📂 База',
@@ -282,6 +283,7 @@ const T = {
     // Tabs
     tab_main: '📊 Main',
     tab_log: '📜 Log',
+    tab_llm: '🤖 LLM Replies',
     tab_applied: '✅ Applied',
     tab_tests: '🧪 Tests',
     tab_db: '📂 Database',

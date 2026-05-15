@@ -31,7 +31,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Активируется если установлен `HH_BOT_API_KEY` env. Без env — пропускает всё
 # (backward compat для локального dev на 127.0.0.1).
 _API_KEY = os.environ.get("HH_BOT_API_KEY", "").strip()
-_PUBLIC_PATHS = ("/", "/static/", "/favicon.ico")  # GET-only публичные пути
+_PUBLIC_PATHS = ("/", "/static/", "/favicon.ico", "/healthz")  # GET-only публичные пути
 
 
 @app.middleware("http")
@@ -53,6 +53,14 @@ async def api_key_middleware(request: Request, call_next):
 def api_key_required() -> str:
     """Helper для WS handshake: вернуть текущий API key (или '' если выключено)."""
     return _API_KEY
+
+
+# Public /healthz — для k8s/docker liveness probe. Не требует API key.
+@app.get("/healthz")
+async def healthz():
+    n_accounts = len(bot.account_states) if hasattr(bot, "account_states") else 0
+    n_temp = len(bot.temp_states) if hasattr(bot, "temp_states") else 0
+    return {"ok": True, "accounts": n_accounts, "temp_sessions": n_temp}
 
 # -- Register routers (imported after app is created) --
 from app.routes.core import router as core_router          # noqa: E402

@@ -146,14 +146,21 @@ async def api_raw_accounts_set(request: Request):
     # пересборка account_states тут небезопасна — убъёт running threads.
     try:
         from app.instances import bot as _bot
+        from app.logging_utils import log_debug
         by_name = {a.get("name", ""): a for a in merged}
         for state in _bot.account_states:
             new_acc = by_name.get(state.name)
             if new_acc:
+                # Replace вместо update — иначе удалённые в JSON поля (use_oauth, letter)
+                # остаются stale в state.acc (r11-1 #8). Сохраняем lock-ref defensive.
+                cookies_lock = state.acc.get("_cookies_lock")
+                state.acc.clear()
                 state.acc.update(new_acc)
+                if cookies_lock is not None:
+                    state.acc["_cookies_lock"] = cookies_lock
                 state.cookies_expired = False
-    except Exception:
-        pass
+    except Exception as e:
+        log_debug(f"api_raw_accounts_set live-sync error: {e}")
     return {
         "ok": True,
         "count": len(merged),
