@@ -73,20 +73,45 @@ _API_KEY = os.environ.get("HH_BOT_API_KEY", "").strip()
 _PUBLIC_PATHS = ("/", "/static/", "/favicon.ico", "/healthz")  # GET-only публичные пути
 
 
+_SAFE_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
+
+
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     # Если ключ не задан — auth выключен (опасно, но не ломает существующие deployments).
     if not _API_KEY:
-        return await call_next(request)
+        resp = await call_next(request)
+        _set_security_headers(resp)
+        return resp
     path = request.url.path
     if request.method == "GET" and any(path == p or path.startswith(p) for p in _PUBLIC_PATHS):
-        return await call_next(request)
-    # WS upgrade проверяется в websocket_endpoint отдельно (не идёт через middleware).
-    presented = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
-    if not presented or not secrets.compare_digest(presented, _API_KEY):
+        resp = await call_next(request)
+        _set_security_headers(resp)
+        return resp
+    # State-changing методы запрещают ?api_key= (CSRF: form POST с query-string проходил
+    # без CORS preflight; теперь нужен X-API-Key header, см. kimi-r13-4 #3).
+    if request.method in _SAFE_METHODS:
+        presented = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
+    else:
+        presented = request.headers.get("X-API-Key", "")
+    if not presented or not secrets.compare_digest(str(presented), str(_API_KEY)):
         log_debug(f"auth_denied path={path} method={request.method} ip={request.client.host if request.client else '?'}")
         return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+    resp = await call_next(request)
+    _set_security_headers(resp)
+    return resp
+
+
+def _set_security_headers(resp):
+    """CSP + базовые security headers (kimi-r13-4 #6)."""
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    )
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
 
 
 def api_key_required() -> str:

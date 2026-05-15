@@ -63,7 +63,11 @@ class AccountState:
         self.hard_stopped = False  # жёсткая остановка (лимит или daily)
 
         self.resume_touch_enabled = True
-        self.next_resume_touch = None
+        # Startup jitter: первый touch отсрочен на 0-120s, чтобы 100 аккаунтов
+        # не ударили hh.ru/oauth/token одновременно (kimi-r13-2 #7, r13-3 #10).
+        import random as _r
+        from datetime import datetime as _dt, timedelta as _td
+        self.next_resume_touch = _dt.now() + _td(seconds=_r.uniform(0, 120))
         self.resume_touch_status = ""
 
 

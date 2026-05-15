@@ -55,9 +55,23 @@ _cache_interviews: dict = None  # keyed by neg_id
 _cache_lock = threading.Lock()
 
 
+def _cleanup_stale_tmp():
+    """Удалить .tmp файлы оставшиеся от прерванной записи (process crash mid-replace).
+    Иначе они копятся бесконечно (kimi-r13-2 #6)."""
+    for fpath in (APPLIED_FILE, TESTS_FILE, INTERVIEWS_FILE, SESSIONS_FILE):
+        tmp = fpath.with_suffix(".tmp")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+                log_debug(f"startup: removed stale {tmp}")
+        except Exception:
+            pass
+
+
 def _load_cache():
     """Загрузить кеш из файлов (один раз при старте)"""
     global _cache_applied, _cache_tests, _cache_interviews
+    _cleanup_stale_tmp()
     with _cache_lock:
         if _cache_applied is None:
             if APPLIED_FILE.exists():

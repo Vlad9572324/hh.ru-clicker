@@ -24,18 +24,28 @@ class ConnectionManager:
     async def broadcast(self, data: dict):
         if not self.active:
             return
-        dead = []
-        # send всем в параллель + timeout 3s/клиент: иначе один мёртвый сокет
-        # (half-open TCP) блокировал бы broadcast_loop на OS TCP timeout (минуты) (swarm-11 #8).
-        for ws in self.active:
+        # Параллельная отправка всем клиентам сразу (gather), не последовательно.
+        # Раньше: 50 половинно-открытых сокетов × 3s timeout = 150s блокированный
+        # broadcast loop (kimi-r13-2 #8). Теперь все таймауты идут одновременно → max 3s total.
+        # Snapshot active list — иначе concurrent disconnect() мутирует во время iteration.
+        active_snapshot = list(self.active)
+
+        async def _send_one(ws):
             try:
                 await asyncio.wait_for(ws.send_json(data), timeout=3.0)
+                return None
             except TypeError as e:
-                log_debug(f"broadcast serialize error (bug — check datetimes in snapshot): {e}")
-                # Не дропаем WS на serialize-ошибках — это баг данных, а не клиента.
+                # Serialize-ошибка — баг данных, не клиента; не дропаем сокет.
+                log_debug(f"broadcast serialize error: {e}")
+                return None
             except (asyncio.TimeoutError, Exception) as e:
                 log_debug(f"broadcast ws error: {type(e).__name__}: {e}")
-                dead.append(ws)
-        for ws in dead:
-            if ws in self.active:
-                self.active.remove(ws)
+                return ws  # mark dead
+
+        results = await asyncio.gather(
+            *[_send_one(ws) for ws in active_snapshot],
+            return_exceptions=False,
+        )
+        for dead_ws in results:
+            if dead_ws is not None and dead_ws in self.active:
+                self.active.remove(dead_ws)

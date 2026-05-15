@@ -3075,8 +3075,19 @@ function esc(s) {
 // потому что HTML-entity escape не меняет схему (kimi-search-3 #7).
 function safeHref(url) {
   if (!url) return '#';
-  const s = String(url).trim();
-  if (/^(javascript|data|vbscript|file):/i.test(s)) return '#';
+  let s = String(url).trim();
+  // Decode percent-encoded префикс: `j%61vascript:` → `javascript:` (kimi-r13-4 #5).
+  // Делаем до 3 декодов на случай вложенного %25 → %.
+  for (let i = 0; i < 3; i++) {
+    try {
+      const dec = decodeURIComponent(s);
+      if (dec === s) break;
+      s = dec;
+    } catch (_) { break; }
+  }
+  if (/^\s*(javascript|data|vbscript|file):/i.test(s)) return '#';
+  // Whitelist: только http(s) и хеши/относительные пути.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^https?:/i.test(s)) return '#';
   return s;
 }
 
