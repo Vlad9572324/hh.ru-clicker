@@ -20,11 +20,27 @@ from app.logging_utils import log_debug
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    """Graceful shutdown через FastAPI lifespan — работает и при `uvicorn web_app:app`,
-    в отличие от signal-hook в web_app.py (тот ловит только `python web_app.py`).
-    r12-1 #7.
+    """FastAPI lifespan — единая точка startup + graceful shutdown.
+
+    ВАЖНО: при наличии `lifespan=`, FastAPI ИГНОРИРУЕТ все `@app.on_event("startup")`
+    хендлеры. Поэтому startup-логика (load_accounts, bot.start, broadcast_loop) должна
+    жить ЗДЕСЬ, иначе бот не загрузит accounts и не запустит воркеров (r13-1 #1).
     """
-    yield  # startup phase nothing here
+    # ── startup ──
+    try:
+        from app.config import load_accounts
+        load_accounts()
+        bot.start()
+        from app.routes.core import broadcast_loop
+        asyncio.create_task(broadcast_loop())
+        log_debug("lifespan: startup ok — accounts loaded, bot started, broadcast_loop scheduled")
+    except Exception as e:
+        log_debug(f"lifespan startup error: {e}")
+        raise
+
+    yield
+
+    # ── shutdown ──
     try:
         log_debug("lifespan: stopping bot...")
         bot.stop()

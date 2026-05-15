@@ -1673,7 +1673,10 @@ class BotManager:
                     continue
                 last_msg_id = thread["last_msg_id"]
                 key = (neg_id, last_msg_id)
-                if key in state.llm_replied_msgs:
+                # Legacy: pre-r1 records без replied_msg_id мечены sentinel '__legacy__'.
+                # Если такой sentinel есть — значит мы уже отвечали в этот чат до апгрейда.
+                # Пропускаем, не дожидаясь нового HH-сообщения (r13-1 #6).
+                if key in state.llm_replied_msgs or (neg_id, "__legacy__") in state.llm_replied_msgs:
                     log_debug(f"LLM [{state.short}] {neg_id}: уже отвечали на msg {last_msg_id}")
                     self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] уже отвечали в этой сессии, пропуск", "info", neg_id=neg_id)
                     continue

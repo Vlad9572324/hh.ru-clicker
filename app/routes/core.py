@@ -19,12 +19,8 @@ router = APIRouter()
 # STARTUP
 # ============================================================
 
-@router.on_event("startup")
-async def startup():
-    from app.config import load_accounts
-    load_accounts()
-    bot.start()
-    asyncio.create_task(broadcast_loop())
+# Startup moved to app.routes.__init__._lifespan (FastAPI ignores on_event when lifespan= is set).
+# Keeping broadcast_loop here so __init__ can import it.
 
 
 # ============================================================
