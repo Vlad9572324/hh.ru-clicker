@@ -993,6 +993,14 @@ async function llmPreviewResume(btn) {
 
 // ── LLM per-account toggle ────────────────────────────────────
 function llmToggleAccount(idx, btn) {
+  // Double-click guard: блокируем кнопку на 800мс — иначе rapid clicks
+  // спамят WS дублями (kimi-r14-3 #8). Снимается следующим snapshot'ом
+  // (updateCard перерисовывает кнопку) или таймером-страховкой.
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    setTimeout(() => { if (btn) btn.disabled = false; }, 800);
+  }
   sendCmd({type: 'account_llm', idx});
 }
 
@@ -1041,6 +1049,11 @@ function updateLlmStatusBar(snap) {
 }
 
 function oauthToggleAccount(idx, btn) {
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    setTimeout(() => { if (btn) btn.disabled = false; }, 800);
+  }
   sendCmd({type: 'account_oauth', idx});
 }
 
@@ -1807,6 +1820,11 @@ function connect() {
     try {
       const snap = JSON.parse(ev.data);
       if (snap.type === 'state_update') {
+        // Cap large arrays — иначе lastSnapshot копит память за дни uptime
+        // (kimi-r14-3 #6). Render-функции уже slice'ят, но source держится в State.
+        if (Array.isArray(snap.log)) snap.log = snap.log.slice(-State.MAX_LOG_NODES);
+        if (Array.isArray(snap.recent_responses)) snap.recent_responses = snap.recent_responses.slice(-100);
+        if (Array.isArray(snap.llm_log)) snap.llm_log = snap.llm_log.slice(-200);
         State.lastSnapshot = snap;
         try {
           renderAll(snap);
@@ -4668,7 +4686,10 @@ document.getElementById('lang-btn').textContent = lang.toUpperCase();
 // Restore last active tab from localStorage
 try {
   const savedTab = localStorage.getItem('hh-tab');
-  if (savedTab) {
+  // Whitelist check: localStorage controllable, не вставляем сырое значение
+  // в CSS селектор (kimi-r14-3 #7).
+  const VALID_TABS = new Set(Object.values(TAB_KEYS));
+  if (savedTab && VALID_TABS.has(savedTab)) {
     const tabEl = document.querySelector(`.tab[data-tab="${savedTab}"]`);
     if (tabEl) tabEl.click();
   }
