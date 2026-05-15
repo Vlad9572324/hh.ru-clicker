@@ -140,4 +140,22 @@ async def api_raw_accounts_set(request: Request):
     # Atomic swap: clear()+extend() — non-atomic, readers могут увидеть [] между ними.
     accounts_data[:] = merged
     save_accounts()
-    return {"ok": True, "count": len(merged)}
+    # Обновляем in-memory acc dict для уже-работающих AccountState'ов:
+    # если имя совпадает — переписываем cookies/letter/urls/use_oauth.
+    # Воркеры тут же подхватят свежие куки на следующем HTTP-запросе. Полная
+    # пересборка account_states тут небезопасна — убъёт running threads.
+    try:
+        from app.instances import bot as _bot
+        by_name = {a.get("name", ""): a for a in merged}
+        for state in _bot.account_states:
+            new_acc = by_name.get(state.name)
+            if new_acc:
+                state.acc.update(new_acc)
+                state.cookies_expired = False
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "count": len(merged),
+        "warning": "Добавление/удаление аккаунтов требует перезапуска бота.",
+    }

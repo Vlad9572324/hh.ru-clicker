@@ -15,6 +15,10 @@ except Exception:
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True, mode=0o700)
+try:
+    DATA_DIR.chmod(0o700)
+except Exception:
+    pass
 
 CONFIG_FILE = DATA_DIR / "config.json"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

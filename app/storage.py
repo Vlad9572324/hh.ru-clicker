@@ -14,6 +14,10 @@ from app.logging_utils import log_debug
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True, mode=0o700)
+try:
+    DATA_DIR.chmod(0o700)
+except Exception:
+    pass
 
 APPLIED_FILE = DATA_DIR / "applied_vacancies.json"
 TESTS_FILE = DATA_DIR / "test_required_vacancies.json"

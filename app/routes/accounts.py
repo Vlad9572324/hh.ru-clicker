@@ -79,6 +79,10 @@ def _parse_cookies_str(raw: str) -> tuple:
             # или requests/http.client крашится навсегда на этой сессии (kimi-search-3 #5,#8).
             k = k.strip()
             v = "".join(ch for ch in v.strip() if ch == "\t" or 0x20 <= ord(ch) < 0x7f or ord(ch) >= 0xa0)
+            # Если после strip значение пустое — не добавляем,
+            # иначе downstream `hhtoken in cookies` проходит, а реально auth-token нет (r10-1 #4,#9).
+            if not v:
+                continue
             cookies[k] = v
 
     return cookies, raw_line

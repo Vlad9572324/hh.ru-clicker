@@ -2789,8 +2789,8 @@ function appliedFillTable(items) {
       : '';
     const hasTitle = !!(item.title || item.company);
     const titleCell = item.title
-      ? `<a href="${esc(item.url)}" target="_blank">${esc(item.title)}</a>`
-      : `<a href="${esc(item.url)}" target="_blank" style="color:var(--dim)">hh.ru/vacancy/${esc(item.vacancy_id)}</a>`;
+      ? `<a href="${safeHref(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>`
+      : `<a href="${safeHref(item.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--dim)">hh.ru/vacancy/${esc(item.vacancy_id)}</a>`;
     return `<tr class="${hasTitle ? '' : 'row-no-title'}">
       <td class="c-dim" style="white-space:nowrap">${dt}</td>
       <td style="white-space:nowrap">${esc(acc)}</td>
@@ -2902,8 +2902,8 @@ function dbFillTable(items) {
       ? new Date(item.at).toLocaleString('ru-RU', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
       : '';
     const titleCell = item.title
-      ? `<a href="${esc(item.url)}" target="_blank">${esc(item.title)}</a>`
-      : `<a href="${esc(item.url)}" target="_blank" style="color:var(--dim)">hh.ru/vacancy/${esc(item.vacancy_id)}</a>`;
+      ? `<a href="${safeHref(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>`
+      : `<a href="${safeHref(item.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--dim)">hh.ru/vacancy/${esc(item.vacancy_id)}</a>`;
     const accs = (item.applied_by || [])
       .map(a => `<span style="font-size:10px;background:var(--bg-card2);padding:1px 5px;border-radius:3px">${esc(a.replace(/^.*?\((.+?)\).*$/, '$1') || a)}</span>`)
       .join(' ');
@@ -2962,7 +2962,7 @@ async function loadTests() {
         <td>${esc(item.company)}</td>
         <td>${resumeLink}</td>
         <td>${appliedCell}</td>
-        <td><a href="${esc(item.url || '')}" target="_blank">hh.ru/vacancy/${esc(item.vacancy_id)}</a></td>
+        <td><a href="${safeHref(item.url || '')}" target="_blank" rel="noopener noreferrer">hh.ru/vacancy/${esc(item.vacancy_id)}</a></td>
       </tr>`;
     }).join('');
   } catch(e) {}
@@ -3938,7 +3938,7 @@ async function loadAllResumes(btn) {
           </div>
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">
-          <a href="${esc(r.edit_url)}" target="_blank" class="btn-sm" style="font-size:11px">✏️ hh.ru</a>
+          <a href="${safeHref(r.edit_url)}" target="_blank" rel="noopener noreferrer" class="btn-sm" style="font-size:11px">✏️ hh.ru</a>
           <button class="btn-sm" style="font-size:11px" onclick="quickEditResume('${esc(r.hash)}')">⚡ Быстро</button>
         </div>
       </div>`;
