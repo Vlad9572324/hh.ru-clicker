@@ -3,6 +3,7 @@ Logging utilities and login-page detection helper.
 """
 
 import logging
+import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def _get_logger() -> logging.Logger:
 def log_debug(message: str):
     """Записать отладочное сообщение в файл (с ротацией)."""
     _get_logger().debug(message)
+
+
+def log_exception(message: str, exc: Exception | None = None, **fields):
+    """Логировать исключение с traceback. Использовать внутри except-блока."""
+    parts = [message]
+    if exc is not None:
+        parts.append(f"exc={exc}")
+    for k, v in fields.items():
+        parts.append(f"{k}={v}")
+    log_debug(" | ".join(parts) + "\n" + traceback.format_exc())
 
 
 def _is_login_page(html: str) -> bool:

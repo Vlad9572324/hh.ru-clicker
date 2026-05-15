@@ -4,9 +4,11 @@ BotManager — core bot logic with per-account worker threads.
 
 import asyncio
 import aiohttp
+import json
 import random
 from datetime import datetime, timedelta
 from collections import deque
+from pathlib import Path
 import time
 import threading
 import requests
@@ -16,7 +18,7 @@ try:
 except Exception:
     _MSK = None  # fallback на local
 
-from app.logging_utils import log_debug, _is_login_page
+from app.logging_utils import log_debug, log_exception, _is_login_page
 
 
 def _today_msk() -> str:
@@ -38,6 +40,7 @@ from app.storage import (
     add_applied, is_applied, add_test_vacancy, is_test, get_stats,
     load_browser_sessions, save_browser_sessions,
     upsert_interview, get_no_chat_neg_ids, get_replied_keys,
+    _schedule_save,
 )
 
 from app.oauth import (
@@ -74,6 +77,7 @@ from app.hh_negotiations import (
 
 from app.state import AccountState
 
+LLM_LOG_FILE = Path("data") / "llm_log.jsonl"
 
 # -- Async page fetcher (used only by BotManager) --
 
@@ -122,6 +126,16 @@ class BotManager:
         self._hr_contacts_lock = threading.Lock()
         # Guards activate_session against concurrent WS calls spawning duplicate workers
         self._activate_lock = threading.Lock()
+
+    def _persist_llm_log(self, entry: dict):
+        """Append-only JSONL write-through for LLM reply events (async via _schedule_save)."""
+        def _write():
+            try:
+                with open(LLM_LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except Exception as e:
+                log_debug(f"llm_log persist error: {e}")
+        _schedule_save(_write)
 
     def _build_session_urls(self, resume_hash: str) -> list[str]:
         """URL поиска для браузерной сессии: resume-URL + keyword-URLs из глобального пула."""
@@ -729,9 +743,7 @@ class BotManager:
                 self._run_account_worker_inner(idx, state)
                 break  # normal exit
             except Exception as e:
-                log_debug(f"WORKER CRASHED [{state.short}]: {e}")
-                import traceback
-                log_debug(traceback.format_exc())
+                log_exception(f"WORKER CRASHED [{state.short}]", e)
                 state.status = "error"
                 state.status_detail = f"Перезапуск через 30с ({str(e)[:30]})"
                 self._add_log(state.short, state.color, f"⚠️ Worker упал: {str(e)[:50]}. Перезапуск через 30с", "error")
@@ -875,9 +887,7 @@ class BotManager:
             try:
                 results_by_url, salary_map, schedule_map = asyncio.run(self._collect_all_urls_parallel(state))
             except Exception as e:
-                log_debug(f"COLLECT CRASH [{state.short}]: {e}")
-                import traceback
-                log_debug(traceback.format_exc())
+                log_exception(f"COLLECT CRASH [{state.short}]", e)
                 state.status = "error"
                 state.status_detail = f"Ошибка сбора: {str(e)[:50]}"
                 time.sleep(60)
@@ -1242,6 +1252,16 @@ class BotManager:
                                               f"\U0001f6ab ЛИМИТ при опросе! Повторная попытка в {state.limit_reset_time.strftime('%H:%M')}",
                                               "error")
                                 break
+                            elif q_result == "auth_error":
+                                log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=questionnaire")
+                                state.cookies_expired = True
+                                state.paused = True
+                                self._add_log(
+                                    state.short, state.color,
+                                    "⚠️ Куки протухли! Обновите куки и снимите паузу.", "error",
+                                )
+                                self._add_acc_event(state, "⚠️", "error", "Авторизация", "", "Обновите куки")
+                                break
                             else:
                                 # Не удалось — считаем неудачи
                                 state._test_failures[vid] = state._test_failures.get(vid, 0) + 1
@@ -1265,6 +1285,7 @@ class BotManager:
                         self._add_response(state, vid, "", "", "already")
 
                     elif result == "limit":
+                        log_debug(f"HH_LIMIT [{state.short}] vid={vid} retry_after={info.get('retry_after_seconds', '?')}")
                         state.limit_exceeded = True
                         if CONFIG.stop_on_hh_limit:
                             # Hard stop — no retries
@@ -1300,8 +1321,10 @@ class BotManager:
                                     "⚠️ Web cookies истекли (OAuth откликов продолжает работать)", "warning",
                                 )
                                 state._web_auth_warned = True
+                            log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply")
                             state.cookies_expired = True
                         else:
+                            log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply")
                             state.cookies_expired = True
                             state.paused = True
                             self._add_log(
@@ -1410,6 +1433,7 @@ class BotManager:
                 state.status_detail = f"Загрузка {completed}/{total_tasks}"
                 if html and _is_login_page(html):
                     if not (state.use_oauth or CONFIG.use_oauth_apply):
+                        log_debug(f"AUTH_ERROR [{state.short}] vid=- flow=collect")
                         state.cookies_expired = True
                     return url, set(), {}, {}, {}
                 if html:
@@ -1708,6 +1732,16 @@ class BotManager:
                             "neg_id": neg_id, "employer_msg": employer_msg[:50],
                             "bot_reply": f"\U0001f916 Кнопка: {btn_text}", "sent": True,
                         })
+                        self._persist_llm_log({
+                            "time": datetime.now().isoformat(timespec="seconds"),
+                            "acc": state.short,
+                            "neg_id": str(neg_id),
+                            "last_msg_id": str(last_msg_id),
+                            "employer": employer_short,
+                            "reply_len": len(btn_text),
+                            "send_ok": True,
+                            "source": "robot",
+                        })
                     elif ok == "chat_not_found":
                         state._llm_no_chat.add(neg_id)
                         state.llm_replied_msgs.add(key)
@@ -1793,6 +1827,16 @@ class BotManager:
                             "neg_id": neg_id, "employer_msg": employer_msg,
                             "bot_reply": reply_text, "sent": True,
                         })
+                        self._persist_llm_log({
+                            "time": datetime.now().isoformat(timespec="seconds"),
+                            "acc": state.short,
+                            "neg_id": str(neg_id),
+                            "last_msg_id": str(last_msg_id),
+                            "employer": employer,
+                            "reply_len": len(reply_text),
+                            "send_ok": True,
+                            "source": "auto_send",
+                        })
                     else:
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
@@ -1808,6 +1852,16 @@ class BotManager:
                             "neg_id": neg_id, "employer_msg": employer_msg,
                             "bot_reply": reply_text, "sent": False,
                         })
+                        self._persist_llm_log({
+                            "time": datetime.now().isoformat(timespec="seconds"),
+                            "acc": state.short,
+                            "neg_id": str(neg_id),
+                            "last_msg_id": str(last_msg_id),
+                            "employer": employer,
+                            "reply_len": len(reply_text),
+                            "send_ok": False,
+                            "source": "draft_error",
+                        })
                 else:
                     state.llm_replied_msgs.add(key)
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
@@ -1820,10 +1874,20 @@ class BotManager:
                         "neg_id": neg_id, "employer_msg": employer_msg,
                         "bot_reply": reply_text, "sent": False,
                     })
+                    self._persist_llm_log({
+                        "time": datetime.now().isoformat(timespec="seconds"),
+                        "acc": state.short,
+                        "neg_id": str(neg_id),
+                        "last_msg_id": str(last_msg_id),
+                        "employer": employer,
+                        "reply_len": len(reply_text),
+                        "send_ok": False,
+                        "source": "draft_manual",
+                    })
 
                 time.sleep(3)  # rate limit between messages
             except Exception as e:
-                log_debug(f"_process_llm_replies {neg_id}: {e}")
+                log_exception(f"_process_llm_replies {neg_id}", e)
                 try:
                     with self._llm_sent_lock:
                         to_remove = self._llm_sent_by_neg_id.pop(neg_id, set())
@@ -1851,13 +1915,12 @@ class BotManager:
         Без этого цикла один краш парсинга / network exception → у аккаунта
         НАВСЕГДА выключаются stats + LLM до перезапуска процесса (swarm-1 critical).
         """
-        import traceback
         while not self._stop_event.is_set() and not getattr(state, "_deleted", False):
             try:
                 self._fetch_hh_stats_worker_inner(idx, state)
                 return  # inner вышел нормально (stop_event / _deleted) — выходим из restart-loop
             except Exception as e:
-                log_debug(f"STATS WORKER CRASHED [{state.short}]: {e}\n{traceback.format_exc()}")
+                log_exception(f"STATS WORKER CRASHED [{state.short}]", e)
                 self._add_log(
                     state.short, state.color,
                     f"⚠️ Stats worker упал: {str(e)[:80]} — рестарт через 30с",
@@ -1884,6 +1947,7 @@ class BotManager:
             try:
                 stats = fetch_hh_negotiations_stats(state.acc)
                 if stats.get("auth_error"):
+                    log_debug(f"AUTH_ERROR [{state.short}] vid=- flow=stats")
                     state.cookies_expired = True
                     self._add_log(
                         state.short, state.color,
@@ -1965,7 +2029,7 @@ class BotManager:
                         self._add_log(state.short, state.color, "\U0001f916 LLM: нет переговоров в статусе Интервью, проверяю чаты…", "info")
                     self._process_llm_replies(state)
             except Exception as e:
-                log_debug(f"HH stats fetch error ({state.short}): {e}")
+                log_exception(f"HH stats fetch error ({state.short})", e)
             finally:
                 state.hh_stats_loading = False
 

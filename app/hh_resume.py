@@ -41,7 +41,8 @@ def parse_hh_lux_ssr(html: str) -> dict:
         return {}
     try:
         return json.loads(m.group(1))
-    except Exception:
+    except Exception as e:
+        log_debug(f"parse_hh_lux_ssr error: {e}")
         return {}
 
 
@@ -221,6 +222,7 @@ def fetch_resume_text(acc: dict) -> str:
         if cached:
             text, ts = cached
             if now - ts < _RESUME_CACHE_TTL:
+                _cleanup_resume_cache(now)
                 return text
     _cleanup_resume_cache(now)
 
@@ -357,21 +359,36 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
 
         # Fallback: парсим HTML если SSR пустой
         if not result:
-            entries = re.findall(
-                r'href="/employer/(\d+)[^"]*"[^>]*>.*?<span[^>]*>([^<]+)</span>.*?'
-                r'(?:<time[^>]*datetime="([^"]*)")?',
-                html, re.DOTALL
-            )
+            soup = BeautifulSoup(html, "html.parser")
             seen = set()
-            for employer_id, name, date in entries[:limit]:
-                if employer_id not in seen:
-                    seen.add(employer_id)
-                    result.append({
-                        "employer_id": employer_id,
-                        "name": name.strip(),
-                        "date": date[:10] if date else "",
-                        "vacancy": "",
-                    })
+            for a in soup.find_all("a", href=re.compile(r"/employer/\d+")):
+                m = re.search(r"/employer/(\d+)", a.get("href", ""))
+                if not m:
+                    continue
+                employer_id = m.group(1)
+                if employer_id in seen:
+                    continue
+                seen.add(employer_id)
+                name = a.get_text(strip=True)
+                date = ""
+                # Walk siblings and parent to find a <time> tag
+                for sibling in list(a.next_siblings) + list(a.parent.next_siblings if a.parent else []):
+                    if sibling and getattr(sibling, "name", None) == "time":
+                        date = sibling.get("datetime", "")[:10]
+                        break
+                    if sibling and getattr(sibling, "find", None):
+                        t = sibling.find("time")
+                        if t and t.get("datetime"):
+                            date = t.get("datetime")[:10]
+                            break
+                result.append({
+                    "employer_id": employer_id,
+                    "name": name or "Аноним",
+                    "date": date,
+                    "vacancy": "",
+                })
+                if len(result) >= limit:
+                    break
     except Exception as e:
         log_debug(f"fetch_resume_view_history error: {e}")
     return result
@@ -547,8 +564,8 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                             "name": gdata.get("title", gid),
                             "count": gdata.get("count", 0),
                         })
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                except (json.JSONDecodeError, KeyError) as e:
+                    log_debug(f"_analyze_resume clusters parse error: {e}")
 
             vacancy_count = 0
             try:
@@ -695,7 +712,8 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                         if not isinstance(inactive_min, (int, float)):
                             try:
                                 inactive_min = int(inactive_min)
-                            except (ValueError, TypeError):
+                            except (ValueError, TypeError) as e:
+                                log_debug(f"_analyze_resume inactive_min parse error: {e}")
                                 inactive_min = 0
                         inactive_days = inactive_min / 1440.0
                         if inactive_days < 3:

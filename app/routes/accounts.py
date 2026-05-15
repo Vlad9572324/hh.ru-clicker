@@ -384,7 +384,7 @@ async def api_resume_views(idx: int):
                 "free_touches": s.resume_free_touches,
             }
         }
-    return {"error": "Invalid idx"}
+    return {"ok": False, "error": "Invalid idx"}
 
 
 @router.post("/api/account/{idx}/oauth_token")
@@ -414,7 +414,7 @@ async def api_oauth_status(idx: int):
     """Check OAuth token status."""
     acc = bot._get_apply_acc(idx)
     if acc is None:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     rh = acc.get("resume_hash", "")
     with _oauth_lock:
         info = _oauth_tokens.get(rh, {})
@@ -443,10 +443,10 @@ async def api_oauth_touch(idx: int):
 async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
     """Test LLM questionnaire answering without submitting."""
     if not vacancy_id:
-        return {"error": "vacancy_id required"}
+        return {"ok": False, "error": "vacancy_id required"}
     acc = bot._get_apply_acc(idx)
     if not acc:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     def _do():
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         r = requests.get(
@@ -476,7 +476,7 @@ async def api_resume_audit(idx: int, extra_terms: str = ""):
     """Аудит резюме — анализ видимости для HR."""
     acc = bot._get_apply_acc(idx)
     if acc is None:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     extra = [t.strip() for t in (extra_terms or "").split(",") if t.strip()] if extra_terms else []
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _analyze_resume, acc, extra)
@@ -487,7 +487,7 @@ async def api_hot_leads(idx: int):
     """Possible job offers — горячие лиды, работодатели готовые пригласить."""
     acc = bot._get_apply_acc(idx)
     if acc is None:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     try:
         r = requests.get(
             "https://hh.ru/shards/applicant/negotiations/possible_job_offers",
@@ -522,7 +522,7 @@ async def api_remindable(idx: int):
     """Return negotiations where responseReminderState.allowed is True (can send reminder)."""
     acc = bot._get_apply_acc(idx)
     if acc is None:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
         r = requests.get(
@@ -699,7 +699,7 @@ async def api_all_resumes(idx: int):
     """List all resumes for this account (including clones). Uses HTML page for full data."""
     acc = bot._get_apply_acc(idx)
     if acc is None:
-        return {"error": "Invalid idx"}
+        return {"ok": False, "error": "Invalid idx"}
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     try:
         r = requests.get(
@@ -707,6 +707,8 @@ async def api_all_resumes(idx: int):
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": "https://hh.ru/"},
             cookies=acc.get("cookies", {}), timeout=15,
         )
+        if r.status_code in (401, 403) or _is_login_page(r.text):
+            return {"resumes": [], "error": "auth_error"}
         if r.status_code != 200:
             return {"resumes": [], "error": f"HTTP {r.status_code}"}
         ssr = parse_hh_lux_ssr(r.text)
@@ -758,7 +760,7 @@ async def api_decline_discards(idx: int):
             "info",
         )
         return {"declined": count}
-    return {"error": "Invalid idx"}
+    return {"ok": False, "error": "Invalid idx"}
 
 
 @router.get("/api/negotiations/{idx}")
@@ -779,4 +781,4 @@ async def api_negotiations(idx: int):
             "possible_offers": s.hh_possible_offers,
             "updated": s.hh_stats_updated.isoformat() if s.hh_stats_updated else None,
         }
-    return {"error": "Invalid idx"}
+    return {"ok": False, "error": "Invalid idx"}

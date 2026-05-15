@@ -22,7 +22,7 @@ async def api_debug_session(idx: int):
     """Показать SSR структуру для браузерной сессии (для отладки resume_hash)."""
     temp_idx = idx - len(bot.account_states)
     if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
-        return {"error": "session not found"}
+        return {"ok": False, "error": "session not found"}
     ts = bot.temp_sessions[temp_idx]
     raw_line = ts.get("_raw_cookie_line", "")
     if not raw_line:
@@ -34,17 +34,20 @@ async def api_debug_session(idx: int):
     }
     loop = asyncio.get_event_loop()
     def _fetch():
-        r = requests.get("https://hh.ru/applicant/resumes", headers=headers, timeout=15)
-        ssr = parse_hh_lux_ssr(r.text)
-        preview = {}
-        for k, v in ssr.items():
-            if isinstance(v, list) and v:
-                preview[k] = [v[0]] if len(v) > 0 else []
-            elif isinstance(v, dict):
-                preview[k] = {kk: vv for kk, vv in list(v.items())[:5]}
-            else:
-                preview[k] = v
-        return {"status": r.status_code, "ssr_keys": list(ssr.keys()), "ssr_preview": preview}
+        try:
+            r = requests.get("https://hh.ru/applicant/resumes", headers=headers, timeout=15)
+            ssr = parse_hh_lux_ssr(r.text)
+            preview = {}
+            for k, v in ssr.items():
+                if isinstance(v, list) and v:
+                    preview[k] = [v[0]] if len(v) > 0 else []
+                elif isinstance(v, dict):
+                    preview[k] = {kk: vv for kk, vv in list(v.items())[:5]}
+                else:
+                    preview[k] = v
+            return {"status": r.status_code, "ssr_keys": list(ssr.keys()), "ssr_preview": preview}
+        except requests.RequestException as e:
+            return {"ok": False, "error": str(e)[:100]}
     result = await loop.run_in_executor(None, _fetch)
     return result
 
@@ -78,7 +81,7 @@ async def api_debug_neg_ids(idx: int):
     elif idx - len(bot.account_states) in bot.temp_states:
         state = bot.temp_states[idx - len(bot.account_states)]
     else:
-        return {"error": "account not found"}
+        return {"ok": False, "error": "account not found"}
 
     acc = state.acc
     cookies = acc["cookies"]
@@ -86,12 +89,15 @@ async def api_debug_neg_ids(idx: int):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    resp = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: requests.get(
-            "https://hh.ru/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
-            cookies=cookies, headers=headers_req, timeout=15,
+    try:
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: requests.get(
+                "https://hh.ru/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
+                cookies=cookies, headers=headers_req, timeout=15,
+            )
         )
-    )
+    except requests.RequestException as e:
+        return {"ok": False, "error": str(e)[:100]}
     body = resp.text
     parts = re.split(r'data-qa="negotiations-item"', body)
     first_item_html = parts[1][:3000] if len(parts) > 1 else "NO ITEMS FOUND"
@@ -136,7 +142,7 @@ async def api_debug_thread(idx: int, chat_id: str):
     elif idx - len(bot.account_states) in bot.temp_states:
         state = bot.temp_states[idx - len(bot.account_states)]
     else:
-        return {"error": "account not found"}
+        return {"ok": False, "error": "account not found"}
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: fetch_negotiation_thread(state.acc, chat_id)
     )
@@ -151,7 +157,7 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
     elif idx - len(bot.account_states) in bot.temp_states:
         state = bot.temp_states[idx - len(bot.account_states)]
     else:
-        return {"error": "account not found"}
+        return {"ok": False, "error": "account not found"}
     acc = state.acc
     def _fetch():
         headers = {
@@ -159,10 +165,13 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
             "Accept": "application/json, */*",
             "Referer": "https://hh.ru/applicant/negotiations",
         }
-        resp = requests.get(
-            f"https://hh.ru/chat/messages?chatId={chat_id}",
-            cookies=acc["cookies"], headers=headers, timeout=15,
-        )
+        try:
+            resp = requests.get(
+                f"https://hh.ru/chat/messages?chatId={chat_id}",
+                cookies=acc["cookies"], headers=headers, timeout=15,
+            )
+        except requests.RequestException as e:
+            return {"ok": False, "error": str(e)[:100]}
         try:
             data = resp.json()
         except Exception:

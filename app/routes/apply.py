@@ -127,7 +127,10 @@ async def api_apply_check(body: dict):
     """
     Шаг 1: проверяет вакансию — можно ли откликнуться, требует ли опрос.
     """
-    acc_idx = int(body.get("account_idx", 0))
+    try:
+        acc_idx = int(body.get("account_idx", 0))
+    except (ValueError, TypeError):
+        return {"status": "error", "message": "account_idx must be an integer"}
     raw = body.get("vacancy_id", "").strip()
     m = re.search(r'/vacancy/(\d+)', raw) or re.match(r'^(\d+)$', raw)
     if not m:
@@ -202,7 +205,10 @@ async def api_apply_submit(body: dict):
     """
     Шаг 2: отправляет отклик с заполненными ответами на опрос.
     """
-    acc_idx = int(body.get("account_idx", 0))
+    try:
+        acc_idx = int(body.get("account_idx", 0))
+    except (ValueError, TypeError):
+        return {"status": "error", "message": "account_idx must be an integer"}
     vid = str(body.get("vacancy_id", "")).strip()
     letter = body.get("letter", "")
     user_answers = body.get("answers", {})

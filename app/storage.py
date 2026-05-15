@@ -24,6 +24,11 @@ SESSIONS_FILE = DATA_DIR / "browser_sessions.json"
 # Без pool каждый upsert/save спавнит новый thread (8MB stack) под нагрузкой растёт без bound (swarm-11 #2).
 _save_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="storage-save")
 
+_INTERVIEWS_MAX = 10000
+_INTERVIEWS_EVICT = 1000
+_APPLIED_MAX = 100000
+_APPLIED_EVICT = 1000
+EVENTS_FILE = DATA_DIR / "events.jsonl"
 
 def _schedule_save(fn):
     """Async-save: submit на shared pool вместо нового Thread каждый раз.
@@ -141,6 +146,7 @@ def _save_interviews_async():
     lock = _save_interviews_lock
     if not lock.acquire(blocking=False):
         return  # другой поток уже сохраняет — пропускаем
+    tmp = None
     try:
         with _cache_lock:
             data = copy.deepcopy(_cache_interviews) if _cache_interviews else {}
@@ -148,6 +154,13 @@ def _save_interviews_async():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
         tmp.replace(INTERVIEWS_FILE)
+    except Exception as e:
+        log_debug(f"_save_interviews_async error: {e}")
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
     finally:
         lock.release()
 
@@ -216,26 +229,46 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
         else:
             record["status"] = "pending_reply"
         _cache_interviews[neg_id] = record
+        if len(_cache_interviews) > _INTERVIEWS_MAX:
+            protected = {
+                nid for nid, r in _cache_interviews.items()
+                if r.get("llm_sent") and r.get("replied_msg_id")
+            }
+            candidates = [
+                (r.get("last_seen", ""), nid)
+                for nid, r in _cache_interviews.items()
+                if nid not in protected
+            ]
+            candidates.sort()
+            for _, nid in candidates[:_INTERVIEWS_EVICT]:
+                del _cache_interviews[nid]
     _schedule_save(_save_interviews_async)
 
 
-def get_no_chat_neg_ids() -> set:
+def get_no_chat_neg_ids(since: datetime = None) -> set:
     """Return set of neg_ids where chatik permanently returned 409 (chat doesn't exist)."""
     _load_cache()
+    since_str = since.isoformat(timespec="seconds") if since else None
     with _cache_lock:
-        return {nid for nid, r in _cache_interviews.items() if r.get("chat_not_found")}
+        return {
+            nid for nid, r in _cache_interviews.items()
+            if r.get("chat_not_found")
+            and (not since_str or r.get("last_seen", "") >= since_str)
+        }
 
 
-def get_replied_keys() -> set:
+def get_replied_keys(since: datetime = None) -> set:
     """Persisted LLM dedup: returns {(neg_id, replied_msg_id)} for chats already replied to.
     Used to seed `state.llm_replied_msgs` on startup so we don't re-reply after restart.
     """
     _load_cache()
+    since_str = since.isoformat(timespec="seconds") if since else None
     with _cache_lock:
         return {
             (str(nid), str(r["replied_msg_id"]))
             for nid, r in _cache_interviews.items()
             if r.get("llm_sent") and r.get("replied_msg_id")
+            and (not since_str or r.get("last_seen", "") >= since_str)
         }
 
 
@@ -303,6 +336,17 @@ def add_applied(account_name: str, vacancy_id: str, info: dict = None):
             "salary_to": new_info.get("salary_to") or existing.get("salary_to"),
             "at": datetime.now().isoformat()
         }
+        total = sum(len(v) for v in _cache_applied.values())
+        if total > _APPLIED_MAX:
+            candidates = []
+            for acc_name, vacancies in _cache_applied.items():
+                for vid, item in vacancies.items():
+                    candidates.append((item.get("at", ""), acc_name, vid))
+            candidates.sort()
+            for _, acc_name, vid in candidates[:_APPLIED_EVICT]:
+                del _cache_applied[acc_name][vid]
+                if not _cache_applied[acc_name]:
+                    del _cache_applied[acc_name]
     _schedule_save(_save_applied_async)
 
 
@@ -449,3 +493,16 @@ def get_test_list(limit: int = 300) -> list:
         })
     items.sort(key=lambda x: x.get("at", ""), reverse=True)
     return items[:limit]
+
+
+def record_event(kind: str, **fields):
+    """Append one JSON line to events.jsonl (append-only forensics log)."""
+    line = {"kind": kind, "ts": datetime.now().isoformat(timespec="seconds")}
+    line.update(fields)
+    def _write():
+        try:
+            with open(EVENTS_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+        except Exception as e:
+            log_debug(f"record_event error: {e}")
+    _schedule_save(_write)
