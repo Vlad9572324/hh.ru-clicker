@@ -3792,7 +3792,7 @@ async function oauthGetToken(btn) {
     const d = await r.json();
     if (d.ok) {
       const hrs = Math.round(d.expires_in / 3600);
-      if (st) { st.textContent = `✅ Токен: ${d.token_prefix} | ${hrs}ч осталось | refresh: ${d.has_refresh ? 'да' : 'нет'}`; st.style.color = 'var(--green)'; }
+      if (st) { st.textContent = `✅ Токен получен | ${hrs}ч осталось | refresh: ${d.has_refresh ? 'да' : 'нет'}`; st.style.color = 'var(--green)'; }
     } else {
       if (st) { st.textContent = '❌ ' + (d.error || 'Ошибка'); st.style.color = 'var(--red)'; }
     }

@@ -11,8 +11,22 @@ from collections import deque
 import time
 import threading
 import requests
+try:
+    from zoneinfo import ZoneInfo
+    _MSK = ZoneInfo("Europe/Moscow")
+except Exception:
+    _MSK = None  # fallback на local
 
 from app.logging_utils import log_debug, _is_login_page
+
+
+def _today_msk() -> str:
+    """Дата по Москве. HH работает в MSK; используем её как «день» бота
+    чтобы midnight rollover не зависел от TZ контейнера (Docker = UTC по дефолту).
+    """
+    if _MSK is not None:
+        return datetime.now(_MSK).strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 from app.config import (
     CONFIG, accounts_data,
@@ -139,6 +153,10 @@ class BotManager:
                 "letter": ts.get("letter", ""),
                 "cookies": ts.get("cookies", {}),
                 "urls": self._build_session_urls(ts["resume_hash"]),
+                # Подтягиваем persistent флаги из temp_sessions — без этого
+                # после restart browser-сессии теряли use_oauth/apply_tests (swarm-12 #9).
+                "use_oauth": bool(ts.get("use_oauth", False)),
+                "apply_tests": bool(ts.get("apply_tests", False)),
             }
             state = AccountState(acc)
             self.temp_states[temp_idx] = state
@@ -681,18 +699,24 @@ class BotManager:
             while (self.paused or state.paused) and not self._stop_event.is_set() and not state._deleted:
                 # Auto-reset daily limit pause when new day starts
                 if state.hard_stopped:
-                    today = datetime.now().strftime("%Y-%m-%d")
+                    today = _today_msk()
                     if state.daily_date != today:
                         state.daily_sent = 0
                         state.daily_date = today
                         state.hard_stopped = False
-                        state.paused = False
+                        # Не снимаем manual pause — если юзер сам остановил аккаунт,
+                        # midnight-rollover не должен его перезапускать (swarm-12 #8).
+                        if state.paused_reason != "manual":
+                            state.paused = False
+                            state.paused_reason = ""
                         state.limit_exceeded = False
                         state.limit_reset_time = None
                         state.status = "idle"
                         state.status_detail = "Новый день — лимит сброшен"
                         self._add_log(state.short, state.color,
-                            "\U0001f305 Новый день! Лимит сброшен, продолжаю работу", "success")
+                            "\U0001f305 Новый день! Лимит сброшен" + (
+                                "" if state.paused_reason != "manual" else ", аккаунт остался на manual pause"),
+                            "success")
                         break
                 if state.hard_stopped:
                     state.status = "limit"
@@ -978,7 +1002,7 @@ class BotManager:
                     self.vacancy_queues[state.short]["current"] = i
 
                 # Daily limit check
-                today = datetime.now().strftime("%Y-%m-%d")
+                today = _today_msk()
                 if state.daily_date != today:
                     state.daily_sent = 0
                     state.daily_date = today
@@ -991,6 +1015,7 @@ class BotManager:
                 if CONFIG.daily_apply_limit > 0 and state.daily_sent >= CONFIG.daily_apply_limit:
                     state.hard_stopped = True
                     state.paused = True
+                    state.paused_reason = "limit"  # чтобы midnight-rollover мог снять
                     state.status = "limit"
                     state.status_detail = f"Дневной лимит: {state.daily_sent}/{CONFIG.daily_apply_limit}. Сброс завтра в 00:00"
                     self._add_log(state.short, state.color,
@@ -1061,6 +1086,10 @@ class BotManager:
                     results = asyncio.run(_make_send_batch(batch)())
 
                 for j, (vid, result_data) in enumerate(zip(batch, results)):
+                    # Если auto-pause сработал на предыдущей итерации —
+                    # не продолжаем отправлять оставшиеся вакансии (swarm-12 #10).
+                    if state.paused or state.hard_stopped:
+                        break
                     if isinstance(result_data, Exception):
                         state.errors += 1
                         state.consecutive_errors += 1
@@ -1076,7 +1105,7 @@ class BotManager:
                     if result == "sent":
                         state.sent += 1
                         # Daily counter
-                        today = datetime.now().strftime("%Y-%m-%d")
+                        today = _today_msk()
                         if state.daily_date != today:
                             state.daily_sent = 0
                             state.daily_date = today
@@ -1151,7 +1180,7 @@ class BotManager:
                                 state.questionnaire_sent += 1
                                 state.consecutive_errors = 0
                                 # Daily counter
-                                today = datetime.now().strftime("%Y-%m-%d")
+                                today = _today_msk()
                                 if state.daily_date != today:
                                     state.daily_sent = 0
                                     state.daily_date = today

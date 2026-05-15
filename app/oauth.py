@@ -30,6 +30,33 @@ _oauth_tokens: dict = {}  # {resume_hash: {access_token, refresh_token, expires_
 _oauth_lock = threading.Lock()
 _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чтобы не интерливить файл
 
+# Per-account locks для refresh/authorize: иначе два потока могут одновременно
+# увидеть expired token и оба пойти refresh с одним и тем же refresh_token.
+# HH ротирует refresh tokens — второй запрос получит invalid_grant. (swarm-7 #1)
+_oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
+_oauth_refresh_locks_lock = threading.Lock()
+
+
+def _get_refresh_lock(resume_hash: str) -> threading.Lock:
+    with _oauth_refresh_locks_lock:
+        lock = _oauth_refresh_locks.get(resume_hash)
+        if lock is None:
+            lock = threading.Lock()
+            _oauth_refresh_locks[resume_hash] = lock
+        return lock
+
+
+def invalidate_oauth_token(resume_hash: str) -> None:
+    """Удалить кэшированный токен (на 401/403 от API). После вызова следующий
+    `_obtain_oauth_token` сделает свежий refresh или authorize."""
+    if not resume_hash:
+        return
+    with _oauth_lock:
+        if resume_hash in _oauth_tokens:
+            _oauth_tokens.pop(resume_hash, None)
+            _save_oauth_tokens()
+            log_debug(f"OAuth: invalidated token for {resume_hash[:12]} (auth_error)")
+
 
 def _load_oauth_tokens():
     """Load persisted OAuth tokens from disk."""
@@ -92,103 +119,116 @@ def _obtain_oauth_token(acc: dict) -> str:
         if cached and cached.get("expires_at", 0) > time.time() + 300:
             return cached["access_token"]
 
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    # Сериализуем refresh/authorize per-account: один поток делает HTTP, остальные ждут.
+    refresh_lock = _get_refresh_lock(resume_hash)
+    with refresh_lock:
+        # Double-checked: пока ждали лок, другой поток мог уже обновить токен.
+        with _oauth_lock:
+            cached = _oauth_tokens.get(resume_hash)
+            if cached and cached.get("expires_at", 0) > time.time() + 300:
+                return cached["access_token"]
 
-    # Try refresh first
-    with _oauth_lock:
-        cached = _oauth_tokens.get(resume_hash, {})
-    refresh = cached.get("refresh_token", "")
-    if refresh:
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        # Try refresh first
+        with _oauth_lock:
+            cached = _oauth_tokens.get(resume_hash, {})
+        refresh = cached.get("refresh_token", "")
+        if refresh:
+            try:
+                r = requests.post("https://hh.ru/oauth/token", data={
+                    "grant_type": "refresh_token",
+                    "client_id": _HH_OAUTH_CLIENT_ID,
+                    "client_secret": _HH_OAUTH_CLIENT_SECRET,
+                    "refresh_token": refresh,
+                }, headers={"User-Agent": ua}, timeout=15)
+                if r.status_code == 200:
+                    d = r.json()
+                    # Не перетираем валидный refresh_token пустым (HH может опустить).
+                    new_refresh = d.get("refresh_token") or refresh
+                    with _oauth_lock:
+                        _oauth_tokens[resume_hash] = {
+                            "access_token": d["access_token"],
+                            "refresh_token": new_refresh,
+                            "expires_at": time.time() + d.get("expires_in", 1209599),
+                        }
+                    _save_oauth_tokens()
+                    log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
+                    return d["access_token"]
+            except Exception as e:
+                log_debug(f"OAuth refresh error: {e}")
+
+        # Full authorize flow using cookies (по-прежнему под refresh_lock)
         try:
-            r = requests.post("https://hh.ru/oauth/token", data={
-                "grant_type": "refresh_token",
-                "client_id": _HH_OAUTH_CLIENT_ID,
-                "client_secret": _HH_OAUTH_CLIENT_SECRET,
-                "refresh_token": refresh,
-            }, headers={"User-Agent": ua}, timeout=15)
-            if r.status_code == 200:
-                d = r.json()
-                with _oauth_lock:
-                    _oauth_tokens[resume_hash] = {
-                        "access_token": d["access_token"],
-                        "refresh_token": d.get("refresh_token", refresh),
-                        "expires_at": time.time() + d.get("expires_in", 1209599),
-                    }
-                _save_oauth_tokens()
-                log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
-                return d["access_token"]
-        except Exception as e:
-            log_debug(f"OAuth refresh error: {e}")
+            cookies = acc.get("cookies", {})
+            # Random per-request state защищает от accept'a чужого code-redirect (CSRF)
+            flow_state = secrets.token_urlsafe(24)
 
-    # Full authorize flow using cookies
-    try:
-        cookies = acc.get("cookies", {})
-        # Random per-request state защищает от accept'a чужого code-redirect (CSRF)
-        flow_state = secrets.token_urlsafe(24)
+            def _extract_code(location: str) -> str:
+                """Извлечь code только если state совпадает с нашим."""
+                if not location:
+                    return ""
+                state_m = re.search(r"[?&]state=([^&]+)", location)
+                if state_m and state_m.group(1) != flow_state:
+                    # Не логируем сам state — это per-request secret (swarm-16 #3).
+                    log_debug(f"OAuth: state mismatch — rejecting code for {resume_hash[:12]}")
+                    return ""
+                code_m = re.search(r"[?&]code=([^&]+)", location)
+                return code_m.group(1) if code_m else ""
 
-        def _extract_code(location: str) -> str:
-            """Извлечь code только если state совпадает с нашим."""
-            if not location:
-                return ""
-            state_m = re.search(r"[?&]state=([^&]+)", location)
-            if state_m and state_m.group(1) != flow_state:
-                log_debug(f"OAuth: state mismatch (got {state_m.group(1)!r}, want {flow_state!r}) — rejecting code")
-                return ""
-            code_m = re.search(r"[?&]code=([^&]+)", location)
-            return code_m.group(1) if code_m else ""
-
-        # Step 1: GET authorize
-        r1 = requests.get("https://hh.ru/oauth/authorize", params={
-            "response_type": "code",
-            "client_id": _HH_OAUTH_CLIENT_ID,
-            "redirect_uri": _HH_OAUTH_REDIRECT,
-            "state": flow_state,
-        }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
-
-        code = _extract_code(r1.headers.get("Location", ""))
-        if not code and r1.status_code == 200 and (
-            "разрешить" in r1.text.lower() or "approve" in r1.text.lower() or "grant" in r1.text.lower()
-        ):
-            # Submit approve form
-            r2 = requests.post("https://hh.ru/oauth/authorize", data={
+            # Step 1: GET authorize
+            r1 = requests.get("https://hh.ru/oauth/authorize", params={
                 "response_type": "code",
                 "client_id": _HH_OAUTH_CLIENT_ID,
                 "redirect_uri": _HH_OAUTH_REDIRECT,
                 "state": flow_state,
-                "action": "approve",
-                "_xsrf": cookies.get("_xsrf", ""),
             }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
-            code = _extract_code(r2.headers.get("Location", ""))
 
-        if not code:
-            log_debug(f"OAuth: failed to get code for {resume_hash[:12]}")
-            return ""
+            code = _extract_code(r1.headers.get("Location", ""))
+            if not code and r1.status_code == 200 and (
+                "разрешить" in r1.text.lower() or "approve" in r1.text.lower() or "grant" in r1.text.lower()
+            ):
+                # Submit approve form
+                r2 = requests.post("https://hh.ru/oauth/authorize", data={
+                    "response_type": "code",
+                    "client_id": _HH_OAUTH_CLIENT_ID,
+                    "redirect_uri": _HH_OAUTH_REDIRECT,
+                    "state": flow_state,
+                    "action": "approve",
+                    "_xsrf": cookies.get("_xsrf", ""),
+                }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
+                code = _extract_code(r2.headers.get("Location", ""))
 
-        # Step 2: Exchange code for token
-        r3 = requests.post("https://hh.ru/oauth/token", data={
-            "grant_type": "authorization_code",
-            "client_id": _HH_OAUTH_CLIENT_ID,
-            "client_secret": _HH_OAUTH_CLIENT_SECRET,
-            "redirect_uri": _HH_OAUTH_REDIRECT,
-            "code": code,
-        }, headers={"User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
+            if not code:
+                log_debug(f"OAuth: failed to get code for {resume_hash[:12]}")
+                return ""
 
-        if r3.status_code == 200:
-            d = r3.json()
-            with _oauth_lock:
-                _oauth_tokens[resume_hash] = {
-                    "access_token": d["access_token"],
-                    "refresh_token": d.get("refresh_token", ""),
-                    "expires_at": time.time() + d.get("expires_in", 1209599),
-                }
-            _save_oauth_tokens()
-            log_debug(f"OAuth: obtained token for {resume_hash[:12]}, expires in {d.get('expires_in',0)}s")
-            return d["access_token"]
-        else:
-            log_debug(f"OAuth: token exchange failed {r3.status_code}: {r3.text[:200]}")
-    except Exception as e:
-        log_debug(f"OAuth: authorize error: {e}")
-    return ""
+            # Step 2: Exchange code for token
+            r3 = requests.post("https://hh.ru/oauth/token", data={
+                "grant_type": "authorization_code",
+                "client_id": _HH_OAUTH_CLIENT_ID,
+                "client_secret": _HH_OAUTH_CLIENT_SECRET,
+                "redirect_uri": _HH_OAUTH_REDIRECT,
+                "code": code,
+            }, headers={"User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
+
+            if r3.status_code == 200:
+                d = r3.json()
+                with _oauth_lock:
+                    _oauth_tokens[resume_hash] = {
+                        "access_token": d["access_token"],
+                        "refresh_token": d.get("refresh_token", ""),
+                        "expires_at": time.time() + d.get("expires_in", 1209599),
+                    }
+                _save_oauth_tokens()
+                log_debug(f"OAuth: obtained token for {resume_hash[:12]}, expires in {d.get('expires_in',0)}s")
+                return d["access_token"]
+            else:
+                # Логируем только status, не raw body (может содержать code в URL → leak).
+                log_debug(f"OAuth: token exchange failed {r3.status_code} for {resume_hash[:12]}")
+        except Exception as e:
+            log_debug(f"OAuth: authorize error: {e}")
+        return ""
 
 
 def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
@@ -233,9 +273,18 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
                 return "test", {}
             return "error", {"raw": err}
         elif r.status_code in (401, 403):
+            # Очищаем кэшированный токен: иначе manager на каждом следующем apply
+            # будет переиспользовать тот же rejected токен → бесконечная петля 401.
+            invalidate_oauth_token(resume_hash)
             return "auth_error", {}
         elif r.status_code == 404:
             return "error", {"raw": "Вакансия не найдена"}
+        elif r.status_code == 429:
+            # Rate-limit от HH — не считаем permanent error (раньше manager
+            # auto-pause'ил account на 429 как на consecutive_errors).
+            return "limit", {"retry_after": r.headers.get("Retry-After", "")}
+        elif r.status_code in (502, 503, 504):
+            return "error", {"raw": f"HH transient {r.status_code}", "transient": True}
         else:
             return "error", {"raw": f"HTTP {r.status_code}: {r.text[:100]}"}
     except Exception as e:

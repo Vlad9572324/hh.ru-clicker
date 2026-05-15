@@ -289,9 +289,15 @@ async def api_account_delete(idx: int):
         bot.account_states[idx]._deleted = True
 
     name = accounts_data[idx].get("name", f"#{idx}")
+    resume_hash = accounts_data[idx].get("resume_hash", "")
 
     if 0 <= idx < len(bot.account_states):
         bot.account_states.pop(idx)
+    # Чистим связанные структуры — иначе остаются висеть в памяти (swarm-11 #3,#6).
+    bot.vacancy_queues.pop(name, None)
+    if resume_hash:
+        from app.oauth import invalidate_oauth_token
+        invalidate_oauth_token(resume_hash)
     accounts_data.pop(idx)
 
     save_accounts()
@@ -395,7 +401,8 @@ async def api_oauth_token(idx: int):
             info = _oauth_tokens.get(rh, {})
         return {
             "ok": True,
-            "token_prefix": token[:20] + "...",
+            # Не отдаём ни одного байта токена наружу — 20 chars Bearer-токена
+            # достаточно для подтверждения существования + entropy reduction (swarm-7 #2).
             "expires_in": int(info.get("expires_at", 0) - time.time()),
             "has_refresh": bool(info.get("refresh_token")),
         }
@@ -415,7 +422,6 @@ async def api_oauth_status(idx: int):
         remaining = int(info.get("expires_at", 0) - time.time())
         return {
             "has_token": True,
-            "token_prefix": info.get("access_token", "")[:20] + "...",
             "expires_in_hours": round(remaining / 3600, 1),
             "has_refresh": bool(info.get("refresh_token")),
         }
