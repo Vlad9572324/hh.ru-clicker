@@ -4,7 +4,6 @@ BotManager — core bot logic with per-account worker threads.
 
 import asyncio
 import aiohttp
-import re
 import random
 from datetime import datetime, timedelta
 from collections import deque

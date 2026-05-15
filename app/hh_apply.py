@@ -13,7 +13,7 @@ from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
-from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich, get_questionnaire_answer
+from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
 from app.llm import _randomize_text, generate_llm_questionnaire_answers
 from app.hh_resume import fetch_resume_text
 
@@ -295,8 +295,16 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
         )
         if r.status_code in (401, 403) or _is_login_page(r.text):
             return {"ok": False, "reason": "auth_error", "skip_reason": "auth"}
+        if r.status_code == 429:
+            # Rate-limit — transient, не permanent skip.
+            return {"ok": False, "reason": "rate_limit", "skip_reason": "retry",
+                    "retry_after": r.headers.get("Retry-After", "")}
+        if r.status_code >= 500:
+            # HH server issue — попробовать позже.
+            return {"ok": False, "reason": f"http_{r.status_code}", "skip_reason": "retry"}
         if r.status_code != 200:
-            return {"ok": False, "reason": f"http_{r.status_code}", "skip_reason": "http_error"}
+            # 4xx (другие, кроме 401/403/429) — permanent skip.
+            return {"ok": False, "reason": f"http_{r.status_code}", "skip_reason": "skip"}
         try:
             data = r.json()
         except (json.JSONDecodeError, ValueError):

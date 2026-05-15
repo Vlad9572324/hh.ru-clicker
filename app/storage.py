@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 from app.logging_utils import log_debug
-from app.config import CONFIG
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)

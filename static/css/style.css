@@ -173,19 +173,6 @@ body {
 .acc-vacancy-title { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acc-vacancy-company { font-size: 11px; color: var(--dim); }
 
-.progress-bar-wrap {
-  height: 4px;
-  background: var(--border);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-.progress-bar-fill {
-  height: 100%;
-  background: var(--green);
-  border-radius: 2px;
-  transition: width 0.3s;
-}
 
 .acc-meta {
   display: flex;
