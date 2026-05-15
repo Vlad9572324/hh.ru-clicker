@@ -75,6 +75,16 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.close(code=4403)  # policy violation
         log_debug(f"WS: rejected origin {origin!r}")
         return
+    # API-key check (если HH_BOT_API_KEY задан) — closes /api/llm_run_now,
+    # set_config, account_pause WS spam from a local attacker.
+    import os
+    _api_key = os.environ.get("HH_BOT_API_KEY", "").strip()
+    if _api_key:
+        presented = ws.headers.get("x-api-key", "") or ws.query_params.get("api_key", "")
+        if not presented or presented != _api_key:
+            await ws.close(code=4401)  # auth required
+            log_debug("WS: rejected — missing/wrong api key")
+            return
     await manager.connect(ws)
     try:
         while True:

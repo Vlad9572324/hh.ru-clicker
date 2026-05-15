@@ -3,6 +3,21 @@
 const _storedLang = localStorage.getItem('hh-lang');
 let lang = (_storedLang === 'ru' || _storedLang === 'en') ? _storedLang : 'ru';
 
+// ── API-key fetch wrapper ─────────────────────────────────────
+// Если backend требует HH_BOT_API_KEY, прокидываем X-API-Key в каждый запрос.
+// Поддерживаются 2 источника: ?key=... в URL → переносится в localStorage; либо вручную в localStorage.
+(function() {
+  const apiKey = (new URLSearchParams(location.search).get('key') || localStorage.getItem('hh-api-key') || '').trim();
+  if (apiKey) localStorage.setItem('hh-api-key', apiKey);
+  if (!apiKey) return;
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = (resource, init = {}) => {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('X-API-Key')) headers.set('X-API-Key', apiKey);
+    return _origFetch(resource, {...init, headers});
+  };
+})();
+
 const T = {
   ru: {
     // Tabs
@@ -1761,7 +1776,13 @@ function connect() {
     State.reconnectTimer = null;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  // API key из ?key=... или localStorage передаём в WS upgrade (HH_BOT_API_KEY).
+  const _apiKey = (new URLSearchParams(location.search).get('key') || localStorage.getItem('hh-api-key') || '').trim();
+  if (_apiKey) localStorage.setItem('hh-api-key', _apiKey);
+  const wsUrl = _apiKey
+    ? `${proto}://${location.host}/ws?api_key=${encodeURIComponent(_apiKey)}`
+    : `${proto}://${location.host}/ws`;
+  const ws = new WebSocket(wsUrl);
   State.ws = ws;
 
   ws.onopen = () => {
