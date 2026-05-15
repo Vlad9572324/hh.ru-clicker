@@ -265,10 +265,17 @@ async def api_account_add(request: Request):
     if not cookies or "hhtoken" not in cookies:
         return {"ok": False, "error": "Не удалось распознать cookies (нужен hhtoken)"}
 
+    final_short = short or (name.split()[0] if name.split() else name)
+    # Уникальность short — иначе vacancy_queues пересекаются (kimi-r14-2 #7):
+    # два аккаунта с одним short затирают очереди друг друга.
+    existing_shorts = {a.get("short", "") for a in accounts_data}
+    if final_short in existing_shorts:
+        return {"ok": False, "error": f"short='{final_short}' уже используется — выберите уникальное"}
+
     auth_cookies = {k: v for k, v in cookies.items() if k in _AUTH_COOKIE_KEYS}
     acc = {
         "name": name,
-        "short": short or (name.split()[0] if name.split() else name),
+        "short": final_short,
         "color": color,
         "resume_hash": resume_hash,
         "letter": letter,
@@ -297,12 +304,17 @@ async def api_account_delete(idx: int):
         bot.account_states[idx]._deleted = True
 
     name = accounts_data[idx].get("name", f"#{idx}")
+    short = accounts_data[idx].get("short", "")
     resume_hash = accounts_data[idx].get("resume_hash", "")
 
     if 0 <= idx < len(bot.account_states):
         bot.account_states.pop(idx)
     # Чистим связанные структуры — иначе остаются висеть в памяти (swarm-11 #3,#6).
-    bot.vacancy_queues.pop(name, None)
+    # vacancy_queues keyed by state.short (manager.py:1053), но раньше pop был по name —
+    # очередь оставалась висеть когда name != short (kimi-r14-2 #7).
+    if short:
+        bot.vacancy_queues.pop(short, None)
+    bot.vacancy_queues.pop(name, None)  # backward compat для старых записей
     if resume_hash:
         from app.oauth import invalidate_oauth_token
         invalidate_oauth_token(resume_hash)

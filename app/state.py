@@ -121,8 +121,11 @@ class AccountState:
         # Cookie expiry flag — set when 401/403 or login redirect detected
         self.cookies_expired: bool = False
 
-        # LLM auto-reply tracking
-        self.llm_replied_msgs: set = set()   # {(neg_id, last_msg_id)} successfully replied (permanent per session)
+        # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
+        # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →
+        # mid-session re-reply на recent чаты (kimi-r14-2 #11). Dict preserves order with O(1) lookup.
+        # Keys are tuples (neg_id, last_msg_id); values unused (None).
+        self.llm_replied_msgs: dict = {}
         self._llm_temp_skip: dict = {}       # {(neg_id, last_msg_id): expiry_ts} — transient failure, retry after TTL
         self._llm_no_chat: set = set()       # {neg_id} chats that returned 409 (permanently closed/locked)
         self._llm_neg_failures: dict = {}    # {neg_id: count} — exception-counter for exponential backoff

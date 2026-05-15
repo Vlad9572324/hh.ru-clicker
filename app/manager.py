@@ -1506,7 +1506,9 @@ class BotManager:
         # повторный merge каждый цикл с обрезкой делал бы trim случайным (set без порядка)
         # и мог выкидывать только что записанные ключи.
         if not getattr(state, "_replied_seeded", False):
-            state.llm_replied_msgs.update(get_replied_keys())
+            # dict-init: ключи seeded из disk — для них insertion-order не важен (legacy).
+            for _k in get_replied_keys():
+                state.llm_replied_msgs[_k] = None
             state._replied_seeded = True
 
         # Memory leak prevention: purge expired temp_skip + cap in-memory sets.
@@ -1515,9 +1517,10 @@ class BotManager:
             k: v for k, v in state._llm_temp_skip.items() if v > now_ts
         }
         if len(state.llm_replied_msgs) > 5000:
-            # Hard cap. Точная "recency" не нужна — после rebuild на следующем рестарте
-            # сид из interviews.json восстановит важные ключи.
-            state.llm_replied_msgs = set(list(state.llm_replied_msgs)[-2000:])
+            # Hard cap — dict сохраняет insertion order, [-2000:] retains *recent* keys
+            # (раньше set делал случайный slice, mid-session re-reply, kimi-r14-2 #11).
+            recent = list(state.llm_replied_msgs)[-2000:]
+            state.llm_replied_msgs = dict.fromkeys(recent)
         with self._llm_sent_lock:
             if len(self._llm_sent_global) > 10000:
                 self._llm_sent_global = set(list(self._llm_sent_global)[-5000:])
@@ -1657,7 +1660,7 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {neg_id}: переписка недоступна — {lock_reason!r}")
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] \U0001f512 переписка недоступна, пропуск", "warning", neg_id=neg_id)
-                    state.llm_replied_msgs.add((neg_id, "locked"))
+                    state.llm_replied_msgs[(neg_id, "locked")] = None
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color, chat_status="locked")
                     continue
 
@@ -1697,7 +1700,7 @@ class BotManager:
                     if global_key in self._llm_sent_global:
                         log_debug(f"LLM [{state.short}] {neg_id}: уже отправлено другим аккаунтом (pid={cur_pid})")
                         self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] уже отправлено другим аккаунтом, пропуск", "info")
-                        state.llm_replied_msgs.add(key)
+                        state.llm_replied_msgs[key] = None
                         continue
 
                 progress = f"[{i+1}/{min(len(candidates),15)}]"
@@ -1746,7 +1749,7 @@ class BotManager:
                                      chat_status="robot")
                     ok = send_negotiation_message(state.acc, neg_id, btn_text)
                     if ok and ok != "chat_not_found":
-                        state.llm_replied_msgs.add(key)
+                        state.llm_replied_msgs[key] = None
                         replied += 1
                         ts = datetime.now().strftime("%H:%M")
                         self.llm_log.appendleft({
@@ -1767,7 +1770,7 @@ class BotManager:
                         })
                     elif ok == "chat_not_found":
                         state._llm_no_chat.add(neg_id)
-                        state.llm_replied_msgs.add(key)
+                        state.llm_replied_msgs[key] = None
                         log_debug(f"LLM [{state.short}] {neg_id}: робот-кнопка 409, чат закрыт — добавлен в _llm_no_chat")
                     elif not ok:
                         state._llm_temp_skip[key] = time.time() + 1800
@@ -1777,11 +1780,11 @@ class BotManager:
                 last_real_sender = conversation[-1].get("sender") if conversation else None
                 if not has_employer_msg:
                     log_debug(f"LLM [{state.short}] {neg_id}: нет реальных сообщений работодателя (только системные), пропуск")
-                    state.llm_replied_msgs.add(key)
+                    state.llm_replied_msgs[key] = None
                     continue
                 if last_real_sender == "applicant":
                     log_debug(f"LLM [{state.short}] {neg_id}: последнее реальное сообщение наше — уже ответили, пропуск")
-                    state.llm_replied_msgs.add(key)
+                    state.llm_replied_msgs[key] = None
                     continue
                 _consecutive_ours = 0
                 for _cm in reversed(conversation):
@@ -1794,7 +1797,7 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {neg_id}: in_a_row_limit: {_consecutive_ours} сообщений без ответа HR, пропуск")
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] ⚠️ in_a_row_limit: {_consecutive_ours} сообщения без ответа HR, пропуск", "warning", neg_id=neg_id)
-                    state.llm_replied_msgs.add(key)
+                    state.llm_replied_msgs[key] = None
                     continue
                 log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
                 self._add_log(state.short, state.color,
@@ -1814,7 +1817,7 @@ class BotManager:
                         if global_key in self._llm_sent_global:
                             log_debug(f"LLM [{state.short}] {neg_id}: другой поток уже отправил (pid={cur_pid}), пропуск")
                             self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] другой аккаунт уже отправил, пропуск", "info")
-                            state.llm_replied_msgs.add(key)
+                            state.llm_replied_msgs[key] = None
                             continue
                         self._llm_sent_global.add(global_key)
                         self._llm_sent_by_neg_id.setdefault(neg_id, set()).add(global_key)
@@ -1826,7 +1829,7 @@ class BotManager:
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
                             self._llm_sent_by_neg_id.get(neg_id, set()).discard(global_key)
-                        state.llm_replied_msgs.add(key)
+                        state.llm_replied_msgs[key] = None
                         state._llm_no_chat.add(neg_id)
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                          employer=employer, vacancy_title=vacancy_title,
@@ -1835,7 +1838,7 @@ class BotManager:
                             f"\U0001f916 [{employer_short}] \U0001f512 переписка закрыта (409), пропуск", "warning", neg_id=neg_id)
                         continue
                     if ok:
-                        state.llm_replied_msgs.add(key)
+                        state.llm_replied_msgs[key] = None
                         state._msg_consecutive[neg_id] = state._msg_consecutive.get(neg_id, 0) + 1
                         state._llm_neg_failures.pop(neg_id, None)  # clear backoff on success
                         replied += 1
@@ -1886,7 +1889,7 @@ class BotManager:
                             "source": "draft_error",
                         })
                 else:
-                    state.llm_replied_msgs.add(key)
+                    state.llm_replied_msgs[key] = None
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                      llm_reply=reply_text, llm_sent=False)
                     self._add_log(state.short, state.color,

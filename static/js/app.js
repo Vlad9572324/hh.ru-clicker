@@ -1839,11 +1839,23 @@ function connect() {
     } catch (e) { console.error('WS parse error:', e); }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     document.getElementById('conn-dot').classList.remove('connected');
     document.querySelectorAll('.btn-sm, .apply-btn, button[onclick]').forEach(b => {
       if (b.id !== 'pause-btn') b.disabled = true;
     });
+    // 4401 = server отверг api_key. Бесконечный reconnect — спам и пустой стрим
+    // ошибок в логах (kimi-r14-2 #10). Останавливаем и показываем баннер.
+    if (ev && ev.code === 4401) {
+      const dot = document.getElementById('conn-dot');
+      if (dot) dot.title = 'Unauthorized — нужен API key (?key=…)';
+      const dbg = document.getElementById('dbg-err');
+      if (dbg) {
+        dbg.style.display = '';
+        dbg.textContent = 'WebSocket Unauthorized — добавьте ?key=<API_KEY> в URL или X-API-Key.';
+      }
+      return;  // прекращаем reconnect-цикл до перезагрузки страницы
+    }
     State.reconnectTimer = setTimeout(() => {
       State.reconnectDelay = Math.min(State.reconnectDelay * 2, 30000);
       connect();
