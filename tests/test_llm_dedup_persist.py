@@ -42,12 +42,13 @@ def test_unsent_interview_not_in_replied_keys(fresh_storage):
     assert ("neg999", "m1") not in keys
 
 
-def test_interview_without_replied_msg_id_not_in_keys(fresh_storage):
-    """Старые записи без replied_msg_id (legacy) — игнорируем."""
+def test_interview_without_replied_msg_id_legacy_sentinel(fresh_storage):
+    """Старые записи без replied_msg_id (legacy) получают sentinel '__legacy__'
+    чтобы не переотправить ответ при upgrade (r12-2 #3)."""
     storage = fresh_storage
     storage.upsert_interview("neg_old", acc="a", llm_sent=True)
     keys = storage.get_replied_keys()
-    assert not any(k[0] == "neg_old" for k in keys)
+    assert ("neg_old", "__legacy__") in keys
 
 
 def test_multiple_interviews_aggregated(fresh_storage):

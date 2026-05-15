@@ -2,6 +2,8 @@
 FastAPI app creation and route registration.
 """
 
+import asyncio
+import contextlib
 import os
 import secrets
 from pathlib import Path
@@ -15,7 +17,28 @@ from fastapi.staticfiles import StaticFiles
 from app.instances import bot, manager  # re-exported for back-compat
 from app.logging_utils import log_debug
 
-app = FastAPI(title="HH Bot Dashboard")
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Graceful shutdown через FastAPI lifespan — работает и при `uvicorn web_app:app`,
+    в отличие от signal-hook в web_app.py (тот ловит только `python web_app.py`).
+    r12-1 #7.
+    """
+    yield  # startup phase nothing here
+    try:
+        log_debug("lifespan: stopping bot...")
+        bot.stop()
+    except Exception as e:
+        log_debug(f"lifespan bot.stop error: {e}")
+    try:
+        from app.storage import _save_executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: _save_executor.shutdown(wait=True))
+    except Exception as e:
+        log_debug(f"lifespan save_executor shutdown error: {e}")
+
+
+app = FastAPI(title="HH Bot Dashboard", lifespan=_lifespan)
 
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)

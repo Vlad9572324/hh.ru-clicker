@@ -264,16 +264,31 @@ def get_no_chat_neg_ids(since: datetime = None) -> set:
 def get_replied_keys(since: datetime = None) -> set:
     """Persisted LLM dedup: returns {(neg_id, replied_msg_id)} for chats already replied to.
     Used to seed `state.llm_replied_msgs` on startup so we don't re-reply after restart.
+
+    Legacy compat: pre-r1 records have llm_sent=True but no replied_msg_id.
+    Backfill with a sentinel `__legacy__` token — это блокирует повторный reply
+    на ЛЮБОЙ msg_id для такого neg_id (что важнее, чем точная дедупликация для старых).
     """
     _load_cache()
     since_str = since.isoformat(timespec="seconds") if since else None
     with _cache_lock:
-        return {
-            (str(nid), str(r["replied_msg_id"]))
-            for nid, r in _cache_interviews.items()
-            if r.get("llm_sent") and r.get("replied_msg_id")
-            and (not since_str or r.get("last_seen", "") >= since_str)
-        }
+        keys = set()
+        for nid, r in _cache_interviews.items():
+            if not r.get("llm_sent"):
+                continue
+            if since_str and r.get("last_seen", "") < since_str:
+                continue
+            replied_id = r.get("replied_msg_id")
+            if replied_id:
+                keys.add((str(nid), str(replied_id)))
+            else:
+                # legacy без replied_msg_id — добавляем sentinel + last_msg_id если есть
+                # чтобы новый цикл точно НЕ переотправил.
+                keys.add((str(nid), "__legacy__"))
+                last_id = r.get("last_msg_id") or r.get("employer_last_msg_id")
+                if last_id:
+                    keys.add((str(nid), str(last_id)))
+        return keys
 
 
 def get_interviews_list(acc: str = "", limit: int = 2000, status: str = "") -> list:

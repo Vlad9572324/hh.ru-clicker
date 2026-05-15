@@ -147,7 +147,10 @@ def _check_chat_locked(item: dict) -> str:
     if item.get("canSendMessage") is False:
         return "canSendMessage=false"
     state = str(item.get("state") or item.get("chatState") or "").lower()
-    if state in ("archived", "closed", "rejected", "locked", "disabled", "invitation_required"):
+    # Whitelist active states; всё неизвестное → считаем locked
+    # (fail-closed на новых HH chat-state markers, r12-3 #6).
+    _ACTIVE_CHAT_STATES = ("", "active", "open", "ok", "pending", "negotiation", "interview")
+    if state and state not in _ACTIVE_CHAT_STATES:
         return f"state={state}"
     if item.get("locked") is True:
         return "locked=true"
@@ -288,7 +291,11 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
                 sender = "applicant"
             else:
                 sender = "employer"
-            pd = msg.get("participantDisplay") or {}
+            # HH иногда возвращает participantDisplay как str → AttributeError на .get
+            # → caught broadly, ВСЯ история чата выкидывается. Защищаемся (r12-3 #5).
+            pd = msg.get("participantDisplay")
+            if not isinstance(pd, dict):
+                pd = {}
             conversation.append({
                 "sender": sender, "text": text,
                 "msg_id": str(msg.get("id", "")),

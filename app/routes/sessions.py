@@ -179,6 +179,10 @@ async def api_session_add(body: dict):
         "letter": letter,
         "cookies": auth_cookies,
         "urls": [],
+        # r12-2 #10: храним raw_cookie_line в памяти (на диск НЕ попадёт через
+        # _strip_sensitive_session_fields), нужен для будущих session_refresh без
+        # необходимости пересобирать строку из dict.
+        "_raw_cookie_line": raw_cookie_line,
     }
     bot.temp_sessions.append(temp_acc)
     save_browser_sessions(bot.temp_sessions)

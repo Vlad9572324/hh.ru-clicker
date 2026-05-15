@@ -12,6 +12,14 @@ let lang = (_storedLang === 'ru' || _storedLang === 'en') ? _storedLang : 'ru';
   if (!apiKey) return;
   const _origFetch = window.fetch.bind(window);
   window.fetch = (resource, init = {}) => {
+    // КРИТИЧНО: шлём X-API-Key ТОЛЬКО на same-origin запросы.
+    // Иначе fetch на cross-origin URL (например в каком-нибудь helper'е) утечёт ключ.
+    let sameOrigin = true;
+    try {
+      const target = new URL(typeof resource === 'string' ? resource : resource.url, location.href);
+      sameOrigin = target.origin === location.origin;
+    } catch(_) {}
+    if (!sameOrigin) return _origFetch(resource, init);
     const headers = new Headers(init.headers || {});
     if (!headers.has('X-API-Key')) headers.set('X-API-Key', apiKey);
     return _origFetch(resource, {...init, headers});

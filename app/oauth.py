@@ -128,6 +128,12 @@ def _save_oauth_tokens():
 
 # Load on import
 _load_oauth_tokens()
+# One-shot chmod на existing file — r12-2 #7: pre-r8 install мог оставить 0o644.
+try:
+    if _OAUTH_FILE.exists():
+        os.chmod(_OAUTH_FILE, 0o600)
+except Exception:
+    pass
 
 
 def get_oauth_status(resume_hash: str) -> dict:

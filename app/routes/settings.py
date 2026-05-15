@@ -151,13 +151,14 @@ async def api_raw_accounts_set(request: Request):
         for state in _bot.account_states:
             new_acc = by_name.get(state.name)
             if new_acc:
-                # Replace вместо update — иначе удалённые в JSON поля (use_oauth, letter)
-                # остаются stale в state.acc (r11-1 #8). Сохраняем lock-ref defensive.
+                # Атомарная замена reference вместо clear()+update() — иначе worker'ы
+                # могут увидеть полу-пустой dict между clear и update (r12-1 #5).
+                # Lock-ref сохраняем через spread в новом dict.
                 cookies_lock = state.acc.get("_cookies_lock")
-                state.acc.clear()
-                state.acc.update(new_acc)
+                new_dict = {**new_acc}
                 if cookies_lock is not None:
-                    state.acc["_cookies_lock"] = cookies_lock
+                    new_dict["_cookies_lock"] = cookies_lock
+                state.acc = new_dict
                 state.cookies_expired = False
     except Exception as e:
         log_debug(f"api_raw_accounts_set live-sync error: {e}")
