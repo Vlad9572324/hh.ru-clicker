@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.logging_utils import log_debug
+from app.config import hh_base
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True, mode=0o700)
@@ -58,18 +59,24 @@ _tmp_cleaned = False  # _cleanup_stale_tmp should run once, not on every _load_c
 
 def _cleanup_stale_tmp():
     """Удалить .tmp файлы оставшиеся от прерванной записи (process crash mid-replace).
-    Иначе они копятся бесконечно (kimi-r13-2 #6)."""
+    Иначе они копятся бесконечно (kimi-r13-2 #6) + ломают save_config ошибкой
+    'temp file exists' при попытке tmp.replace() через перезапуск."""
     global _tmp_cleaned
     if _tmp_cleaned:
         return
     _tmp_cleaned = True
-    for fpath in (APPLIED_FILE, TESTS_FILE, INTERVIEWS_FILE, SESSIONS_FILE):
+    # Включая config.tmp + accounts.tmp + oauth_tokens.tmp — иначе их leak ловится
+    # в логе как «save_config error» хотя реальное сохранение проходит (GitHub issue).
+    files = [APPLIED_FILE, TESTS_FILE, INTERVIEWS_FILE, SESSIONS_FILE]
+    for extra in ("config.json", "accounts.json", "oauth_tokens.json"):
+        files.append(DATA_DIR / extra)
+    for fpath in files:
         tmp = fpath.with_suffix(".tmp")
         try:
             if tmp.exists():
                 tmp.unlink()
                 log_debug(f"startup: removed stale {tmp}")
-        except Exception:
+        except (PermissionError, OSError):
             pass
 
 
@@ -88,6 +95,8 @@ def _load_cache():
                     _cache_applied = {}
             else:
                 _cache_applied = {}
+            if not isinstance(_cache_applied, dict):
+                _cache_applied = {}
         if _cache_tests is None:
             if TESTS_FILE.exists():
                 try:
@@ -98,6 +107,8 @@ def _load_cache():
                     _cache_tests = {}
             else:
                 _cache_tests = {}
+            if not isinstance(_cache_tests, dict):
+                _cache_tests = {}
         if _cache_interviews is None:
             if INTERVIEWS_FILE.exists():
                 try:
@@ -107,6 +118,8 @@ def _load_cache():
                     log_debug(f"⚠️ Ошибка загрузки {INTERVIEWS_FILE}: {e}")
                     _cache_interviews = {}
             else:
+                _cache_interviews = {}
+            if not isinstance(_cache_interviews, dict):
                 _cache_interviews = {}
 
 
@@ -385,7 +398,7 @@ def add_applied(account_name: str, vacancy_id: str, info: dict = None):
         title = new_info.get("title") or existing.get("title", "")
         company = new_info.get("company") or existing.get("company", "")
         _cache_applied[account_name][vacancy_id] = {
-            "url": f"https://hh.ru/vacancy/{vacancy_id}",
+            "url": f"{hh_base()}/vacancy/{vacancy_id}",
             "title": title,
             "company": company,
             "salary_from": new_info.get("salary_from") or existing.get("salary_from"),
@@ -412,7 +425,7 @@ def add_test_vacancy(vacancy_id: str, title: str = "", company: str = "",
     with _cache_lock:
         if vacancy_id not in _cache_tests:
             _cache_tests[vacancy_id] = {
-                "url": f"https://hh.ru/vacancy/{vacancy_id}",
+                "url": f"{hh_base()}/vacancy/{vacancy_id}",
                 "title": title,
                 "company": company,
                 "account_name": account_name,
@@ -455,7 +468,7 @@ def get_applied_list(limit: int = 300) -> list:
             all_items.append({
                 "account": acc_name,
                 "vacancy_id": vid,
-                "url": info.get("url", f"https://hh.ru/vacancy/{vid}"),
+                "url": info.get("url", f"{hh_base()}/vacancy/{vid}"),
                 "title": info.get("title", ""),
                 "company": info.get("company", ""),
                 "salary_from": info.get("salary_from"),
@@ -482,7 +495,7 @@ def get_vacancy_db(limit: int = 3000) -> list:
             if vid not in db:
                 db[vid] = {
                     "vacancy_id": vid,
-                    "url": info.get("url", f"https://hh.ru/vacancy/{vid}"),
+                    "url": info.get("url", f"{hh_base()}/vacancy/{vid}"),
                     "title": info.get("title", ""),
                     "company": info.get("company", ""),
                     "at": info.get("at", ""),
@@ -501,7 +514,7 @@ def get_vacancy_db(limit: int = 3000) -> list:
         if vid not in db:
             db[vid] = {
                 "vacancy_id": vid,
-                "url": info.get("url", f"https://hh.ru/vacancy/{vid}"),
+                "url": info.get("url", f"{hh_base()}/vacancy/{vid}"),
                 "title": info.get("title", ""),
                 "company": info.get("company", ""),
                 "at": info.get("at", ""),
@@ -539,7 +552,7 @@ def get_test_list(limit: int = 300) -> list:
     for vid, info in tests.items():
         items.append({
             "vacancy_id": vid,
-            "url": info.get("url", f"https://hh.ru/vacancy/{vid}"),
+            "url": info.get("url", f"{hh_base()}/vacancy/{vid}"),
             "title": info.get("title", ""),
             "company": info.get("company", ""),
             "account_name": info.get("account_name", ""),

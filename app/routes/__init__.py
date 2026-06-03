@@ -29,6 +29,8 @@ async def _lifespan(_app: FastAPI):
     # ── startup ──
     broadcast_task = None
     try:
+        from app.storage import _cleanup_stale_tmp
+        _cleanup_stale_tmp()  # подметаем config.tmp/accounts.tmp от прошлых crash'ей
         from app.config import load_accounts
         load_accounts()
         bot.start()

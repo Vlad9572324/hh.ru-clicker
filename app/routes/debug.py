@@ -7,6 +7,7 @@ import json
 import re
 
 import requests
+from app.config import hh_base
 from fastapi import APIRouter
 
 from app.hh_chat import fetch_negotiation_thread
@@ -35,7 +36,7 @@ async def api_debug_session(idx: int):
     loop = asyncio.get_event_loop()
     def _fetch():
         try:
-            r = requests.get("https://hh.ru/applicant/resumes", headers=headers, timeout=15)
+            r = requests.get(hh_base() + "/applicant/resumes", headers=headers, timeout=15)
             ssr = parse_hh_lux_ssr(r.text)
             preview = {}
             for k, v in ssr.items():
@@ -92,7 +93,7 @@ async def api_debug_neg_ids(idx: int):
     try:
         resp = await asyncio.get_event_loop().run_in_executor(
             None, lambda: requests.get(
-                "https://hh.ru/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
+                hh_base() + "/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
                 cookies=cookies, headers=headers_req, timeout=15,
             )
         )
@@ -163,11 +164,11 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, */*",
-            "Referer": "https://hh.ru/applicant/negotiations",
+            "Referer": hh_base() + "/applicant/negotiations",
         }
         try:
             resp = requests.get(
-                f"https://hh.ru/chat/messages?chatId={chat_id}",
+                f"{hh_base()}/chat/messages?chatId={chat_id}",
                 cookies=acc["cookies"], headers=headers, timeout=15,
             )
         except requests.RequestException as e:

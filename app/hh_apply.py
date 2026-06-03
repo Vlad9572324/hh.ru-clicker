@@ -11,7 +11,7 @@ import aiohttp
 from glom import glom
 
 from app.logging_utils import log_debug, _is_login_page
-from app.config import CONFIG
+from app.config import CONFIG, hh_base
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
@@ -85,26 +85,75 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
         return "auth_error", {}
 
     info = {}
-    if "shortVacancy" in txt:
+    parsed = None
+    if txt.startswith("{"):
         try:
-            p = json.loads(txt)
-            info = {
-                "title": glom(p, "responseStatus.shortVacancy.name", default=""),
-                "company": glom(p, "responseStatus.shortVacancy.company.name", default=""),
-                "salary_from": glom(p, "responseStatus.shortVacancy.compensation.from", default=None),
-                "salary_to": glom(p, "responseStatus.shortVacancy.compensation.to", default=None),
-            }
-            ci = glom(p, "responseStatus.shortVacancy.contactInfo", default={})
-            if ci and (ci.get("email") or ci.get("fio")):
-                contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
-                phones = (ci.get("phones") or {}).get("phones", [])
-                if phones:
-                    ph = phones[0]
-                    contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
-                info["contact"] = contact
+            parsed = json.loads(txt)
         except Exception:
-            pass
+            parsed = None
 
+    if parsed is not None:
+        # info из responseStatus.shortVacancy (старый формат popup)
+        info = {
+            "title": glom(parsed, "responseStatus.shortVacancy.name", default="") or "",
+            "company": glom(parsed, "responseStatus.shortVacancy.company.name", default="") or "",
+            "salary_from": glom(parsed, "responseStatus.shortVacancy.compensation.from", default=None),
+            "salary_to": glom(parsed, "responseStatus.shortVacancy.compensation.to", default=None),
+        }
+        ci = glom(parsed, "responseStatus.shortVacancy.contactInfo", default={}) or {}
+        if ci and (ci.get("email") or ci.get("fio")):
+            contact = {"fio": ci.get("fio", ""), "email": ci.get("email", ""), "phone": ""}
+            phones = (ci.get("phones") or {}).get("phones", [])
+            if phones:
+                ph = phones[0]
+                contact["phone"] = f"+{ph.get('country','')}{ph.get('city','')}{ph.get('number','')}"
+            info["contact"] = contact
+
+        # Сначала отказы (test/limit/already) — они могут сосуществовать с
+        # success-маркером в нестандартных ответах, и приоритет должен быть у отказа.
+
+        # top-level "error":"..." (HTTP 400 формат)
+        top_error = parsed.get("error")
+        if top_error:
+            ts = str(top_error).lower()
+            if "test-required" in ts or "test_required" in ts:
+                return "test", info
+            if "limit" in ts or "negotiations-limit" in ts:
+                return "limit", info
+            if "already" in ts:
+                return "already", info
+            return "error", {"raw": txt[:300], **info, "error_code": str(top_error)}
+
+        # Старый формат: responseStatus.*
+        rs = parsed.get("responseStatus") or {}
+        if rs.get("alreadyApplied") is True:
+            return "already", info
+        if rs.get("test-required") is True or rs.get("testRequired") is True:
+            return "test", info
+        if (rs.get("negotiationsLimitExceeded") is True
+                or rs.get("negotiations-limit-exceeded") is True):
+            return "limit", info
+
+        # top-level отказы как поля рядом с success (защита от неоднозначных ответов)
+        if parsed.get("test-required") is True or parsed.get("testRequired") is True:
+            return "test", info
+        if parsed.get("alreadyApplied") is True:
+            return "already", info
+        if (parsed.get("negotiationsLimitExceeded") is True
+                or parsed.get("negotiations-limit-exceeded") is True):
+            return "limit", info
+
+        # Теперь успех: новый формат top-level success/topic_id
+        top_success = parsed.get("success")
+        if top_success in (True, "true", "True") or parsed.get("topic_id"):
+            info["topic_id"] = parsed.get("topic_id", "")
+            info["chat_id"] = parsed.get("chat_id", "")
+            return "sent", info
+        if rs.get("responded") is True or rs.get("success") is True:
+            return "sent", info
+        # JSON распарсен но никаких флагов — fallthrough к substring fallback.
+
+    # ── 3. Substring fallback для не-JSON ответов (HTML страница и т.п.) ──
     if "negotiations-limit-exceeded" in txt:
         return "limit", info
     if "test-required" in txt:
@@ -113,8 +162,9 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
         return "already", info
 
     if status_code == 200:
-        if ('"success":true' in txt or '"status":"ok"' in txt
-                or '"responded":true' in txt or "shortVacancy" in txt):
+        if ('"success":true' in txt or '"success":"true"' in txt
+                or '"status":"ok"' in txt or '"responded":true' in txt
+                or "shortVacancy" in txt or "topic_id" in txt):
             return "sent", info
         return "error", {"raw": txt[:200], **info}
 
@@ -146,7 +196,7 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
     try:
         async with aiohttp.ClientSession(headers=headers, cookies=acc["cookies"]) as session:
             async with session.post(
-                "https://hh.ru/applicant/vacancy_response/popup",
+                hh_base() + "/applicant/vacancy_response/popup",
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)
             ) as r:
@@ -171,7 +221,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
     headers_get = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": f"https://hh.ru/vacancy/{vid}",
+        "Referer": f"{hh_base()}/vacancy/{vid}",
     }
 
     try:
@@ -179,7 +229,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
             cookies=acc["cookies"],
             headers=headers_get
         ) as session:
-            url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
+            url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
             # Шаг 1: GET форма опроса
             async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)) as r:
@@ -343,9 +393,9 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
     try:
         r = _with_retry(
             lambda: requests.get(
-                f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
+                f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
                 headers={"User-Agent": ua, "Accept": "application/json, */*",
-                         "Referer": f"https://hh.ru/vacancy/{vid}"},
+                         "Referer": f"{hh_base()}/vacancy/{vid}"},
                 cookies=acc.get("cookies", {}),
                 timeout=_HH_DEFAULT_TIMEOUT,
             ),
@@ -420,7 +470,7 @@ def check_limit(acc: dict) -> bool:
     try:
         r_search = _with_retry(
             lambda: requests.get(
-                "https://hh.ru/search/vacancy?text=&area=1&page=0",
+                hh_base() + "/search/vacancy?text=&area=1&page=0",
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                          "Accept": "text/html"},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
@@ -434,7 +484,7 @@ def check_limit(acc: dict) -> bool:
         # Use GET popup — safe, no side effects
         r = _with_retry(
             lambda: requests.get(
-                f"https://hh.ru/applicant/vacancy_response/popup?vacancyId={vid}",
+                f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                          "Accept": "application/json", "X-Xsrftoken": xsrf},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
@@ -474,7 +524,7 @@ def touch_resume(acc: dict) -> tuple:
     try:
         response = _with_retry(
             lambda: requests.post(
-                "https://hh.ru/applicant/resumes/touch",
+                hh_base() + "/applicant/resumes/touch",
                 headers=headers,
                 cookies=acc["cookies"],
                 files=touch_files,

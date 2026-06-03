@@ -7,7 +7,7 @@ import asyncio
 import requests
 from fastapi import APIRouter, Request
 
-from app.config import accounts_data
+from app.config import accounts_data, hh_base
 from app.storage import save_browser_sessions
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
@@ -39,12 +39,12 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
         with requests.Session() as s:
             # Warm-up: получить DDoS-Guard/anti-bot куки для последующего запроса.
             try:
-                s.get("https://hh.ru/", headers=base_headers, timeout=10, allow_redirects=True)
+                s.get(hh_base() + "/", headers=base_headers, timeout=10, allow_redirects=True)
             except Exception:
                 pass  # warm-up best-effort, если упадёт — попробуем основной запрос всё равно
             r = s.get(
-                "https://hh.ru/applicant/resumes",
-                headers={**base_headers, "Referer": "https://hh.ru/"},
+                hh_base() + "/applicant/resumes",
+                headers={**base_headers, "Referer": hh_base() + "/"},
                 timeout=15,
                 allow_redirects=True,
             )
@@ -168,6 +168,18 @@ async def api_session_add(body: dict):
                 break
 
     auth_cookies = {k: v for k, v in cookies.items() if k in _AUTH_COOKIE_KEYS}
+
+    # Защита от дублей: если уже есть сессия с таким же resume_hash и hhtoken,
+    # не создаём вторую (иначе UI показывает одну и ту же сессию N раз).
+    new_hhtoken = auth_cookies.get("hhtoken", "")
+    for existing in bot.temp_sessions:
+        ex_hash = existing.get("resume_hash", "")
+        ex_hhtoken = (existing.get("cookies") or {}).get("hhtoken", "")
+        if resume_hash and ex_hash == resume_hash and ex_hhtoken == new_hhtoken:
+            return {
+                "status": "error",
+                "message": f"Сессия уже есть: {existing.get('name', '?')}. Обнови куки через ✏️ Изменить.",
+            }
 
     idx_in_temp = len(bot.temp_sessions)
     temp_acc = {

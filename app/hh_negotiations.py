@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from app.logging_utils import log_debug, _is_login_page
 from app.hh_resume import parse_hh_lux_ssr
+from app.config import hh_base
 
 
 def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
@@ -16,7 +17,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://hh.ru/applicant/negotiations",
+        "Referer": hh_base() + "/applicant/negotiations",
     }
 
     result = {
@@ -27,6 +28,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
         "discard": 0,
         "interviews_list": [],
         "neg_ids": [],
+        "discard_neg_ids": [],  # chatId DISCARD-переговоров — LLM их пропускает без вызова API
         "auth_error": False,
         "unread_by_employer": 0,  # count of negotiations where employer hasn't read our messages
     }
@@ -37,7 +39,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     for page in range(max_pages):
         try:
             resp = requests.get(
-                f"https://hh.ru/applicant/negotiations?filter=all&state=INTERVIEW&page={page}",
+                f"{hh_base()}/applicant/negotiations?filter=all&state=INTERVIEW&page={page}",
                 cookies=cookies,
                 headers=headers,
                 timeout=15,
@@ -133,7 +135,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     for page in range(max_pages):
         try:
             resp = requests.get(
-                f"https://hh.ru/applicant/negotiations?page={page}",
+                f"{hh_base()}/applicant/negotiations?page={page}",
                 cookies=cookies,
                 headers=headers,
                 timeout=15,
@@ -189,6 +191,9 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
 
                 if status_class == 'discard':
                     result["discard"] += 1
+                    # Сохраняем chatId DISCARD-переговоров — LLM их пропустит без вызова.
+                    if neg_id_match:
+                        result["discard_neg_ids"].append(neg_id_match.group(1))
                 elif status_class == 'viewed':
                     result["viewed"] += 1
                 elif status_class == 'interview':
@@ -224,11 +229,11 @@ def fetch_hh_possible_offers(acc: dict) -> list:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "X-XsrfToken": xsrf,
         "Accept": "application/json",
-        "Referer": "https://hh.ru/applicant/negotiations",
+        "Referer": hh_base() + "/applicant/negotiations",
     }
     try:
         resp = requests.get(
-            "https://hh.ru/shards/applicant/negotiations/possible_job_offers",
+            hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             cookies=cookies,
             headers=headers,
             timeout=10,
@@ -257,7 +262,7 @@ def auto_decline_discards(acc: dict) -> int:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://hh.ru/applicant/negotiations",
+        "Referer": hh_base() + "/applicant/negotiations",
         "X-Xsrftoken": xsrf,
     }
     declined = 0
@@ -266,7 +271,7 @@ def auto_decline_discards(acc: dict) -> int:
         topic_ids = []
         for page in range(5):
             r = requests.get(
-                f"https://hh.ru/applicant/negotiations?state=DISCARD&page={page}",
+                f"{hh_base()}/applicant/negotiations?state=DISCARD&page={page}",
                 headers=headers, cookies=acc["cookies"], timeout=15
             )
             ssr = parse_hh_lux_ssr(r.text)
@@ -287,7 +292,7 @@ def auto_decline_discards(acc: dict) -> int:
             try:
                 # requests сам сделает URL-encoding (важно: _xsrf может содержать `+`, `=`, `&`)
                 r2 = requests.post(
-                    "https://hh.ru/applicant/negotiations/decline",
+                    hh_base() + "/applicant/negotiations/decline",
                     headers=headers,
                     cookies=acc["cookies"],
                     data={"topicId": tid, "_xsrf": xsrf},

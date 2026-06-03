@@ -130,6 +130,7 @@ class AccountState:
         self._llm_no_chat: set = set()       # {neg_id} chats that returned 409 (permanently closed/locked)
         self._llm_neg_failures: dict = {}    # {neg_id: count} — exception-counter for exponential backoff
         self.hh_interview_neg_ids: list = [] # negotiation IDs from last INTERVIEW fetch
+        self.hh_discard_neg_ids: set = set() # negotiation IDs HH marked as DISCARD — пропускаем в LLM до вызова API
         self.llm_enabled: bool = True        # per-account LLM toggle (overridden by global CONFIG.llm_enabled)
         self.llm_status: str = ""            # human-readable LLM status for dashboard display
         self.llm_replied_count: int = 0      # total replies sent this session

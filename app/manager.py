@@ -32,7 +32,7 @@ def _today_msk() -> str:
 from app.config import (
     CONFIG, accounts_data,
     save_config, load_config, save_accounts, load_accounts,
-    _url_entry, _url_pages_map,
+    _url_entry, _url_pages_map, hh_base,
 )
 
 from app.storage import (
@@ -146,7 +146,7 @@ class BotManager:
 
     def _build_session_urls(self, resume_hash: str) -> list[str]:
         """URL поиска для браузерной сессии: resume-URL + keyword-URLs из глобального пула."""
-        resume_url = f"https://hh.ru/search/vacancy?resume={resume_hash}&order_by=publication_time&items_on_page=20"
+        resume_url = f"{hh_base()}/search/vacancy?resume={resume_hash}&order_by=publication_time&items_on_page=20"
         urls = [resume_url]
         for item in CONFIG.url_pool:
             entry = _url_entry(item)
@@ -1014,12 +1014,12 @@ class BotManager:
             # Hot leads priority: fetch possible_job_offers and put matching vacancies first
             try:
                 r_offers = requests.get(
-                    "https://hh.ru/shards/applicant/negotiations/possible_job_offers",
+                    hh_base() + "/shards/applicant/negotiations/possible_job_offers",
                     headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                         "Accept": "application/json",
                         "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
-                        "Referer": "https://hh.ru/applicant/negotiations",
+                        "Referer": hh_base() + "/applicant/negotiations",
                     },
                     cookies=acc.get("cookies", {}), timeout=10,
                 )
@@ -1556,6 +1556,13 @@ class BotManager:
                 skipped_locked += 1
                 log_debug(f"LLM [{state.short}] {item_id}: 409-закрыт, пропуск кандидата")
                 continue
+            # Early check: HH пометил как DISCARD — нет смысла отвечать, экономим LLM API call.
+            if item_id in state.hh_discard_neg_ids:
+                skipped_locked += 1
+                # Также добавляем в постоянный _llm_no_chat чтобы не проверять каждый цикл.
+                state._llm_no_chat.add(item_id)
+                log_debug(f"LLM [{state.short}] {item_id}: HH-DISCARD, пропуск кандидата")
+                continue
             # Early check: chat locked via text/flags (employer disabled messaging or invite-only)
             if _check_chat_locked(item):
                 skipped_locked += 1
@@ -1997,6 +2004,7 @@ class BotManager:
                 state.hh_discards = stats["discard"]
                 state.hh_interviews_list = stats["interviews_list"]
                 state.hh_interview_neg_ids = stats.get("neg_ids", [])
+                state.hh_discard_neg_ids = set(str(x) for x in stats.get("discard_neg_ids", []))
                 state.hh_unread_by_employer = stats.get("unread_by_employer", 0)
 
                 for neg_id in state.hh_interview_neg_ids:

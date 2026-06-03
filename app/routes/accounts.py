@@ -12,7 +12,7 @@ import requests
 from fastapi import APIRouter, Request
 
 from app.logging_utils import log_debug, _is_login_page
-from app.config import accounts_data, save_accounts
+from app.config import accounts_data, save_accounts, hh_base
 from app.storage import save_browser_sessions
 from app.oauth import (
     _obtain_oauth_token, _oauth_touch_resume,
@@ -56,11 +56,12 @@ def _parse_cookies_str(raw: str) -> tuple:
     raw = raw.encode().decode('unicode_escape', errors='replace') if '\\u00' in raw else raw
 
     if raw.startswith("curl "):
-        m = re.search(r"-H\s+['\"](?:C|c)ookie:\s*([^'\"]+)['\"]", raw, re.DOTALL)
+        # `\$?` — bash $'...' ANSI-C quoting (Firefox Copy-as-cURL для cookies с спецсимволами).
+        m = re.search(r"-H\s+\$?['\"](?:C|c)ookie:\s*([^'\"]+)['\"]", raw, re.DOTALL)
         if not m:
             m = re.search(r"-b\s+\$?['\"]([^'\"]+)['\"]", raw, re.DOTALL)
         if not m:
-            m = re.search(r"--cookie\s+['\"]([^'\"]+)['\"]", raw, re.DOTALL)
+            m = re.search(r"--cookie\s+\$?['\"]([^'\"]+)['\"]", raw, re.DOTALL)
         if m:
             raw_line = m.group(1).strip()
         else:
@@ -69,6 +70,14 @@ def _parse_cookies_str(raw: str) -> tuple:
         raw_line = raw[7:].strip()
     else:
         raw_line = raw
+
+    # bash $'...' декодирует \NNN (octal), \xNN, \n и т.д. — повторяем то же.
+    # Firefox Copy-as-cURL генерит $'...' когда cookie содержит спецсимволы (например ! → \041).
+    if "\\" in raw_line:
+        try:
+            raw_line = raw_line.encode("utf-8").decode("unicode_escape")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
 
     cookies: dict = {}
     for part in raw_line.split(";"):
@@ -470,7 +479,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
     def _do():
         ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         r = requests.get(
-            f"https://hh.ru/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
+            f"{hh_base()}/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
             headers={"User-Agent": ua, "Accept": "text/html"},
             cookies=acc.get("cookies", {}), timeout=15)
         rich = _parse_questionnaire_rich(r.text)
@@ -502,6 +511,58 @@ async def api_resume_audit(idx: int, extra_terms: str = ""):
     return await loop.run_in_executor(None, _analyze_resume, acc, extra)
 
 
+@router.get("/api/account/{idx}/suggest_urls")
+async def api_suggest_urls(idx: int, extra_terms: str = ""):
+    """Подсказать URL поисков на основе резюме (title + professionalRole + skills).
+    Возвращает [{term, vacancies, seekers, ratio, url}, ...] отсортированный
+    по конкуренции (низкая → высокая). Использует кеш аудита если он уже есть.
+    Использовать на странице Настройки → Пул URL."""
+    acc = bot._get_apply_acc(idx)
+    if acc is None:
+        return {"ok": False, "error": "Invalid idx"}
+    extra = [t.strip() for t in (extra_terms or "").split(",") if t.strip()] if extra_terms else []
+    loop = asyncio.get_event_loop()
+    audit = await loop.run_in_executor(None, _analyze_resume, acc, extra)
+    if audit.get("error"):
+        return {"ok": False, "error": audit["error"]}
+    suggestions = []
+    import urllib.parse as _up
+    resume_hash = acc.get("resume_hash", "")
+    for cmp_item in (audit.get("supply_demand_comparison") or []):
+        term = cmp_item.get("term", "").strip()
+        if not term:
+            continue
+        # ?text=...&area=1&order_by=publication_time для свежих
+        url = (
+            f"{hh_base()}/search/vacancy?text={_up.quote(term)}"
+            f"&area=1&order_by=publication_time&items_on_page=20"
+        )
+        suggestions.append({
+            "term": term,
+            "url": url,
+            "vacancies": cmp_item.get("vacancies", 0),
+            "ratio": cmp_item.get("ratio", 0),
+        })
+    # Если есть resume_hash — добавим вариант "По резюме" первым (приоритет).
+    if resume_hash:
+        url_resume = (
+            f"{hh_base()}/search/vacancy?resume={resume_hash}"
+            f"&order_by=publication_time&items_on_page=20"
+        )
+        suggestions.insert(0, {
+            "term": f"По резюме «{audit.get('title', '?')}»",
+            "url": url_resume,
+            "vacancies": audit.get("market", {}).get("vacancy_count", 0),
+            "ratio": audit.get("market", {}).get("supply_demand_ratio", 0),
+        })
+    return {
+        "ok": True,
+        "resume_title": audit.get("title", ""),
+        "resume_hash": resume_hash,
+        "suggestions": suggestions,
+    }
+
+
 @router.get("/api/account/{idx}/hot_leads")
 async def api_hot_leads(idx: int):
     """Possible job offers — горячие лиды, работодатели готовые пригласить."""
@@ -510,12 +571,12 @@ async def api_hot_leads(idx: int):
         return {"ok": False, "error": "Invalid idx"}
     try:
         r = requests.get(
-            "https://hh.ru/shards/applicant/negotiations/possible_job_offers",
+            hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept": "application/json",
                 "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
-                "Referer": "https://hh.ru/applicant/negotiations",
+                "Referer": hh_base() + "/applicant/negotiations",
             },
             cookies=acc.get("cookies", {}), timeout=15,
         )
@@ -546,7 +607,7 @@ async def api_remindable(idx: int):
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
         r = requests.get(
-            "https://hh.ru/applicant/negotiations",
+            hh_base() + "/applicant/negotiations",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=acc.get("cookies", {}), timeout=15,
         )
@@ -600,14 +661,14 @@ async def api_clone_resume(idx: int, request: Request):
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
         r = requests.post(
-            "https://hh.ru/applicant/resumes/clone",
+            hh_base() + "/applicant/resumes/clone",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept": "application/json",
                 "X-Xsrftoken": xsrf,
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Origin": "https://hh.ru",
-                "Referer": "https://hh.ru/applicant/resumes",
+                "Referer": hh_base() + "/applicant/resumes",
             },
             cookies=acc.get("cookies", {}),
             data=f"resume={resume_hash}&_xsrf={xsrf}",
@@ -624,7 +685,7 @@ async def api_clone_resume(idx: int, request: Request):
                 return {"ok": True, "new_hash": "", "message": "Склонировано, но hash не получен"}
 
             ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            r_orig = requests.get(f"https://hh.ru/resume/{resume_hash}",
+            r_orig = requests.get(f"{hh_base()}/resume/{resume_hash}",
                 headers={"User-Agent": ua, "Accept": "text/html"},
                 cookies=acc.get("cookies", {}), timeout=15)
             orig_data = {}
@@ -661,7 +722,7 @@ async def api_clone_resume(idx: int, request: Request):
             return {
                 "ok": True,
                 "new_hash": new_hash,
-                "edit_url": f"https://hh.ru/resume/edit/{new_hash}/position",
+                "edit_url": f"{hh_base()}/resume/edit/{new_hash}/position",
                 "fields_copied": edited_count,
                 "message": f"Полный клон создан! {edited_count} полей скопировано. Осталось опубликовать на hh.ru",
             }
@@ -723,8 +784,8 @@ async def api_all_resumes(idx: int):
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     try:
         r = requests.get(
-            "https://hh.ru/applicant/resumes",
-            headers={"User-Agent": ua, "Accept": "text/html", "Referer": "https://hh.ru/"},
+            hh_base() + "/applicant/resumes",
+            headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
             cookies=acc.get("cookies", {}), timeout=15,
         )
         if r.status_code in (401, 403) or _is_login_page(r.text):
@@ -756,11 +817,111 @@ async def api_all_resumes(idx: int):
                 "experience_count": len(res.get("experience", [])),
                 "views_7d": (rs.get("views") or {}).get("count", 0),
                 "shows_7d": (rs.get("searchShows") or {}).get("count", 0),
-                "edit_url": f"https://hh.ru/resume/edit/{rhash}/position",
+                "edit_url": f"{hh_base()}/resume/edit/{rhash}/position",
             })
         return {"resumes": resumes, "total": len(resumes)}
     except Exception as e:
         return {"resumes": [], "error": str(e)}
+
+
+# Cache: {url: (timestamp, result)} — TTL 10 min, ограничение размера.
+_URL_PREVIEW_CACHE: dict = {}
+_URL_PREVIEW_TTL = 600
+_URL_PREVIEW_MAX = 200
+
+
+def _url_preview_compute(url: str, cookies: dict) -> dict:
+    """Достать кол-во вакансий + (если возможно) кол-во активных соискателей по URL."""
+    import urllib.parse as _up
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    result = {"vacancies": 0, "seekers": 0, "ratio": 0.0}
+    try:
+        # 1. Vacancies count — фетчим URL как есть, парсим SSR.
+        r = requests.get(url, headers={"User-Agent": ua, "Accept": "text/html"},
+                         cookies=cookies, timeout=10)
+        if r.status_code == 200 and not _is_login_page(r.text):
+            from app.hh_resume import parse_hh_lux_ssr
+            ssr = parse_hh_lux_ssr(r.text)
+            sc = ssr.get("searchCounts", {})
+            if isinstance(sc, dict) and sc.get("value"):
+                result["vacancies"] = int(sc["value"])
+            if not result["vacancies"]:
+                m = re.search(r'"found"\s*:\s*(\d+)', r.text[:8000])
+                if m:
+                    result["vacancies"] = int(m.group(1))
+
+        # 2. Seekers count — только если URL содержит ?text= (для resume= это
+        # нельзя посчитать без дополнительной информации о резюме).
+        try:
+            parsed = _up.urlparse(url)
+            qs = dict(_up.parse_qsl(parsed.query))
+            text = qs.get("text", "").strip()
+            if text and result["vacancies"]:
+                r2 = requests.get(
+                    f"{hh_base()}/search/applicant?text={_up.quote(text)}&area=1&clusters=true",
+                    headers={"User-Agent": ua, "Accept": "application/json,text/html"},
+                    cookies=cookies, timeout=10,
+                )
+                if r2.status_code == 200:
+                    try:
+                        cj = r2.json()
+                    except Exception:
+                        cj = {}
+                    js_groups = (cj.get("clusters", {}).get("job_search_status", {}) or {}).get("groups", {})
+                    for gid, gdata in (js_groups or {}).items():
+                        if gid == "active_search" or "актив" in (gdata.get("title", "")).lower():
+                            result["seekers"] = int(gdata.get("count", 0))
+                            break
+        except Exception as e:
+            log_debug(f"_url_preview seekers error: {e}")
+
+        if result["vacancies"] > 0 and result["seekers"] > 0:
+            result["ratio"] = round(result["seekers"] / result["vacancies"], 1)
+    except Exception as e:
+        log_debug(f"_url_preview_compute error: {e}")
+    return result
+
+
+@router.get("/api/url_preview")
+async def api_url_preview(url: str, idx: int = 0):
+    """Возвращает {vacancies, seekers, ratio} для поисковой URL.
+    Если URL содержит ?text= — посчитает конкуренцию (как в аудите).
+    Без text= — только число вакансий."""
+    # Принимаем основной и любые региональные поддомены *.hh.ru/search/
+    import re as _re
+    if not url or not _re.match(r"^https://(?:[a-z0-9-]+\.)?hh\.ru/search/", url):
+        return {"error": "bad url"}
+    import time as _t
+    import urllib.parse as _up
+    now = _t.time()
+
+    # Если URL имеет ?resume=HASH и хеш НЕ принадлежит этому аккаунту —
+    # HH вернёт 404, и закешировать 0 нельзя (затрёт работающие результаты
+    # у владельца). Возвращаем явный foreign-маркер без кеша.
+    try:
+        qs_dict = dict(_up.parse_qsl(_up.urlparse(url).query))
+        url_resume = qs_dict.get("resume", "").strip()
+    except Exception:
+        url_resume = ""
+
+    acc = bot._get_apply_acc(idx) if 0 <= idx else None
+    cookies = (acc or {}).get("cookies", {}) if acc else {}
+    acc_resume = (acc or {}).get("resume_hash", "") if acc else ""
+    if url_resume and acc_resume and url_resume != acc_resume:
+        return {"vacancies": 0, "seekers": 0, "ratio": 0.0, "foreign_resume": True}
+
+    # Кеш-ключ включает idx, чтобы разные аккаунты не затирали друг друга.
+    cache_key = (url, int(idx))
+    cached = _URL_PREVIEW_CACHE.get(cache_key)
+    if cached and now - cached[0] < _URL_PREVIEW_TTL:
+        return {**cached[1], "cached": True}
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, _url_preview_compute, url, cookies)
+    if len(_URL_PREVIEW_CACHE) > _URL_PREVIEW_MAX:
+        oldest = min(_URL_PREVIEW_CACHE.items(), key=lambda kv: kv[1][0])
+        _URL_PREVIEW_CACHE.pop(oldest[0], None)
+    _URL_PREVIEW_CACHE[cache_key] = (now, data)
+    return data
 
 
 @router.post("/api/account/{idx}/decline_discards")

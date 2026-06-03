@@ -3,9 +3,11 @@ Core routes: startup, index, websocket, global pause, broadcast loop.
 """
 
 import asyncio
+import re
+from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.logging_utils import log_debug
 from app.config import CONFIG, _CONFIG_KEYS, save_config, _url_entry
@@ -27,9 +29,25 @@ router = APIRouter()
 # INDEX
 # ============================================================
 
+_STATIC_DIR = Path("static")
+_ASSET_REF_RE = re.compile(r'(src|href)="(/static/[^"?]+)\?v=\d+"')
+
+
+def _bust(match: re.Match) -> str:
+    attr, path = match.group(1), match.group(2)
+    rel = path[len("/static/"):]
+    try:
+        mtime = int((_STATIC_DIR / rel).stat().st_mtime)
+    except OSError:
+        return match.group(0)
+    return f'{attr}="{path}?v={mtime}"'
+
+
 @router.get("/")
 async def index():
-    return FileResponse("static/index.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = _ASSET_REF_RE.sub(_bust, html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 # ============================================================
@@ -49,27 +67,37 @@ def _allowed_ws_hosts() -> set:
     return _DEFAULT_WS_ORIGIN_HOSTS | extra_hosts
 
 
-def _ws_origin_allowed(origin: str) -> bool:
+def _ws_origin_allowed(origin: str, request_host: str = "") -> bool:
     """CSWSH-защита: bind 127.0.0.1 не спасает от того, что произвольный сайт
     из браузера откроет ws://localhost:8000/ws. Проверяем Origin вручную.
-    Если bind на 0.0.0.0 — добавить хосты через env HH_BOT_ALLOWED_ORIGINS."""
+    Дополнительно: same-origin всегда ОК (Origin host совпадает с Host header) —
+    защищает LAN-доступ при HH_BOT_UNSAFE_EXPOSE=1 без нужды явно прописывать
+    каждый IP через HH_BOT_ALLOWED_ORIGINS."""
     if not origin:
         # WS-клиент без Origin (curl, скрипт) — пускаем; браузер всегда выставит.
         return True
     from urllib.parse import urlparse
     try:
-        host = urlparse(origin).hostname or ""
+        host = (urlparse(origin).hostname or "").lower()
     except Exception:
         return False
-    return host.lower() in _allowed_ws_hosts()
+    if host in _allowed_ws_hosts():
+        return True
+    # Same-origin: Host header без порта (browser → Host: 192.168.8.206:8001).
+    if request_host:
+        req_host = request_host.split(":", 1)[0].lower()
+        if req_host and req_host == host:
+            return True
+    return False
 
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     origin = ws.headers.get("origin", "")
-    if not _ws_origin_allowed(origin):
+    request_host = ws.headers.get("host", "")
+    if not _ws_origin_allowed(origin, request_host):
         await ws.close(code=4403)  # policy violation
-        log_debug(f"WS: rejected origin {origin!r}")
+        log_debug(f"WS: rejected origin {origin!r} (host {request_host!r})")
         return
     # API-key check (если HH_BOT_API_KEY задан) — closes /api/llm_run_now,
     # set_config, account_pause WS spam from a local attacker.

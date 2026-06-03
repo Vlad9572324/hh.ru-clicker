@@ -2,12 +2,18 @@
 Settings and raw config/accounts routes.
 """
 
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Union
 
 from fastapi import APIRouter, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.config import CONFIG, accounts_data, _CONFIG_KEYS, save_config, save_accounts
+from app.storage import load_browser_sessions, save_browser_sessions, DATA_DIR
+from app.logging_utils import log_debug
 
 
 router = APIRouter()
@@ -63,19 +69,41 @@ async def api_settings(update: ConfigUpdate):
     return {"ok": True, "key": update.key, "value": getattr(CONFIG, update.key)}
 
 
+_RAW_LIST_KEYS = {
+    "questionnaire_templates", "letter_templates", "url_pool",
+    "allowed_schedules", "llm_profiles",
+}
+_RAW_LLM_KEYS = {
+    "llm_enabled", "llm_auto_send", "llm_use_cover_letter", "llm_use_resume",
+    "llm_api_key", "llm_base_url", "llm_model", "llm_profile_mode",
+    "llm_system_prompt",
+}
+_RAW_EXTRA_KEYS = {"auto_apply_tests"}
+
+
+def _all_raw_config_keys():
+    """Все ключи которые покажем/примем в raw editor: whitelist + LLM + lists."""
+    return set(_CONFIG_KEYS) | _RAW_LIST_KEYS | _RAW_LLM_KEYS | _RAW_EXTRA_KEYS
+
+
 @router.get("/api/raw/config")
 async def api_raw_config_get():
-    """Вернуть текущий config как объект."""
-    cfg = {k: getattr(CONFIG, k) for k in _CONFIG_KEYS}
-    cfg["questionnaire_templates"] = CONFIG.questionnaire_templates
-    cfg["letter_templates"] = CONFIG.letter_templates
-    cfg["url_pool"] = CONFIG.url_pool
-    return cfg
+    """Вернуть текущий config как объект — с llm_api_key и всеми LLM-ключами,
+    чтобы юзер видел актуальные значения и мог бэкапить вручную."""
+    out = {}
+    for k in sorted(_all_raw_config_keys()):
+        if hasattr(CONFIG, k):
+            out[k] = getattr(CONFIG, k)
+    return out
 
 
 @router.post("/api/raw/config")
-async def api_raw_config_set(request: Request):
-    """Перезаписать config из JSON-объекта. Только разрешённые ключи + строгий кастинг типов."""
+async def api_raw_config_set(request: Request, force: int = 0):
+    """Перезаписать config из JSON-объекта. Принимает все известные ключи
+    (включая llm_*). Строгий кастинг типов.
+    Защита: если пустой list/string затирает непустой существующий → пропуск
+    (если не передан ?force=1). Иначе один случайный «💾 Сохранить» при stale-state
+    сносит llm_profiles/letter_templates/cookies."""
     try:
         data = await request.json()
     except Exception:
@@ -83,22 +111,36 @@ async def api_raw_config_set(request: Request):
     if not isinstance(data, dict):
         return {"ok": False, "error": "Ожидается объект"}
     errors = {}
+    preserved = []  # ключи которые НЕ перезаписали из-за защиты
+    allowed = _all_raw_config_keys()
     for key, value in data.items():
-        if key in _CONFIG_KEYS:
+        if key not in allowed:
+            errors[key] = "unknown_or_wrong_type"
+            continue
+        if key in _RAW_LIST_KEYS:
+            if not isinstance(value, list):
+                errors[key] = "expected list"
+                continue
+            current = getattr(CONFIG, key, None) or []
+            if not force and not value and current:
+                preserved.append(key)
+                continue
+            setattr(CONFIG, key, value)
+            continue
+        if key in _RAW_LLM_KEYS or key in _RAW_EXTRA_KEYS or key in _CONFIG_KEYS:
             try:
-                setattr(CONFIG, key, _safe_cast(key, value))
+                casted = _safe_cast(key, value)
             except (ValueError, TypeError) as e:
                 errors[key] = str(e)
-        elif key == "questionnaire_templates" and isinstance(value, list):
-            CONFIG.questionnaire_templates = value
-        elif key == "letter_templates" and isinstance(value, list):
-            CONFIG.letter_templates = value
-        elif key == "url_pool" and isinstance(value, list):
-            CONFIG.url_pool = value
-        else:
-            errors[key] = "unknown_or_wrong_type"
+                continue
+            current = getattr(CONFIG, key, None)
+            # Защита от затирания непустых строк (например llm_api_key, llm_system_prompt)
+            if not force and isinstance(casted, str) and not casted and isinstance(current, str) and current:
+                preserved.append(key)
+                continue
+            setattr(CONFIG, key, casted)
     save_config()
-    return {"ok": not errors, "errors": errors}
+    return {"ok": not errors, "errors": errors, "preserved": preserved}
 
 
 @router.get("/api/raw/accounts")
@@ -175,4 +217,159 @@ async def api_raw_accounts_set(request: Request):
         "ok": True,
         "count": len(merged),
         "warning": "Добавление/удаление аккаунтов требует перезапуска бота.",
+    }
+
+
+# ============================================================
+# BACKUP / RESTORE — единый JSON со всем (включая cookies/API-keys).
+# ============================================================
+
+_BACKUP_FILES = ("config.json", "accounts.json", "browser_sessions.json", "oauth_tokens.json")
+
+
+def _load_json_file(name: str):
+    p = Path(DATA_DIR) / name
+    if not p.exists():
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        log_debug(f"backup: failed to load {name}: {e}")
+        return None
+
+
+@router.get("/api/backup")
+async def api_backup_download():
+    """Скачать полный бэкап data/ (config + accounts + browser_sessions + oauth_tokens)
+    одним JSON-файлом. Содержит cookies/llm_api_key — храни в безопасном месте."""
+    bundle = {
+        "version": 1,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    for fname in _BACKUP_FILES:
+        bundle[fname] = _load_json_file(fname)
+    body = json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    headers = {
+        "Content-Disposition": f'attachment; filename="hh-backup-{stamp}.json"',
+        "Cache-Control": "no-store",
+    }
+    return Response(content=body, media_type="application/json", headers=headers)
+
+
+# Поля внутри каждого файла бэкапа, которые НЕЛЬЗЯ затирать пустым list/string
+# без явного ?force=1 — если в бэкапе они пустые, а на диске не пустые → пропуск.
+# Это защита от случайного «💾 Сохранить» когда редактор показывал stale-state
+# (юзер открыл, не дождался автозагрузки, нажал save → потерял llm_profiles).
+_PROTECTED_FIELDS = {
+    "config.json": {
+        "llm_profiles", "letter_templates", "questionnaire_templates",
+        "url_pool", "allowed_schedules",
+        "llm_api_key", "llm_base_url", "llm_model", "llm_system_prompt",
+    },
+}
+
+
+def _merge_preserve(payload, current, protected: set, path: str = "") -> tuple:
+    """Если payload[k] — пустой list/string, а current[k] — непустой — оставляем current.
+    Возвращает (merged, preserved_keys)."""
+    preserved = []
+    if not isinstance(payload, dict) or not isinstance(current, dict):
+        return payload, preserved
+    out = dict(payload)
+    for k in protected:
+        new_v = payload.get(k)
+        old_v = current.get(k)
+        if old_v and not new_v and (isinstance(new_v, (list, str)) or new_v is None):
+            out[k] = old_v
+            preserved.append(f"{path}{k}")
+    return out, preserved
+
+
+@router.post("/api/backup")
+async def api_backup_restore(request: Request, force: int = 0):
+    """Восстановить из бэкапа. Принимает JSON, сделанный GET /api/backup.
+    Перезаписывает ВСЕ data/*.json файлы. Защита: пустые list/string не затирают
+    непустые существующие (для llm_profiles, letter_templates и т.д.) если ?force=0."""
+    try:
+        data = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Невалидный JSON"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "Ожидается объект"}
+    restored = []
+    errors = {}
+    preserved_all = []
+    for fname in _BACKUP_FILES:
+        if fname not in data:
+            continue
+        payload = data[fname]
+        if payload is None:
+            continue
+        # Защита: для известных файлов сохраняем непустые поля если входящие пустые.
+        if not force and fname in _PROTECTED_FIELDS:
+            current = _load_json_file(fname) or {}
+            payload, preserved_keys = _merge_preserve(
+                payload, current, _PROTECTED_FIELDS[fname], path=f"{fname}/"
+            )
+            preserved_all.extend(preserved_keys)
+        try:
+            p = Path(DATA_DIR) / fname
+            tmp = p.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            tmp.replace(p)
+            restored.append(fname)
+        except Exception as e:
+            errors[fname] = str(e)
+
+    # Reload live state from disk so user не должен рестартовать руками.
+    try:
+        from app.config import load_config as _load_config, load_accounts as _load_accounts
+        _load_config()
+        _load_accounts()
+        from app.instances import bot as _bot
+        _bot.temp_sessions[:] = load_browser_sessions()
+    except Exception as e:
+        log_debug(f"backup restore: live-reload error: {e}")
+
+    return {
+        "ok": not errors,
+        "restored": restored,
+        "preserved": preserved_all,
+        "errors": errors,
+        "warning": "Аккаунты/cookies применены. Для новых аккаунтов нужен перезапуск бота.",
+    }
+
+
+@router.delete("/api/backup")
+async def api_backup_wipe():
+    """Полная очистка: удалить все data/*.json (config, accounts, browser_sessions,
+    oauth_tokens). После — in-memory state сбрасывается до дефолтов."""
+    cleared = []
+    errors = {}
+    for fname in _BACKUP_FILES:
+        p = Path(DATA_DIR) / fname
+        try:
+            if p.exists():
+                p.unlink()
+                cleared.append(fname)
+        except Exception as e:
+            errors[fname] = str(e)
+    # Сброс in-memory state.
+    try:
+        from app.config import load_config as _load_config, load_accounts as _load_accounts
+        from app.instances import bot as _bot
+        accounts_data.clear()
+        _bot.temp_sessions.clear()
+        # Не вызываем _load_*  — файлов уже нет; CONFIG останется в текущем виде
+        # но без диска (а save_config создаст новый чистый файл на следующем save).
+    except Exception as e:
+        log_debug(f"backup wipe: in-memory clear error: {e}")
+    return {
+        "ok": not errors,
+        "cleared": cleared,
+        "errors": errors,
+        "warning": "In-memory очищено. Перезапуск бота не требуется.",
     }

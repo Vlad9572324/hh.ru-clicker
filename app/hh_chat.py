@@ -4,6 +4,7 @@ HH.ru chat functions: fetch chat list, build threads, send messages, mark read.
 
 import os
 import requests
+from app.config import hh_base
 
 from app.logging_utils import log_debug, _is_login_page
 
@@ -57,7 +58,7 @@ def _do_fetch_chatik_cookies(acc: dict) -> None:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
         r = requests.get(
-            "https://hh.ru/",
+            hh_base() + "/",
             cookies=acc["cookies"],
             headers={"User-Agent": ua},
             timeout=10,
@@ -341,13 +342,31 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
                 body_json = resp.json()
             except Exception:
                 body_json = {}
-            err_type = str(body_json.get("error") or body_json.get("type") or "").lower()
+            # Новый формат HH: {"error":[{"key":"CHAT_DOES_NOT_EXIST","description":"..."}],"code":409}
+            # Старый формат: {"error":"chat_not_found","message":"..."}
+            err_field = body_json.get("error") or body_json.get("type") or ""
+            err_keys = []
+            if isinstance(err_field, list):
+                for e in err_field:
+                    if isinstance(e, dict):
+                        err_keys.append(str(e.get("key", "")).lower())
+                        err_keys.append(str(e.get("description", "")).lower())
+            else:
+                err_keys.append(str(err_field).lower())
             err_msg = str(body_json.get("message") or body_json.get("description") or "").lower()
+            err_keys.append(err_msg)
             full_text = (resp.text or "").lower()
-            if "duplicate" in err_msg or "rate" in err_msg or "duplicate" in full_text or "rate" in full_text:
-                return False
-            if err_type in ("chat_not_found", "archived", "closed") or "chat_not_found" in full_text or "archived" in full_text:
+            err_keys.append(full_text)
+            joined = " ".join(err_keys)
+            # Closed/archived/non-existent chat → chat_not_found
+            CHAT_GONE_MARKERS = (
+                "chat_not_found", "chat_does_not_exist", "chat does not exist",
+                "archived", "closed", "not_found", "not found",
+            )
+            if any(m in joined for m in CHAT_GONE_MARKERS):
                 return "chat_not_found"
+            if "duplicate" in joined or "rate" in joined:
+                return False
             return False
         return False
     except Exception as e:

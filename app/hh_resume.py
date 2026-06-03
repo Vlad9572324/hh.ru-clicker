@@ -12,7 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app.logging_utils import log_debug, _is_login_page
-from app.config import CONFIG
+from app.config import CONFIG, hh_base
 
 _resume_cache: dict = {}   # {resume_hash: (text, timestamp)}
 # RLock — reentrant: fetch_resume_text держит лок, потом вызывает _cleanup_resume_cache,
@@ -230,12 +230,12 @@ def fetch_resume_text(acc: dict) -> str:
 
     try:
         r = requests.get(
-            f"https://hh.ru/resume/{resume_hash}",
+            f"{hh_base()}/resume/{resume_hash}",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                               "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer": "https://hh.ru/applicant/resumes",
+                "Referer": hh_base() + "/applicant/resumes",
             },
             cookies=acc["cookies"],
             timeout=15,
@@ -266,7 +266,7 @@ def fetch_resume_stats(acc: dict) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://hh.ru/",
+        "Referer": hh_base() + "/",
     }
     result = {
         "views": 0, "views_new": 0, "shows": 0,
@@ -276,7 +276,7 @@ def fetch_resume_stats(acc: dict) -> dict:
     }
     try:
         r = requests.get(
-            "https://hh.ru/applicant/resumes",
+            hh_base() + "/applicant/resumes",
             headers=headers, cookies=acc["cookies"], timeout=15
         )
         ssr = parse_hh_lux_ssr(r.text)
@@ -322,12 +322,12 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://hh.ru/applicant/resumes",
+        "Referer": hh_base() + "/applicant/resumes",
     }
     result = []
     try:
         r = requests.get(
-            f"https://hh.ru/applicant/resumeview/history?resumeHash={resume_hash}",
+            f"{hh_base()}/applicant/resumeview/history?resumeHash={resume_hash}",
             headers=headers, cookies=acc["cookies"], timeout=15
         )
         html = r.text
@@ -407,7 +407,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
     try:
         # 1. Fetch resume page SSR
         r = requests.get(
-            f"https://hh.ru/resume/{resume_hash}",
+            f"{hh_base()}/resume/{resume_hash}",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=cookies, timeout=15,
         )
@@ -437,7 +437,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
 
         # 2. Fetch stats from resumes page
         r2 = requests.get(
-            "https://hh.ru/applicant/resumes",
+            hh_base() + "/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=cookies, timeout=15,
         )
@@ -535,7 +535,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             encoded_title = urllib.parse.quote(search_term)
             # Fetch resume clusters (competitor counts)
             r_clusters = requests.get(
-                f"https://hh.ru/shards/search/resume/clusters?text={encoded_title}&area=1",
+                f"{hh_base()}/shards/search/resume/clusters?text={encoded_title}&area=1",
                 headers={"User-Agent": ua, "Accept": "application/json"},
                 cookies=cookies, timeout=10,
             )
@@ -572,7 +572,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             vacancy_count = 0
             try:
                 r_vac = requests.get(
-                    f"https://hh.ru/search/vacancy?text={encoded_title}&area=1",
+                    f"{hh_base()}/search/vacancy?text={encoded_title}&area=1",
                     headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
                     cookies=cookies, timeout=10,
                 )
@@ -670,7 +670,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
                 try:
                     enc = urllib.parse.quote(term)
                     r_vc = requests.get(
-                        f"https://hh.ru/search/vacancy?text={enc}&area=1",
+                        f"{hh_base()}/search/vacancy?text={enc}&area=1",
                         headers={"User-Agent": ua, "Accept": "text/html"},
                         cookies=cookies, timeout=10,
                     )
@@ -699,7 +699,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
         hr_activity = {"active_count": 0, "slow_count": 0, "dead_count": 0}
         try:
             r_neg = requests.get(
-                "https://hh.ru/applicant/negotiations",
+                hh_base() + "/applicant/negotiations",
                 headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
                 cookies=cookies, timeout=15,
             )
@@ -775,18 +775,18 @@ def _edit_resume_field(acc: dict, resume_hash: str, fields: dict) -> dict:
         s = requests.Session()
         s.verify = False
         try:
-            s.get("https://hh.ru/applicant/resumes", headers={"User-Agent": ua, "Accept": "text/html"},
+            s.get(hh_base() + "/applicant/resumes", headers={"User-Agent": ua, "Accept": "text/html"},
                   cookies=acc.get("cookies", {}), timeout=10)
             # POST edit
             r = s.post(
-            f"https://hh.ru/applicant/resume/edit?resume={resume_hash}&hhtmSource=resume_partial_edit",
+            f"{hh_base()}/applicant/resume/edit?resume={resume_hash}&hhtmSource=resume_partial_edit",
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "X-Xsrftoken": xsrf,
                 "Origin": "https://hh.ru",
-                "Referer": f"https://hh.ru/resume/edit/{resume_hash}/position",
+                "Referer": f"{hh_base()}/resume/edit/{resume_hash}/position",
             },
             cookies=acc.get("cookies", {}),
             json=fields,

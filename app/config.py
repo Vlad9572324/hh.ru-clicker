@@ -90,6 +90,11 @@ class Config:
     # Глобальный пул поисковых URL (выбираются на карточке каждого аккаунта)
     url_pool: list = []  # [{url, pages}, ...] или plain строки (legacy)
 
+    # Региональный поддомен HH (например, "syktyvkar" → https://syktyvkar.hh.ru).
+    # Пусто = основной домен hh.ru. OAuth и chatik всегда на основном (не региональные).
+    # GitHub issue: апплай/поиск/резюме надо ходить на региональный, если задан.
+    hh_region: str = ""
+
     # Шаблоны сопроводительных писем (list of {name: str, text: str})
     letter_templates: list = [
         {
@@ -137,7 +142,28 @@ _CONFIG_KEYS = [
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
     "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
+    "hh_region",
 ]
+
+
+def hh_base() -> str:
+    """Базовый URL HH с учётом регионального поддомена.
+    Пусто → https://hh.ru. С регионом «syktyvkar» → https://syktyvkar.hh.ru.
+    OAuth (`hh.ru/oauth/`) и chatik (`chatik.hh.ru`) всегда основной домен — region не применяется.
+    """
+    region = (getattr(CONFIG, "hh_region", "") or "").strip().lower()
+    # Защита: только [a-z0-9-], чтобы не сделать SSRF через переменную.
+    import re as _re
+    if region and _re.match(r"^[a-z0-9][a-z0-9-]{0,40}$", region):
+        return f"https://{region}.hh.ru"
+    return "https://hh.ru"
+
+
+def hh_url(path: str) -> str:
+    """Собирает URL: hh_base() + path. path должен начинаться со слеша."""
+    if not path.startswith("/"):
+        path = "/" + path
+    return hh_base() + path
 
 
 def save_config():

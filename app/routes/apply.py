@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from glom import glom
 
 from app.logging_utils import _is_login_page
+from app.config import hh_base
 from app.storage import add_applied
 from app.hh_api import get_headers
 from app.questionnaire import get_questionnaire_answer
@@ -27,9 +28,9 @@ async def _fetch_questionnaire_data(acc: dict, vid: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": f"https://hh.ru/vacancy/{vid}",
+        "Referer": f"{hh_base()}/vacancy/{vid}",
     }
-    url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
+    url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
     async with aiohttp.ClientSession(cookies=acc["cookies"], headers=headers) as session:
         async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
             html = await r.text()
@@ -155,7 +156,7 @@ async def api_apply_check(body: dict):
                          ("letter", acc["letter"]), ("lux", "true"), ("ignore_postponed", "true")]:
                 data.add_field(k, v)
             async with session.post(
-                "https://hh.ru/applicant/vacancy_response/popup",
+                hh_base() + "/applicant/vacancy_response/popup",
                 data=data, timeout=aiohttp.ClientTimeout(total=10)
             ) as r:
                 txt = await r.text()
@@ -219,13 +220,13 @@ async def api_apply_submit(body: dict):
     if letter:
         acc = {**acc, "letter": letter}
 
-    url_form = f"https://hh.ru/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
+    url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
     try:
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                     "Accept": "text/html,*/*", "Referer": f"https://hh.ru/vacancy/{vid}"}
+                     "Accept": "text/html,*/*", "Referer": f"{hh_base()}/vacancy/{vid}"}
         ) as session:
             async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 html = await r.text()
