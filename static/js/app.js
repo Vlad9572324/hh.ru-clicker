@@ -819,13 +819,28 @@ function llmShowModelPicker(row, base_url, models) {
 
 function llmProfilesRead() {
   const rows = document.querySelectorAll('#llm-profiles-list .llm-profile-row');
-  return [...rows].map(row => ({
-    name: row.querySelector('.lp-name')?.value.trim() || '',
-    api_key: row.querySelector('.lp-key')?.value.trim() || '',
-    base_url: row.querySelector('.lp-url')?.value.trim() || '',
-    model: row.querySelector('.lp-model')?.value.trim() || '',
-    enabled: row.querySelector('.lp-enabled')?.checked ?? true,
-  }));
+  // Авто-фикс: если в поле «Название» вставили ключ (sk-... / 40+ символов без пробелов),
+  // а api_key пустой — переносим в api_key. Это спасает от типичной путаницы полей.
+  const KEY_RE = /^(sk-|gsk_|gemini-|AIza|hf_|tk-|pk_|st-)[A-Za-z0-9_\-]{15,}$/;
+  return [...rows].map(row => {
+    const nameEl = row.querySelector('.lp-name');
+    const keyEl = row.querySelector('.lp-key');
+    let name = nameEl?.value.trim() || '';
+    let api_key = keyEl?.value.trim() || '';
+    if (!api_key && (KEY_RE.test(name) || (name.length >= 32 && !name.includes(' ')))) {
+      api_key = name;
+      name = '';
+      if (keyEl) keyEl.value = api_key;
+      if (nameEl) { nameEl.value = ''; nameEl.placeholder = '⚠️ Ключ перенесён в поле API Key — задай Название'; nameEl.style.borderColor = 'var(--yellow)'; }
+    }
+    return {
+      name,
+      api_key,
+      base_url: row.querySelector('.lp-url')?.value.trim() || '',
+      model: row.querySelector('.lp-model')?.value.trim() || '',
+      enabled: row.querySelector('.lp-enabled')?.checked ?? true,
+    };
+  });
 }
 
 async function llmSave(btn) {
@@ -920,7 +935,7 @@ function syncLlmSettings(snap) {
   const sel = document.getElementById('llm-resume-acc-sel');
   if (sel && snap?.accounts?.length && sel.options.length !== snap.accounts.length) {
     sel.innerHTML = snap.accounts.map(a =>
-      `<option value="${a.idx}">${esc(a.short || a.name)}</option>`).join('');
+      `<option value="${a.idx}">${esc(a.name || a.short)}</option>`).join('');
   }
 }
 
@@ -956,6 +971,11 @@ function syncScheduleSettings(snap) {
   // Skip inconsistent
   const si = document.getElementById('skip-inconsistent');
   if (si && cfg.skip_inconsistent !== undefined) si.checked = cfg.skip_inconsistent;
+  // Регион (string) — синкаем только если поле не в фокусе (юзер может печатать)
+  const reg = document.getElementById('cfg-hh-region');
+  if (reg && cfg.hh_region !== undefined && document.activeElement !== reg) {
+    reg.value = cfg.hh_region || '';
+  }
   // Smart search filters
   const fa = document.getElementById('filter-agencies');
   if (fa && cfg.filter_agencies !== undefined) fa.checked = cfg.filter_agencies;
@@ -1139,11 +1159,18 @@ async function llmInterviewsLoad() {
   // Populate account filter from loaded data
   const accSel = document.getElementById('llm-log-acc-filter');
   if (accSel) {
+    // Маппинг short→full name из snapshot, чтобы в выпадающем списке
+    // показывать полное имя ("мария мтс (🌐)") вместо обрезанного "🌐мария".
+    const fullByShort = {};
+    (State.lastSnapshot?.accounts || []).forEach(a => {
+      if (a.short) fullByShort[a.short] = a.name || a.short;
+    });
     const known = new Set([...accSel.options].map(o => o.value).filter(Boolean));
     rows.forEach(r => {
       if (r.acc && !known.has(r.acc)) {
         const opt = document.createElement('option');
-        opt.value = r.acc; opt.textContent = r.acc;
+        opt.value = r.acc;
+        opt.textContent = fullByShort[r.acc] || r.acc;
         accSel.appendChild(opt);
         known.add(r.acc);
       }
@@ -1174,9 +1201,14 @@ async function llmRenderAccStats() {
     else if (r.status === 'replied')  byAcc[a].replied++;
   });
 
+  // Маппинг short→full name из текущего snapshot.
+  const fullByShort = {};
+  (State.lastSnapshot?.accounts || []).forEach(x => {
+    if (x.short) fullByShort[x.short] = x.name || x.short;
+  });
   statsEl.innerHTML = Object.values(byAcc).map(a => `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 14px;min-width:160px">
-      <div style="font-size:12px;font-weight:700;color:${colorVar(a.color)};margin-bottom:6px">${esc(a.acc)}</div>
+      <div style="font-size:12px;font-weight:700;color:${colorVar(a.color)};margin-bottom:6px">${esc(fullByShort[a.acc] || a.acc)}</div>
       <div style="display:flex;gap:10px;font-size:12px">
         <span title="Ждёт ответа">⏳ <b>${a.pending}</b></span>
         <span title="Черновик" style="color:var(--yellow)">📝 <b>${a.draft}</b></span>
@@ -1232,7 +1264,7 @@ function _llmUpdateAccToggles(snap) {
     }
     // Update label and color
     const on = acc.llm_enabled !== false;
-    btn.textContent = `🤖 ${acc.short || acc.name || ''}`;
+    btn.textContent = `🤖 ${acc.name || acc.short || ''}`;
     btn.style.color = on ? colorVar(acc.color || 'green') : 'var(--dim)';
     btn.style.borderColor = on ? colorVar(acc.color || 'green') : 'var(--dim)';
     btn.style.opacity = on ? '1' : '0.5';
@@ -1367,7 +1399,20 @@ function parseUrlFilter(url) {
     if (text) parts.push('🔍 ' + decodeURIComponent(text.replace(/\+/g,' ')));
 
     const resume = p.get('resume');
-    if (resume && !text) parts.push('📄 По резюме');
+    if (resume && !text) {
+      // Пытаемся развернуть resume_hash в имя/название аккаунта чтобы две
+      // одинаковые badge'и («📄 По резюме») разных аккаунтов не сливались.
+      let label = 'По резюме';
+      const accs = State?.lastSnapshot?.accounts || [];
+      const owner = accs.find(a => a.resume_hash === resume);
+      if (owner) {
+        // Приоритет: name (полное) → short → первые 6 чаров хеша
+        label = `[${owner.name || owner.short}]`;
+      } else {
+        label = `По резюме ${resume.slice(0, 6)}…`;
+      }
+      parts.push('📄 ' + label);
+    }
 
     const area = p.get('area');
     if (area) parts.push('📍 ' + (HH_AREAS[area] || 'регион ' + area));
@@ -1500,10 +1545,11 @@ function syncAccUrlChecks(snap) {
       const badge = parseUrlFilter(url);
       const urlCount = acc.url_stats?.[url];
       const countInfo = urlCount != null ? `<span style="color:var(--green);font-size:10px;margin-left:4px">→${urlCount}</span>` : '';
+      const previewId = `url-prev-${acc.idx}-${i}`;
       return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
         <label style="display:flex;align-items:flex-start;gap:5px;cursor:pointer;font-size:11px;flex:1;min-width:0">
           <input type="checkbox" value="${esc(url)}" ${checked} style="margin-top:2px;flex-shrink:0">
-          <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(badge)}${countInfo}</span>
+          <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(badge)}${countInfo} <span id="${previewId}" data-url="${esc(url)}" data-acc="${acc.idx}" style="margin-left:4px"></span></span>
         </label>
         <input type="number" class="apply-input acc-url-pages-inp" data-url="${esc(url)}"
           min="1" max="200" placeholder="${poolPages}"
@@ -1512,7 +1558,121 @@ function syncAccUrlChecks(snap) {
           style="width:52px;font-size:10px;padding:2px 4px;text-align:center;flex-shrink:0">
       </div>`;
     }).join('');
+    // Lazy-load конкуренции после рендера (один раз на URL за сессию).
+    container.querySelectorAll('[id^="url-prev-"]').forEach(el => urlPreviewLoad(el));
   });
+}
+
+const _urlPreviewCache = new Map();  // "idx|url" → result (in-mem)
+async function urlPreviewLoad(el) {
+  if (!el || el.dataset.loaded === '1') return;
+  el.dataset.loaded = '1';
+  const url = el.dataset.url;
+  const idx = el.dataset.acc;
+  if (!url) return;
+  const ck = idx + '|' + url;  // ключ включает idx — иначе чужие/свои резюме затирают друг друга
+  let data = _urlPreviewCache.get(ck);
+  if (!data) {
+    try {
+      const r = await fetch(`/api/url_preview?idx=${encodeURIComponent(idx)}&url=${encodeURIComponent(url)}`);
+      data = await r.json();
+      _urlPreviewCache.set(ck, data);
+    } catch(e) { return; }
+  }
+  if (!data || data.error) return;
+  if (data.foreign_resume) {
+    el.innerHTML = `<span style="color:var(--dim)" title="URL содержит чужой resume_hash — HH не отдаст вакансии">· 🔒 чужое резюме</span>`;
+    return;
+  }
+  const parts = [];
+  if (data.vacancies) parts.push(`<span style="color:var(--cyan)" title="Вакансий по этой выдаче">${data.vacancies.toLocaleString('ru')}</span>`);
+  if (data.ratio > 0) {
+    const ratioColor = data.ratio >= 50 ? 'var(--red)' : data.ratio >= 25 ? 'var(--yellow)' : 'var(--green)';
+    const ratioIcon = data.ratio >= 50 ? '🔴' : data.ratio >= 25 ? '🟡' : '🟢';
+    parts.push(`<span style="color:${ratioColor}" title="Активных соискателей на вакансию">${ratioIcon} ${data.ratio} ч/в</span>`);
+  } else if (data.seekers > 0) {
+    parts.push(`<span style="color:var(--dim)" title="Активных соискателей">👥${data.seekers}</span>`);
+  }
+  if (parts.length) el.innerHTML = `· ${parts.join(' · ')}`;
+}
+
+function _syncSuggestAccSel(snap) {
+  const sel = document.getElementById('suggest-acc-sel');
+  if (!sel || !snap?.accounts) return;
+  const key = snap.accounts.map(a => a.idx + ':' + (a.name || a.short || '')).join('|');
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  const prev = sel.value;
+  sel.innerHTML = snap.accounts.map(a =>
+    `<option value="${a.idx}">${esc(a.name || a.short || '')}</option>`).join('');
+  if (prev) sel.value = prev;
+}
+
+async function suggestUrls(btn) {
+  const sel = document.getElementById('suggest-acc-sel');
+  const st = document.getElementById('suggest-status');
+  const res = document.getElementById('suggest-result');
+  if (!sel || !res) return;
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Анализирую резюме (10-30с)...'; st.style.color = 'var(--dim)'; }
+  res.style.display = 'none';
+  try {
+    const r = await fetch(`/api/account/${sel.value}/suggest_urls`);
+    const data = await r.json();
+    if (!data.ok) {
+      if (st) { st.textContent = '❌ ' + (data.error || 'Ошибка'); st.style.color = 'var(--red)'; }
+      return;
+    }
+    const items = data.suggestions || [];
+    if (!items.length) {
+      if (st) { st.textContent = '⚠️ Нет данных'; st.style.color = 'var(--yellow)'; }
+      return;
+    }
+    if (st) { st.textContent = `✅ ${items.length} вариантов`; st.style.color = 'var(--green)'; }
+    res.style.display = '';
+    res.innerHTML = `<table class="applied-table" style="font-size:11px">
+      <thead><tr>
+        <th>Запрос</th>
+        <th style="width:90px;text-align:right">Вакансий</th>
+        <th style="width:100px;text-align:right">Конкуренция</th>
+        <th style="width:60px"></th>
+      </tr></thead>
+      <tbody>${items.map(s => {
+        const ratio = Number(s.ratio || 0);
+        const ratioColor = ratio >= 50 ? 'var(--red)' : ratio >= 25 ? 'var(--yellow)' : ratio > 0 ? 'var(--green)' : 'var(--dim)';
+        const ratioIcon = ratio >= 50 ? '🔴' : ratio >= 25 ? '🟡' : ratio > 0 ? '🟢' : '—';
+        const ratioStr = ratio > 0 ? `${ratio} ч/в` : '—';
+        return `<tr>
+          <td>${esc(s.term)}</td>
+          <td style="text-align:right">${(s.vacancies || 0).toLocaleString('ru')}</td>
+          <td style="text-align:right;color:${ratioColor}">${ratioIcon} ${ratioStr}</td>
+          <td><button class="btn-sm" onclick="suggestAddToPool('${esc(s.url)}',this)">➕</button></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function suggestAddToPool(url, btn) {
+  // Добавляем строку в видимый пул, отмечаем кнопку как добавлено.
+  const container = document.getElementById('url-pool-rows');
+  if (!container) return;
+  // Проверим что уже не добавлено
+  const existing = Array.from(container.querySelectorAll('.url-input')).some(i => i.value === url);
+  if (existing) {
+    if (btn) { btn.textContent = '✓'; btn.disabled = true; }
+    return;
+  }
+  const newIdx = container.children.length;
+  const div = document.createElement('div');
+  div.innerHTML = buildPoolRow(url, newIdx);
+  const row = div.firstElementChild;
+  if (row) container.appendChild(row);
+  if (btn) { btn.textContent = '✓'; btn.disabled = true; }
 }
 
 async function urlAccSave(accIdx, btn) {
@@ -1588,10 +1748,12 @@ function buildSessList(snap) {
   const sessions = (snap?.accounts || []).filter(a => a.temp);
   if (!sessions.length) {
     el.innerHTML = '<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Нет сессий — добавьте первую ниже.</div>';
+    delete el.dataset.fingerprint;  // иначе следующий 1-сессии рендер совпадёт с прошлым fingerprint и скипнется
     return;
   }
-  // Build fingerprint of session data — rebuild on any change
-  const fingerprint = sessions.map(a => `${a.idx}:${a.bot_active}:${a.cookies_expired}`).join('|');
+  // Build fingerprint of session data — rebuild on any change.
+  // count нужен в fingerprint, иначе после delete+add того же idx detail не меняется.
+  const fingerprint = sessions.length + '|' + sessions.map(a => `${a.idx}:${a.bot_active}:${a.cookies_expired}:${a.name||''}`).join('|');
   if (el.dataset.fingerprint === fingerprint) return;
   el.dataset.fingerprint = fingerprint;
   el.innerHTML = '';
@@ -1828,6 +1990,7 @@ function connect() {
         State.lastSnapshot = snap;
         try {
           renderAll(snap);
+          if (typeof State._jsonAllRefresh === 'function') State._jsonAllRefresh();
           const dbg = document.getElementById('dbg-err');
           if (dbg) dbg.style.display = 'none';
         } catch (renderErr) {
@@ -1888,7 +2051,7 @@ function renderAll(snap) {
   else if (State.currentTab === 'hh') renderHH(snap);
   else if (State.currentTab === 'llm') renderLlmLog(snap);
   else if (State.currentTab === 'views') loadViews();
-  else if (State.currentTab === 'settings') buildSessList(snap);
+  else if (State.currentTab === 'settings') { buildSessList(snap); _syncSuggestAccSel(snap); }
   else if (State.currentTab === 'apply') {
     applyBuildAccountSelect(snap);
   }
@@ -2042,6 +2205,9 @@ function renderAccounts(snap) {
   // Пустое состояние — нет аккаунтов
   let emptyEl = document.getElementById('accounts-empty');
   if (!snap.accounts || snap.accounts.length === 0) {
+    // Удалить старые карточки которые остались от предыдущего стейта
+    // (иначе после wipe аккаунт продолжает висеть до перезагрузки страницы).
+    grid.querySelectorAll('.acc-card').forEach(el => el.remove());
     if (!emptyEl) {
       emptyEl = document.createElement('div');
       emptyEl.id = 'accounts-empty';
@@ -3576,14 +3742,19 @@ async function loadViews() {
 }
 
 // ── Resume Audit ─────────────────────────────────────────────
-let _auditSelPopulated = false;
 function syncAuditSelector(snap) {
   const sel = document.getElementById('audit-acc-sel');
-  if (!sel || _auditSelPopulated) return;
+  if (!sel) return;
   const accs = snap?.accounts || [];
   if (!accs.length) return;
-  sel.innerHTML = accs.map(a => `<option value="${a.idx}">${esc(a.short || a.name)}</option>`).join('');
-  _auditSelPopulated = true;
+  // Перестраиваем при изменении состава (а не один раз) — иначе после add/delete
+  // аккаунта список залипает на старом наборе.
+  const key = accs.map(a => a.idx + ':' + (a.name || a.short || '')).join('|');
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  const prev = sel.value;
+  sel.innerHTML = accs.map(a => `<option value="${a.idx}">${esc(a.name || a.short || '')}</option>`).join('');
+  if (prev) sel.value = prev;
 }
 
 async function runResumeAudit(btn) {
@@ -3995,20 +4166,36 @@ async function loadAllResumes(btn) {
     const items = data.resumes || [];
     if (!items.length) { res.innerHTML = '<div style="color:var(--dim);font-size:12px">Нет резюме</div>'; return; }
     res.innerHTML = items.map(r => {
-      const statusColor = r.status === 'published' ? 'var(--green)' : r.status === 'not_finished' ? 'var(--red)' : 'var(--yellow)';
-      const statusLabel = r.status === 'published' ? 'опубликовано' : r.status === 'not_finished' ? 'не завершено' : r.status === 'modified' ? 'изменено' : r.status;
-      const pctColor = (r.percent || 0) >= 80 ? 'var(--green)' : (r.percent || 0) > 0 ? 'var(--yellow)' : 'var(--red)';
-      const statsInfo = (r.views_7d || r.shows_7d) ? ` · 👁️${r.views_7d} · 🔍${r.shows_7d}` : '';
-      const contentInfo = r.skills_count ? `${r.skills_count} навыков, ${r.experience_count} мест работы` : 'пусто';
+      const STATUS_MAP = {
+        'published': ['var(--green)', 'опубликовано'],
+        'not_finished': ['var(--red)', 'не завершено'],
+        'modified': ['var(--yellow)', 'изменено'],
+        'auto_approved': ['var(--green)', 'опубликовано'],
+        'blocked': ['var(--red)', 'заблокировано'],
+      };
+      const [statusColor, statusLabel] = STATUS_MAP[r.status] || ['var(--dim)', r.status || '—'];
+      const pct = Number(r.percent) || 0;
+      const pctColor = pct >= 80 ? 'var(--green)' : pct > 0 ? 'var(--yellow)' : 'var(--dim)';
+      const pctStr = pct > 0 ? `${pct}%` : '';  // 0% не показываем (HH не отдаёт на странице списка)
+      const statsInfo = (r.views_7d || r.shows_7d) ? `👁️${r.views_7d||0} · 🔍${r.shows_7d||0}` : '';
+      const skills = r.skills_count || 0;
+      const exp = r.experience_count;
+      const expStr = exp == null ? '' : (exp === 0 ? 'без опыта' : `${exp} мест работы`);
+      const contentInfo = [
+        skills ? `${skills} навыков` : '',
+        expStr,
+      ].filter(Boolean).join(', ') || 'пусто';
+      const parts = [
+        `<span style="color:${statusColor}">${esc(statusLabel)}</span>`,
+        pctStr ? `<span style="color:${pctColor}">${pctStr}</span>` : '',
+        r.is_searchable ? '🔍 в поиске' : '🚫 скрыто',
+        contentInfo,
+        statsInfo,
+      ].filter(Boolean).join(' · ');
       return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:12px">
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:600">${esc(r.title)}</div>
-          <div style="font-size:11px;color:var(--dim);margin-top:2px">
-            <span style="color:${statusColor}">${esc(statusLabel)}</span> ·
-            <span style="color:${pctColor}">${r.percent || '?'}%</span> ·
-            ${r.is_searchable ? '🔍 в поиске' : '🚫 скрыто'} ·
-            ${contentInfo}${statsInfo}
-          </div>
+          <div style="font-size:11px;color:var(--dim);margin-top:2px">${parts}</div>
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">
           <a href="${safeHref(r.edit_url)}" target="_blank" rel="noopener noreferrer" class="btn-sm" style="font-size:11px">✏️ hh.ru</a>
@@ -4276,6 +4463,170 @@ async function jsonAccountsLoad(btn) {
     document.getElementById('json-accounts-st').style.color = 'var(--red)';
   }
   btn.disabled = false;
+}
+
+async function jsonAllLoad(btn) {
+  const ta = document.getElementById('json-all-ta');
+  const st = document.getElementById('json-all-st');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/backup');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (ta) {
+      ta.value = JSON.stringify(data, null, 2);
+      ta.dataset.dirty = '0';  // снимаем флаг ручных правок
+    }
+    if (st && btn) { st.textContent = '✅ Загружено'; st.style.color = 'var(--green)'; }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function jsonAllWipe(btn) {
+  const st = document.getElementById('json-all-st');
+  if (!confirm('УДАЛИТЬ все аккаунты, сессии, токены и конфиг? Это необратимо.')) return;
+  if (!confirm('Точно? Будут стёрты все cookies и API-ключи.')) return;
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Удаляю...'; st.style.color = 'var(--dim)'; }
+  try {
+    const res = await fetch('/api/backup', {method: 'DELETE'});
+    const data = await res.json();
+    if (data.ok) {
+      if (st) { st.textContent = `✅ Удалено: ${(data.cleared||[]).join(', ')}`; st.style.color = 'var(--green)'; }
+      jsonAllLoad(null);
+      try { if (State.ws) State.ws.close(); } catch(e) {}
+    } else {
+      if (st) { st.textContent = '❌ ' + (data.error || 'Ошибка'); st.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function jsonAllSave(btn) {
+  const ta = document.getElementById('json-all-ta');
+  const st = document.getElementById('json-all-st');
+  let parsed;
+  try { parsed = JSON.parse(ta.value); }
+  catch(e) { if (st) { st.textContent = '❌ Невалидный JSON: ' + e.message; st.style.color = 'var(--red)'; } return; }
+  // Diff vs текущий бэкенд-стейт — если что-то теряется (пустые list/string на месте непустых),
+  // показываем предупреждение перед сохранением.
+  let current = null;
+  try { const r = await fetch('/api/backup'); current = await r.json(); } catch(e) {}
+  const TRACK = {
+    'config.json': ['llm_profiles', 'letter_templates', 'questionnaire_templates', 'url_pool', 'allowed_schedules', 'llm_api_key', 'llm_system_prompt'],
+    'accounts.json': null,  // целиком
+    'browser_sessions.json': null,
+  };
+  const lost = [];
+  if (current) {
+    for (const [fname, fields] of Object.entries(TRACK)) {
+      const oldF = current[fname];
+      const newF = parsed[fname];
+      if (fields) {
+        for (const f of fields) {
+          const ov = (oldF || {})[f];
+          const nv = (newF || {})[f];
+          const oNonEmpty = Array.isArray(ov) ? ov.length > 0 : (typeof ov === 'string' ? ov.length > 0 : !!ov);
+          const nEmpty = Array.isArray(nv) ? nv.length === 0 : (typeof nv === 'string' ? nv.length === 0 : !nv);
+          if (oNonEmpty && nEmpty) {
+            const oldCount = Array.isArray(ov) ? ov.length : '~';
+            lost.push(`${fname}/${f} (${oldCount} → 0)`);
+          }
+        }
+      } else {
+        const oldArr = Array.isArray(oldF) ? oldF : [];
+        const newArr = Array.isArray(newF) ? newF : [];
+        if (oldArr.length > 0 && newArr.length === 0) lost.push(`${fname} (${oldArr.length} → 0)`);
+      }
+    }
+  }
+  let confirmMsg = 'Сохранить и перезаписать ВСЕ data/*.json? Текущие данные потеряются.';
+  if (lost.length) {
+    confirmMsg = '⚠️ Потеряются непустые поля:\n• ' + lost.join('\n• ') +
+                 '\n\nПродолжить (затрёт всё)? Жми Cancel чтобы не сохранять.';
+  }
+  if (!confirm(confirmMsg)) return;
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Сохраняю...'; st.style.color = 'var(--dim)'; }
+  try {
+    const res = await fetch('/api/backup', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(parsed)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (st) { st.textContent = `✅ Сохранено: ${(data.restored||[]).join(', ')}. ${data.warning||''}`; st.style.color = 'var(--green)'; }
+      // Перечитаем из бэка чтобы textarea показывала актуальное состояние.
+      jsonAllLoad(null);
+      // Форс-реконнект WS → свежий snapshot → UI перерисовывается без F5.
+      try { if (State.ws) State.ws.close(); } catch(e) {}
+    } else {
+      if (st) { st.textContent = '❌ ' + (data.error || JSON.stringify(data.errors||{})); st.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function backupDownload(btn) {
+  const st = document.getElementById('backup-st');
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Готовлю...'; st.style.color = 'var(--dim)'; }
+  try {
+    const res = await fetch('/api/backup');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const stamp = new Date().toISOString().replace(/[:T]/g,'-').slice(0,19);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `hh-backup-${stamp}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    if (st) { st.textContent = '✅ Скачано'; st.style.color = 'var(--green)'; }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function backupRestore(input) {
+  const st = document.getElementById('backup-st');
+  const f = input.files && input.files[0];
+  if (!f) return;
+  if (!confirm(`Восстановить из ${f.name}? Текущие data/*.json будут перезаписаны.`)) {
+    input.value = ''; return;
+  }
+  if (st) { st.textContent = '⏳ Восстанавливаю...'; st.style.color = 'var(--dim)'; }
+  try {
+    const text = await f.text();
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch(e) { throw new Error('Невалидный JSON: ' + e.message); }
+    const res = await fetch('/api/backup', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(parsed)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (st) {
+        st.textContent = `✅ Восстановлено: ${(data.restored||[]).join(', ')}. ${data.warning||''}`;
+        st.style.color = 'var(--green)';
+      }
+      // Подтянем свежий стейт в редактор после restore.
+      if (document.getElementById('json-all-ta')) jsonAllLoad(null);
+      try { if (State.ws) State.ws.close(); } catch(e) {}
+    } else {
+      if (st) { st.textContent = '❌ ' + (data.error || JSON.stringify(data.errors||{})); st.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  input.value = '';
 }
 
 async function jsonAccountsSave(btn) {
@@ -4711,12 +5062,35 @@ if ('Notification' in window && Notification.permission === 'default') {
   setTimeout(() => Notification.requestPermission(), 3000);
 }
 
-// Auto-load JSON editors on first open
-document.getElementById('json-config-details').addEventListener('toggle', function() {
-  if (this.open && !document.getElementById('json-config-ta').value.trim())
-    jsonConfigLoad(this.querySelector('button'));
-});
-document.getElementById('json-accounts-details').addEventListener('toggle', function() {
-  if (this.open && !document.getElementById('json-accounts-ta').value.trim())
-    jsonAccountsLoad(this.querySelector('button'));
-});
+// Auto-load unified JSON editor: KAЖДЫЙ раз при открытии details + при возврате
+// на вкладку Настройки если редактор уже открыт. Так что после удаления профиля
+// на главной редактор покажет свежий стейт без ↻ Обновить.
+(() => {
+  const el = document.getElementById('json-all-details');
+  if (!el) return;
+  const triggerLoad = () => {
+    const ta = document.getElementById('json-all-ta');
+    if (!ta) return;
+    if (ta.dataset.dirty === '1') return;  // не затирать ручные правки
+    jsonAllLoad(el.querySelector('button'));
+  };
+  // open/close → refresh при каждом открытии
+  el.addEventListener('toggle', function() { if (this.open) triggerLoad(); });
+  // user правит → флаг dirty (сбрасывается при load/save)
+  const ta = document.getElementById('json-all-ta');
+  if (ta) ta.addEventListener('input', () => { ta.dataset.dirty = '1'; });
+  // Refresh на каждом WS state_update если редактор открыт.
+  // 300ms tick → fetch /api/backup keep-alive нагрузка минимальная.
+  if (typeof State !== 'undefined') {
+    let _lastFetch = 0;
+    State._jsonAllRefresh = () => {
+      if (!el.open) return;
+      if (ta && ta.dataset.dirty === '1') return;
+      const now = Date.now();
+      if (now - _lastFetch < 1500) return;  // throttle 1.5s
+      _lastFetch = now;
+      jsonAllLoad(null);
+    };
+  }
+  if (el.open) triggerLoad();
+})();

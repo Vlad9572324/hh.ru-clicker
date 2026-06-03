@@ -499,6 +499,22 @@
     <details class="q-section prio-medium">
       <summary class="q-section-title">🏢 Фильтры и автоматизация</summary>
       <div class="q-section-body">
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Региональный поддомен HH</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <label style="font-size:12px">
+            <span style="color:var(--dim);font-family:monospace">https://</span><input
+              id="cfg-hh-region"
+              type="text"
+              maxlength="40"
+              placeholder="пусто = основной"
+              autocomplete="off"
+              pattern="[a-z0-9-]*"
+              style="width:140px;font-family:monospace;font-size:12px;padding:2px 6px;background:var(--bg-card2);color:var(--text);border:1px solid var(--border);border-radius:3px"
+              onchange="sendCmd({type:'set_config',key:'hh_region',value:this.value.trim().toLowerCase()})"><span style="color:var(--dim);font-family:monospace">.hh.ru</span>
+          </label>
+          <span style="font-size:11px;color:var(--dim)">по умолчанию пусто → главный hh.ru. Пример: <code>syktyvkar</code>, <code>moscow</code>, <code>vologda</code>. OAuth и chatik всегда на основном.</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:12px 0"></div>
         <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Умный поиск</div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
           <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
@@ -608,10 +624,24 @@
         Поле <b>стр.</b> задаёт глубину поиска (кол-во страниц) для конкретного запроса; если пусто — используется глобальное значение из слайдера выше.
       </div>
       <div id="url-pool-rows"></div>
-      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
         <button class="btn-sm" onclick="urlPoolAddRow()" data-i18n="btn_add_url">＋ Добавить URL</button>
         <button class="btn-sm" onclick="urlPoolSave(this)" data-i18n="btn_save_pool">💾 Сохранить пул</button>
         <span id="url-pool-st" style="font-size:11px;color:var(--dim)"></span>
+      </div>
+
+      <!-- Подсказки URL по резюме -->
+      <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+          <div style="font-size:13px;font-weight:600">✨ Подсказки по резюме</div>
+          <select id="suggest-acc-sel" class="apply-input" style="font-size:11px;padding:3px 6px"></select>
+          <button class="btn-sm" onclick="suggestUrls(this)">🔍 Подобрать</button>
+          <span id="suggest-status" style="font-size:11px;color:var(--dim)"></span>
+        </div>
+        <div style="font-size:10px;color:var(--dim);margin-bottom:8px">
+          Анализирует title/роль/скилы резюме и предлагает поисковые запросы с цифрами конкуренции (как в Аудите). Кликни ➕ — добавлю в пул выше.
+        </div>
+        <div id="suggest-result" style="display:none"></div>
       </div>
       </div>
     </details>
@@ -753,31 +783,31 @@
       <div style="font-size:11px;color:var(--dim);margin-bottom:10px">
         Прямое редактирование конфигов. Изменения применяются сразу после сохранения.
       </div>
-      <details class="session-block" id="json-config-details">
-        <summary class="session-summary">⚙️ config.json</summary>
+      <!-- Backup / Restore: один файл со всем (config + accounts + sessions + oauth) -->
+      <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
+        <button class="btn-sm" style="color:var(--cyan);border-color:var(--cyan)" onclick="backupDownload(this)">📥 Скачать бэкап (всё)</button>
+        <label class="btn-sm" style="color:var(--yellow);border-color:var(--yellow);cursor:pointer;display:inline-flex;align-items:center;padding:5px 10px">
+          📤 Восстановить
+          <input type="file" id="backup-file" accept="application/json,.json" style="display:none" onchange="backupRestore(this)">
+        </label>
+        <span id="backup-st" style="font-size:11px;color:var(--dim)"></span>
+      </div>
+      <div style="font-size:10px;color:var(--dim);margin-bottom:14px;line-height:1.6">
+        ⚠️ Бэкап содержит cookies и API-ключи — храни в надёжном месте.
+      </div>
+
+      <details class="session-block" id="json-all-details" open>
+        <summary class="session-summary">📦 Полный конфиг (config + accounts + sessions + oauth)</summary>
         <div class="session-body">
-          <textarea id="json-config-ta" class="apply-input" rows="16"
+          <textarea id="json-all-ta" class="apply-input" rows="22"
             style="font-family:monospace;font-size:11px;white-space:pre" spellcheck="false"></textarea>
-          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-            <button class="btn-sm" onclick="jsonConfigLoad(this)">↻ Обновить</button>
-            <button class="btn-sm" onclick="jsonConfigTemplate()">📋 Шаблон</button>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn-sm" onclick="jsonAllLoad(this)">↻ Обновить</button>
             <button class="btn-sm" style="color:var(--green);border-color:var(--green)"
-              onclick="jsonConfigSave(this)">💾 Сохранить</button>
-            <span id="json-config-st" style="font-size:11px;color:var(--dim)"></span>
-          </div>
-        </div>
-      </details>
-      <details class="session-block" id="json-accounts-details" style="margin-top:8px">
-        <summary class="session-summary">👤 accounts.json</summary>
-        <div class="session-body">
-          <textarea id="json-accounts-ta" class="apply-input" rows="16"
-            style="font-family:monospace;font-size:11px;white-space:pre" spellcheck="false"></textarea>
-          <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
-            <button class="btn-sm" onclick="jsonAccountsLoad(this)">↻ Обновить</button>
-            <button class="btn-sm" onclick="jsonAccountsTemplate()">📋 Шаблон</button>
-            <button class="btn-sm" style="color:var(--green);border-color:var(--green)"
-              onclick="jsonAccountsSave(this)">💾 Сохранить</button>
-            <span id="json-accounts-st" style="font-size:11px;color:var(--dim)"></span>
+              onclick="jsonAllSave(this)">💾 Сохранить</button>
+            <button class="btn-sm" style="color:var(--red);border-color:var(--red)"
+              onclick="jsonAllWipe(this)">🗑 Очистить всё</button>
+            <span id="json-all-st" style="font-size:11px;color:var(--dim)"></span>
           </div>
         </div>
       </details>
@@ -787,6 +817,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=4"></script>
+<script src="/static/js/app.js?v=5"></script>
 </body>
 </html>
