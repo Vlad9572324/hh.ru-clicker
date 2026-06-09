@@ -139,7 +139,10 @@ async def api_resume_touch_toggle(idx: int):
 
 @router.post("/api/account/{idx}/set_urls")
 async def api_set_urls(idx: int, request: Request):
-    """Обновить список поисковых URL аккаунта (regular или browser-сессия)."""
+    """Обновить список поисковых URL аккаунта (regular или browser-сессия).
+    Если idx стал stale (после удаления/рестарта), пробуем найти аккаунт
+    по short/name из body — иначе фронт получает «Аккаунт не найден» и
+    юзер вынужден жать F5 (GitHub: «не видит URL поиска»)."""
     body = await request.json()
     urls = [u.strip() for u in body.get("urls", []) if u.strip()]
     url_pages = {}
@@ -148,28 +151,56 @@ async def api_set_urls(idx: int, request: Request):
             url_pages[k] = int(v) if v else 0
         except (ValueError, TypeError):
             pass
-    # Regular accounts
-    if 0 <= idx < len(bot.account_states):
-        bot.account_states[idx].acc["urls"] = urls
-        bot.account_states[idx].acc["url_pages"] = url_pages
-        bot.account_states[idx].total_urls = len(urls)
-        if 0 <= idx < len(accounts_data):
-            accounts_data[idx]["urls"] = urls
-            accounts_data[idx]["url_pages"] = url_pages
+    fallback_short = (body.get("short") or "").strip()
+    fallback_name = (body.get("name") or "").strip()
+
+    def _apply_regular(i: int) -> dict:
+        bot.account_states[i].acc["urls"] = urls
+        bot.account_states[i].acc["url_pages"] = url_pages
+        bot.account_states[i].total_urls = len(urls)
+        if 0 <= i < len(accounts_data):
+            accounts_data[i]["urls"] = urls
+            accounts_data[i]["url_pages"] = url_pages
             save_accounts()
-        return {"ok": True, "count": len(urls)}
-    # Browser sessions (issue #7: "Аккаунт не найден" при выборе URL)
+        return {"ok": True, "count": len(urls), "matched": "regular", "idx": i}
+
+    def _apply_temp(ti: int) -> dict:
+        bot.temp_sessions[ti]["urls"] = urls
+        bot.temp_sessions[ti]["url_pages"] = url_pages
+        if ti in bot.temp_states:
+            bot.temp_states[ti].acc["urls"] = urls
+            bot.temp_states[ti].acc["url_pages"] = url_pages
+            bot.temp_states[ti].total_urls = len(urls)
+        save_browser_sessions(bot.temp_sessions)
+        return {"ok": True, "count": len(urls), "matched": "temp", "temp_idx": ti}
+
+    # 1. Strict idx match — regular
+    if 0 <= idx < len(bot.account_states):
+        return _apply_regular(idx)
+    # 2. Strict idx match — temp
     temp_idx = idx - len(bot.account_states)
     if 0 <= temp_idx < len(bot.temp_sessions):
-        bot.temp_sessions[temp_idx]["urls"] = urls
-        bot.temp_sessions[temp_idx]["url_pages"] = url_pages
-        if temp_idx in bot.temp_states:
-            bot.temp_states[temp_idx].acc["urls"] = urls
-            bot.temp_states[temp_idx].acc["url_pages"] = url_pages
-            bot.temp_states[temp_idx].total_urls = len(urls)
-        save_browser_sessions(bot.temp_sessions)
-        return {"ok": True, "count": len(urls)}
-    return {"ok": False, "error": "Аккаунт не найден"}
+        return _apply_temp(temp_idx)
+    # 3. Fallback: match by short/name (frontend snapshot was stale after
+    #    a deletion or restart — idx no longer aligns but the card belongs
+    #    to a real account).
+    if fallback_short or fallback_name:
+        for i, state in enumerate(bot.account_states):
+            acc = state.acc
+            if (fallback_short and acc.get("short") == fallback_short) or \
+               (fallback_name and acc.get("name") == fallback_name):
+                log_debug(f"set_urls: stale idx={idx} → matched regular[{i}] by short/name")
+                return _apply_regular(i)
+        for ti, ts in enumerate(bot.temp_sessions):
+            if (fallback_short and ts.get("short") == fallback_short) or \
+               (fallback_name and ts.get("name") == fallback_name):
+                log_debug(f"set_urls: stale idx={idx} → matched temp[{ti}] by short/name")
+                return _apply_temp(ti)
+    return {
+        "ok": False,
+        "error": "Аккаунт не найден",
+        "hint": "Обнови страницу (Ctrl+F5) — индекс карточки устарел.",
+    }
 
 
 @router.post("/api/account/{idx}/set_letter")

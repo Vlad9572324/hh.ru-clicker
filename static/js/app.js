@@ -1690,15 +1690,19 @@ async function urlAccSave(accIdx, btn) {
   if (btn) btn.disabled = true;
   if (st) { st.textContent = '⏳...'; st.style.color = 'var(--dim)'; }
   try {
+    // Дублируем short/name из snapshot — бэкенд использует их как fallback,
+    // если idx устарел (после удаления другой сессии / рестарта).
+    const acc = (State.lastSnapshot?.accounts || []).find(a => a.idx === accIdx) || {};
     const res = await fetch(`/api/account/${accIdx}/set_urls`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({urls, url_pages})
+      body: JSON.stringify({urls, url_pages, short: acc.short || '', name: acc.name || ''})
     });
     const data = await res.json();
     if (data.ok) {
       if (st) { st.textContent = `✅ ${data.count} URL`; st.style.color = 'var(--green)'; }
     } else {
-      if (st) { st.textContent = '❌ ' + (data.error||'Ошибка'); st.style.color = 'var(--red)'; }
+      const hint = data.hint ? ' (' + data.hint + ')' : '';
+      if (st) { st.textContent = '❌ ' + (data.error||'Ошибка') + hint; st.style.color = 'var(--red)'; }
     }
   } catch(e) {
     if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
