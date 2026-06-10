@@ -69,6 +69,10 @@ class Config:
     llm_model: str = "gpt-4o-mini"
     llm_profiles: list = None         # [{name, api_key, base_url, model, enabled}]
     llm_profile_mode: str = "fallback"  # "fallback" | "roundrobin"
+    llm_openclaw_enabled: bool = False
+    llm_openclaw_agent: str = "main"
+    llm_openclaw_model: str = ""
+    llm_openclaw_timeout: int = 120
     skip_inconsistent: bool = False  # Пропускать вакансии с несовпадением опыта
     filter_agencies: bool = False  # Исключить кадровые агентства из поиска
     filter_low_competition: bool = False  # Только вакансии с <10 откликами
@@ -186,6 +190,10 @@ def save_config():
     data["llm_system_prompt"] = CONFIG.llm_system_prompt
     data["llm_profiles"] = CONFIG.llm_profiles
     data["llm_profile_mode"] = CONFIG.llm_profile_mode
+    data["llm_openclaw_enabled"] = CONFIG.llm_openclaw_enabled
+    data["llm_openclaw_agent"] = CONFIG.llm_openclaw_agent
+    data["llm_openclaw_model"] = CONFIG.llm_openclaw_model
+    data["llm_openclaw_timeout"] = CONFIG.llm_openclaw_timeout
     _url_pool_version += 1
     _url_pages_map_cache = None
     def _write():
@@ -242,6 +250,17 @@ def load_config():
             CONFIG.llm_profiles = data["llm_profiles"]
         if "llm_profile_mode" in data and isinstance(data["llm_profile_mode"], str):
             CONFIG.llm_profile_mode = data["llm_profile_mode"]
+        if "llm_openclaw_enabled" in data:
+            CONFIG.llm_openclaw_enabled = bool(data["llm_openclaw_enabled"])
+        if "llm_openclaw_agent" in data and isinstance(data["llm_openclaw_agent"], str):
+            CONFIG.llm_openclaw_agent = data["llm_openclaw_agent"]
+        if "llm_openclaw_model" in data and isinstance(data["llm_openclaw_model"], str):
+            CONFIG.llm_openclaw_model = data["llm_openclaw_model"]
+        if "llm_openclaw_timeout" in data:
+            try:
+                CONFIG.llm_openclaw_timeout = int(data["llm_openclaw_timeout"])
+            except Exception:
+                pass
         # Migration: if no profiles defined but old-style api_key exists, create one profile
         if not CONFIG.llm_profiles and CONFIG.llm_api_key:
             CONFIG.llm_profiles = [{"name": "Основной", "api_key": CONFIG.llm_api_key,

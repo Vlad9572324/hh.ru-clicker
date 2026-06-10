@@ -7,6 +7,10 @@ import json
 import random
 import threading
 import time as _time_mod
+import subprocess
+import uuid
+import os
+import shutil
 
 from app.logging_utils import log_debug
 from app.config import CONFIG
@@ -84,18 +88,14 @@ def _randomize_text(template: str) -> str:
 def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "") -> str:
     """Generate a reply to employer using configured LLM (OpenAI-compatible API)."""
     global _llm_rr_index
-    if not _openai_available:
-        log_debug("generate_llm_reply: openai package not installed")
-        return ""
 
     # Build profiles list: use multi-profile config if available, else fall back to legacy fields
     profiles = [p for p in (CONFIG.llm_profiles or []) if p.get("enabled", True) and p.get("api_key")]
     if not profiles:
         # Legacy fallback: use old single-key config
-        if not CONFIG.llm_api_key:
-            return ""
-        profiles = [{"api_key": CONFIG.llm_api_key, "base_url": CONFIG.llm_base_url,
-                     "model": CONFIG.llm_model}]
+        if CONFIG.llm_api_key:
+            profiles = [{"api_key": CONFIG.llm_api_key, "base_url": CONFIG.llm_base_url,
+                         "model": CONFIG.llm_model}]
 
     # Build messages list (shared across profile attempts).
     # Все user-controlled inputs обрезаются, чтобы employer не мог раздуть промпт
@@ -109,9 +109,9 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
     if cover_letter and cover_letter.strip():
         # Cap: cover letter обычно <2KB. Если кто-то впихнул 50KB — это либо ошибка, либо attack.
         system += (
-            f"\n\nКонтекст: соискатель откликнулась на вакансию работодателя «{employer_name[:120]}» "
+            f"\n\nКонтекст: соискатель откликнулся на вакансию работодателя «{employer_name[:120]}» "
             f"со следующим сопроводительным письмом:\n\"\"\"\n{cover_letter.strip()[:2000]}\n\"\"\"\n"
-            "Учитывай содержание письма при ответе — не противоречь ему и будь последовательна."
+            "Учитывай содержание письма при ответе — не противоречь ему и будь последователен."
         )
     # Защита от prompt-injection из сообщений работодателя:
     # явно говорим LLM не следовать инструкциям внутри employer-сообщений.
@@ -127,6 +127,15 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
         role = "user" if msg["sender"] == "employer" else "assistant"
         text = (msg.get("text") or "")[:2000]
         messages.append({"role": role, "content": text})
+
+    if not profiles:
+        if getattr(CONFIG, "llm_openclaw_enabled", False):
+            return _generate_openclaw_reply(messages, account_key)
+        return ""
+
+    if not _openai_available:
+        log_debug("generate_llm_reply: openai package not installed")
+        return ""
 
     mode = CONFIG.llm_profile_mode
 
@@ -189,6 +198,105 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                 continue
         log_debug("generate_llm_reply: все профили вернули ошибку")
         return ""
+
+
+def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
+    """Generate a chat reply through local OpenClaw/Codex CLI.
+
+    This is intentionally a fallback for installations where Codex auth lives in
+    OpenClaw rather than an OpenAI-compatible HTTP endpoint.
+    """
+    agent = (getattr(CONFIG, "llm_openclaw_agent", "") or "hh-clicker").strip()
+    model = (getattr(CONFIG, "llm_openclaw_model", "") or "").strip()
+    timeout = max(30, int(getattr(CONFIG, "llm_openclaw_timeout", 120) or 120))
+    session_key = f"agent:{agent}:hh-reply-{account_key or 'global'}-{uuid.uuid4().hex[:8]}"
+    system_text = ""
+    chat_lines = []
+    last_employer_text = ""
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            system_text = content[:5000]
+        else:
+            chat_lines.append(f"[{role}]\n{content[:1600]}")
+            if role == "user":
+                last_employer_text = content[:1600]
+    prompt = (
+        "Нужно ответить работодателю на hh.ru. Верни только готовый текст ответа от имени соискателя, "
+        "без Markdown, без пояснений, без префиксов вроде 'Ответ:'.\n\n"
+        f"Сообщение работодателя:\n{last_employer_text}\n\n"
+        f"[instructions]\n{system_text}\n\n[conversation]\n"
+        + "\n\n---\n\n".join(chat_lines[-6:])
+    )
+    openclaw_cmd = _openclaw_command()
+    if not openclaw_cmd:
+        log_debug("generate_llm_reply openclaw error: openclaw command not found")
+        return ""
+    cmd = openclaw_cmd + ["agent", "--agent", agent, "--session-key", session_key, "--message", prompt, "--timeout", str(timeout), "--json"]
+    if model:
+        cmd.extend(["--model", model])
+    try:
+        log_debug(f"generate_llm_reply: openclaw → agent={agent}, model={model or 'default'}")
+        proc = subprocess.run(
+            cmd,
+            cwd=".",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout + 20,
+        )
+        raw = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            log_debug(f"generate_llm_reply openclaw error rc={proc.returncode}: {(proc.stderr or raw)[:500]}")
+            return ""
+        data = _parse_openclaw_json(raw)
+        # Current OpenClaw JSON can be either {payloads:[...]} or {result:{payloads:[...]}}.
+        payloads = data.get("payloads") or (data.get("result") or {}).get("payloads") or []
+        text = ""
+        if payloads:
+            text = str(payloads[0].get("text") or "").strip()
+        if not text:
+            text = str((data.get("result") or {}).get("finalAssistantVisibleText") or data.get("finalAssistantVisibleText") or "").strip()
+        if not text and raw and not raw.lstrip().startswith("{"):
+            text = raw.strip()
+        if text:
+            _track_usage(account_key, "reply")
+        else:
+            log_debug(f"generate_llm_reply openclaw empty text; stdout_head={raw[:300]}")
+        return text
+    except Exception as e:
+        log_debug(f"generate_llm_reply openclaw exception: {e}")
+        return ""
+
+
+def _openclaw_command() -> list[str]:
+    exe = shutil.which("openclaw")
+    if exe:
+        return [exe]
+    for shell in ("pwsh", "powershell"):
+        shell_exe = shutil.which(shell)
+        if not shell_exe:
+            continue
+        ps1 = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "npm", "openclaw.ps1")
+        if os.path.exists(ps1):
+            return [shell_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1]
+    return []
+
+
+def _parse_openclaw_json(raw: str) -> dict:
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(raw[start:end + 1])
+    return {}
 
 
 def _extract_json(raw: str) -> dict | None:
