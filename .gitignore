@@ -24,3 +24,13 @@ Thumbs.db
 
 # Логи
 *.log
+
+# Local tooling
+.venv/
+.openclaw/
+AGENTS.md
+SOUL.md
+TOOLS.md
+IDENTITY.md
+USER.md
+HEARTBEAT.md
