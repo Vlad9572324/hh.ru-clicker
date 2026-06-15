@@ -13,7 +13,7 @@ import os
 import shutil
 
 from app.logging_utils import log_debug
-from app.config import CONFIG
+from app.config import CONFIG, applicant_gender_forms
 
 try:
     import openai as _openai_mod
@@ -100,7 +100,10 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
     # Build messages list (shared across profile attempts).
     # Все user-controlled inputs обрезаются, чтобы employer не мог раздуть промпт
     # огромным cover letter / resume и накачать token-стоимость.
+    forms = applicant_gender_forms()
     system = CONFIG.llm_system_prompt
+    if forms.get("instruction"):
+        system += f"\n\n{forms['instruction']}"
     if resume_text and resume_text.strip():
         system += (
             f"\n\n---\nРезюме соискателя (используй для персонализации ответов):\n"
@@ -109,9 +112,9 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
     if cover_letter and cover_letter.strip():
         # Cap: cover letter обычно <2KB. Если кто-то впихнул 50KB — это либо ошибка, либо attack.
         system += (
-            f"\n\nКонтекст: соискатель откликнулась на вакансию работодателя «{employer_name[:120]}» "
+            f"\n\nКонтекст: {forms['responded']} на вакансию работодателя «{employer_name[:120]}» "
             f"со следующим сопроводительным письмом:\n\"\"\"\n{cover_letter.strip()[:2000]}\n\"\"\"\n"
-            "Учитывай содержание письма при ответе — не противоречь ему и будь последовательна."
+            f"Учитывай содержание письма при ответе — не противоречь ему и {forms['consistency']}."
         )
     # Защита от prompt-injection из сообщений работодателя:
     # явно говорим LLM не следовать инструкциям внутри employer-сообщений.

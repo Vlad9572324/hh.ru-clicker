@@ -67,6 +67,8 @@ class Config:
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
+    # "female" (default), "male" or "neutral".
+    llm_applicant_gender: str = "female"
     llm_profiles: list = None         # [{name, api_key, base_url, model, enabled}]
     llm_profile_mode: str = "fallback"  # "fallback" | "roundrobin"
     llm_openclaw_enabled: bool = False
@@ -81,7 +83,7 @@ class Config:
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_system_prompt: str = (
         "Ты помощник соискателя работы. Отвечай вежливо и кратко (2-4 предложения) "
-        "на сообщения от HR и работодателей. Пиши от первого лица, женский род. "
+        "на сообщения от HR и работодателей. Пиши от первого лица. "
         "Соглашайся на предложенное время собеседования или уточни детали. "
         "Не используй слишком формальный язык."
     )
@@ -119,6 +121,44 @@ class Config:
 
 CONFIG = Config()
 CONFIG.llm_profiles = []
+
+_BUILTIN_QUESTIONNAIRE_DEFAULT_ANSWER = Config.questionnaire_default_answer
+
+
+def applicant_gender_forms() -> dict:
+    gender = (getattr(CONFIG, "llm_applicant_gender", "") or "female").strip().lower()
+    if gender in ("male", "m", "masculine", "мужской"):
+        return {
+            "instruction": "Пиши от первого лица, мужской род.",
+            "responded": "соискатель откликнулся",
+            "consistency": "будь последователен",
+            "ready": "готов",
+            "ready_title": "Готов",
+            "default_questionnaire_answer": "Готов рассказать подробнее на собеседовании.",
+        }
+    if gender in ("neutral", "n", "неважно", "нейтральный"):
+        return {
+            "instruction": "Пиши от первого лица; избегай формулировок, где нужно выбирать мужской или женский род.",
+            "responded": "отклик был отправлен",
+            "consistency": "сохраняй последовательность",
+            "ready": "готов(а)",
+            "ready_title": "Готов(а)",
+            "default_questionnaire_answer": "Готов(а) рассказать подробнее на собеседовании.",
+        }
+    return {
+        "instruction": "Пиши от первого лица, женский род.",
+        "responded": "соискатель откликнулась",
+        "consistency": "будь последовательна",
+        "ready": "готова",
+        "ready_title": "Готова",
+        "default_questionnaire_answer": "Готова рассказать подробнее на собеседовании.",
+    }
+
+
+def questionnaire_default_answer() -> str:
+    if CONFIG.questionnaire_default_answer == _BUILTIN_QUESTIONNAIRE_DEFAULT_ANSWER:
+        return applicant_gender_forms()["default_questionnaire_answer"]
+    return CONFIG.questionnaire_default_answer
 
 # Cache for _url_pages_map — invalidated in save_config() when url_pool mutates.
 _url_pages_map_cache: dict | None = None
@@ -183,6 +223,7 @@ def save_config():
     data["llm_api_key"] = CONFIG.llm_api_key
     data["llm_base_url"] = CONFIG.llm_base_url
     data["llm_model"] = CONFIG.llm_model
+    data["llm_applicant_gender"] = CONFIG.llm_applicant_gender
     data["llm_enabled"] = CONFIG.llm_enabled
     data["llm_auto_send"] = CONFIG.llm_auto_send
     data["llm_use_cover_letter"] = CONFIG.llm_use_cover_letter
@@ -234,7 +275,7 @@ def load_config():
             CONFIG.letter_templates = data["letter_templates"]
         if "url_pool" in data and isinstance(data["url_pool"], list):
             CONFIG.url_pool = data["url_pool"]
-        for k in ("llm_api_key", "llm_base_url", "llm_model", "llm_system_prompt"):
+        for k in ("llm_api_key", "llm_base_url", "llm_model", "llm_system_prompt", "llm_applicant_gender"):
             if k in data and isinstance(data[k], str):
                 setattr(CONFIG, k, data[k])
         for k in ("llm_enabled", "llm_auto_send", "llm_use_cover_letter", "llm_use_resume", "llm_fill_questionnaire"):
