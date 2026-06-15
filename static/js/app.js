@@ -125,13 +125,13 @@ const T = {
     shown_of2: 'из',
     // Tests tab
     tests_title: '🧪 Вакансии с тестами',
-    col_applied_yn: 'Откликнулись',
+    col_applied_yn: 'Отклик',
     col_link: 'Ссылка',
     // DB tab
     db_title: '📂 База вакансий',
     db_search_ph: '🔍 Название / компания / ID...',
     db_all_statuses: 'Все статусы',
-    db_status_sent: '✅ Откликнулись',
+    db_status_sent: '✅ Отклик отправлен',
     db_status_test_passed: '📝 Тест пройден',
     db_status_test_pending: '🧪 Тест не пройден',
     db_all_accs: 'Все аккаунты',
@@ -3040,7 +3040,7 @@ const DB_STATUS = {
   test_pending: ['🧪', 'db_status_test_pending_lbl','c-magenta'],
 };
 // DB_STATUS translated labels
-T.ru.db_status_sent_lbl         = 'Откликнулись';
+T.ru.db_status_sent_lbl         = 'Отклик отправлен';
 T.ru.db_status_test_passed_lbl  = 'Тест пройден';
 T.ru.db_status_test_pending_lbl = 'Не пройден';
 T.en.db_status_sent_lbl         = 'Applied';
@@ -4987,7 +4987,7 @@ function exportAppliedCSV() {
 
 function exportDbCSV() {
   if (!DBState.all.length) return;
-  const STATUS_LABELS = {sent: 'Откликнулись', test_passed: 'Тест пройден', test_pending: 'Не пройден'};
+  const STATUS_LABELS = {sent: 'Отклик отправлен', test_passed: 'Тест пройден', test_pending: 'Не пройден'};
   const headers = ['Статус', 'Дата', 'ID вакансии', 'Название', 'Компания', 'Аккаунты', 'Ссылка'];
   const rows = DBState.all.map(i => [
     STATUS_LABELS[i.status] || i.status,
