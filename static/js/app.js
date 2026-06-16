@@ -738,8 +738,11 @@ function llmProfileAdd(profile) {
     </div>
     <div class="llm-profile-fields">
       <div>
-        <div style="font-size:10px;color:var(--dim);margin-bottom:2px">API Key</div>
-        <input class="apply-input lp-key" type="password" style="font-size:11px" placeholder="sk-..." value="${esc(p.api_key||'')}" oninput="llmProfileDetectDebounce(this)">
+        <div style="font-size:10px;color:var(--dim);margin-bottom:2px;display:flex;align-items:center;gap:6px">
+          <span>API Key</span>
+          <span class="lp-key-fingerprint" data-idx="${idx}" style="color:var(--green);font-family:monospace"></span>
+        </div>
+        <input class="apply-input lp-key" type="password" style="font-size:11px" placeholder="sk-..." value="${esc(p.api_key||'')}" oninput="llmProfileDetectDebounce(this);_llmUpdateKeyFingerprint(this)">
       </div>
       <div>
         <div style="font-size:10px;color:var(--dim);margin-bottom:2px">Модель</div>
@@ -762,6 +765,41 @@ function llmProfileAdd(profile) {
 
 function llmProfileReindex() {
   document.querySelectorAll('#llm-profiles-list .llm-profile-row').forEach((row, i) => { row.dataset.idx = i; });
+}
+
+// Возвращает «безопасный фингерпринт» ключа — первые 4 + последние 4 символа +
+// длину. Юзеру не покажем ключ целиком (он type=password), но он видит что
+// именно сохранилось. Пример: "sk-p...oTuvw (164 симв.)"
+function _llmKeyFingerprint(key) {
+  if (!key) return '';
+  if (key.length <= 12) return `••• (${key.length} симв.)`;
+  return `${key.slice(0, 4)}…${key.slice(-4)} (${key.length} симв.)`;
+}
+
+function _llmUpdateKeyFingerprint(inp) {
+  const row = inp?.closest('.llm-profile-row');
+  if (!row) return;
+  const fp = row.querySelector('.lp-key-fingerprint');
+  if (!fp) return;
+  if (inp.value) {
+    fp.textContent = '✓ ' + _llmKeyFingerprint(inp.value);
+    fp.style.color = 'var(--green)';
+    return;
+  }
+  // Поле в инпуте пустое (после релоада type=password ничего не показал).
+  // Берём fingerprint из последнего snapshot.config.llm_profiles[idx] —
+  // он не содержит сам ключ, но говорит «✓ ключ на сервере: sk-p…wxyz».
+  const idx = parseInt(row.dataset.idx);
+  const cfg = State?.lastSnapshot?.config || {};
+  const snapProf = (cfg.llm_profiles || [])[idx];
+  if (snapProf && snapProf.key_set) {
+    fp.textContent = `🔒 на сервере: ${snapProf.key_fingerprint || '✓ есть'}`;
+    fp.style.color = 'var(--cyan)';
+    fp.title = 'Ключ хранится на сервере. Введи новый чтобы перезаписать, или оставь пустым.';
+  } else {
+    fp.textContent = '⚠ пусто';
+    fp.style.color = 'var(--red)';
+  }
 }
 
 function llmProfileDetectDebounce(keyInput) {
@@ -871,12 +909,21 @@ async function llmSave(btn) {
       })
     });
     const data = await res.json();
-    if (st) { st.textContent = `✅ Сохранено (${profiles.length} профилей)`; st.style.color = 'var(--green)'; }
+    if (st) {
+      const ts = new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+      const promptLen = (document.getElementById('llm-system-prompt')?.value || '').length;
+      const withKey = profiles.filter(pf => pf.api_key).length;
+      st.innerHTML = `✅ Сохранено в ${ts} · профилей: <b>${profiles.length}</b> (с ключом: <b>${withKey}</b>) · промпт: <b>${promptLen}</b> симв.`;
+      st.style.color = 'var(--green)';
+    }
+    // Перерисуем fingerprint у каждого ключа — теперь юзер видит «sk-p…oTuvw (164 симв.)»
+    document.querySelectorAll('#llm-profiles-list .lp-key').forEach(inp => _llmUpdateKeyFingerprint(inp));
   } catch(e) {
     if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
   } finally {
     if (btn) btn.disabled = false;
-    setTimeout(() => { if (st) { st.textContent = ''; st.style.color = ''; } }, 4000);
+    // Дольше держим зелёный статус — юзер должен увидеть подтверждение.
+    setTimeout(() => { if (st && st.style.color === 'rgb(67, 207, 71)' || st && st.style.color === 'var(--green)') { /* keep until next edit */ } }, 8000);
   }
 }
 
@@ -965,6 +1012,10 @@ function syncLlmSettings(snap) {
   if (list && list.children.length === 0 && cfg.llm_profiles?.length) {
     cfg.llm_profiles.forEach(p => llmProfileAdd(p));
   }
+  // Обновим fingerprint api_key для каждой строки — даже если строка уже
+  // существует (юзер потёр поле или восстановил из конфига). type=password
+  // прячет значение, юзеру нужен какой-то визуальный feedback что ключ есть.
+  document.querySelectorAll('#llm-profiles-list .lp-key').forEach(inp => _llmUpdateKeyFingerprint(inp));
   // Populate account selector for resume preview
   const sel = document.getElementById('llm-resume-acc-sel');
   if (sel && snap?.accounts?.length && sel.options.length !== snap.accounts.length) {

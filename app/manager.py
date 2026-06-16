@@ -29,6 +29,19 @@ def _today_msk() -> str:
         return datetime.now(_MSK).strftime("%Y-%m-%d")
     return datetime.now().strftime("%Y-%m-%d")
 
+
+def _fingerprint_key(key: str) -> str:
+    """Безопасный fingerprint API-ключа для UI: first4…last4 (N симв.).
+    Полный ключ никогда не уходит в snapshot, но юзер видит что именно
+    сохранилось (особенно полезно после релоада когда type=password input
+    показывает только звёздочки)."""
+    if not key:
+        return ""
+    s = (key or "").strip()
+    if len(s) <= 12:
+        return f"••• ({len(s)} симв.)"
+    return f"{s[:4]}…{s[-4:]} ({len(s)} симв.)"
+
 from app.config import (
     CONFIG, accounts_data,
     save_config, load_config, save_accounts, load_accounts,
@@ -735,10 +748,22 @@ class BotManager:
                 "llm_use_resume": CONFIG.llm_use_resume,
                 "llm_model": CONFIG.llm_model,
                 "llm_base_url": CONFIG.llm_base_url,
-                # Note: don't include llm_api_key in snapshot for security
+                # Note: don't include llm_api_key in snapshot for security,
+                # но кладём fingerprint + key_set, чтобы UI мог показать
+                # «✓ ключ сохранён (sk-p…wxyz, 164 симв.)» после релоада —
+                # type=password input не покажет значение даже если бы оно было.
+                "llm_api_key_set": bool((CONFIG.llm_api_key or "").strip()),
+                "llm_api_key_fingerprint": _fingerprint_key(CONFIG.llm_api_key),
                 "llm_profiles": [
-                    {"name": p.get("name", ""), "base_url": p.get("base_url", ""),
-                     "model": p.get("model", ""), "enabled": p.get("enabled", True)}
+                    {
+                        "name": p.get("name", ""),
+                        "base_url": p.get("base_url", ""),
+                        "model": p.get("model", ""),
+                        "enabled": p.get("enabled", True),
+                        "key_set": bool((p.get("api_key") or "").strip()),
+                        "key_fingerprint": _fingerprint_key(p.get("api_key", "")),
+                        "key_len": len((p.get("api_key") or "").strip()),
+                    }
                     for p in (CONFIG.llm_profiles or [])
                 ],
                 "llm_profile_mode": CONFIG.llm_profile_mode,
