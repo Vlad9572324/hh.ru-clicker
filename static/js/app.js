@@ -976,6 +976,16 @@ function syncScheduleSettings(snap) {
   if (reg && cfg.hh_region !== undefined && document.activeElement !== reg) {
     reg.value = cfg.hh_region || '';
   }
+  // Грамматический род соискателя — нормализуем алиасы из бэка в одно из трёх
+  // значений селекта (female/male/neutral).
+  const gen = document.getElementById('cfg-llm-applicant-gender');
+  if (gen && cfg.llm_applicant_gender !== undefined && document.activeElement !== gen) {
+    const v = (cfg.llm_applicant_gender || 'female').toLowerCase();
+    const norm = (v === 'male' || v === 'm' || v === 'masculine' || v === 'мужской') ? 'male'
+               : (v === 'neutral' || v === 'n' || v === 'неважно' || v === 'нейтральный') ? 'neutral'
+               : 'female';
+    gen.value = norm;
+  }
   // Smart search filters
   const fa = document.getElementById('filter-agencies');
   if (fa && cfg.filter_agencies !== undefined) fa.checked = cfg.filter_agencies;

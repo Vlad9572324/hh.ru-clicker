@@ -515,6 +515,20 @@
           <span style="font-size:11px;color:var(--dim)">по умолчанию пусто → главный hh.ru. Пример: <code>syktyvkar</code>, <code>moscow</code>, <code>vologda</code>. OAuth и chatik всегда на основном.</span>
         </div>
         <div style="border-top:1px solid var(--border);margin:12px 0"></div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Род соискателя для LLM-ответов</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <label style="font-size:12px">Грамматический род:&nbsp;
+            <select id="cfg-llm-applicant-gender"
+              style="font-family:inherit;font-size:12px;padding:2px 6px;background:var(--bg-card2);color:var(--text);border:1px solid var(--border);border-radius:3px"
+              onchange="sendCmd({type:'set_config',key:'llm_applicant_gender',value:this.value})">
+              <option value="female">Женский (откликнулась, готова, последовательна)</option>
+              <option value="male">Мужской (откликнулся, готов, последователен)</option>
+              <option value="neutral">Нейтральный (готов(а), без склонения)</option>
+            </select>
+          </label>
+          <span style="font-size:11px;color:var(--dim)">Подставляется в системный промпт LLM и дефолтный ответ опросника. Кастомные шаблоны не затрагиваются.</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:12px 0"></div>
         <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Умный поиск</div>
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
           <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
