@@ -1806,16 +1806,28 @@ class BotManager:
                         f"\U0001f916 [{employer_short}] ⚠️ in_a_row_limit: {_consecutive_ours} сообщения без ответа HR, пропуск", "warning", neg_id=neg_id)
                     state.llm_replied_msgs[key] = None
                     continue
-                log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
-                self._add_log(state.short, state.color,
-                    f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
-                reply_text = generate_llm_reply(conversation, thread.get("employer_name", ""), cover_letter, resume_text)
-                if not reply_text:
-                    self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] LLM вернул пустой ответ, повтор через 30м", "warning", neg_id=neg_id)
-                    log_debug(f"LLM [{state.short}] {neg_id}: пустой ответ от LLM, ставим temp_skip 30м")
-                    state._llm_temp_skip[key] = time.time() + 1800
+                # Если для этого (neg_id, last_msg_id) уже есть кэшированный черновик
+                # с прошлого цикла (auto_send был выкл) — используем его, чтобы не жечь
+                # токены заново. Если auto_send всё ещё False — вообще скипаем без
+                # перегенерации (черновик уже сохранён в llm_log и interviews DB).
+                cached_draft = state._llm_drafts.get(key)
+                if cached_draft and not CONFIG.llm_auto_send:
+                    log_debug(f"LLM [{state.short}] {neg_id}: уже есть черновик в кэше, auto_send выкл — пропуск")
                     continue
-                log_debug(f"LLM [{state.short}] {neg_id}: ответ получен ({len(reply_text)} симв.), отправляю")
+                if cached_draft and CONFIG.llm_auto_send:
+                    log_debug(f"LLM [{state.short}] {neg_id}: отправляю кэшированный черновик ({len(cached_draft)} симв.)")
+                    reply_text = cached_draft
+                else:
+                    log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
+                    self._add_log(state.short, state.color,
+                        f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
+                    reply_text = generate_llm_reply(conversation, thread.get("employer_name", ""), cover_letter, resume_text)
+                    if not reply_text:
+                        self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] LLM вернул пустой ответ, повтор через 30м", "warning", neg_id=neg_id)
+                        log_debug(f"LLM [{state.short}] {neg_id}: пустой ответ от LLM, ставим temp_skip 30м")
+                        state._llm_temp_skip[key] = time.time() + 1800
+                        continue
+                    log_debug(f"LLM [{state.short}] {neg_id}: ответ получен ({len(reply_text)} симв.), отправляю")
 
                 ts = datetime.now().strftime("%d.%m %H:%M")
 
@@ -1846,6 +1858,7 @@ class BotManager:
                         continue
                     if ok:
                         state.llm_replied_msgs[key] = None
+                        state._llm_drafts.pop(key, None)  # отправили — кэш не нужен
                         state._msg_consecutive[neg_id] = state._msg_consecutive.get(neg_id, 0) + 1
                         state._llm_neg_failures.pop(neg_id, None)  # clear backoff on success
                         replied += 1
@@ -1896,11 +1909,17 @@ class BotManager:
                             "source": "draft_error",
                         })
                 else:
-                    state.llm_replied_msgs[key] = None
+                    # auto_send=False — сохраняем черновик в кэш чтобы при включении
+                    # auto_send отправить без повторного LLM-вызова.
+                    state._llm_drafts[key] = reply_text
+                    # НЕ помечаем llm_replied_msgs[key]=None — иначе при флипе auto_send
+                    # бот посчитает чат «уже обработан» и пропустит. Без этой метки
+                    # следующий цикл увидит чат, найдёт черновик в кэше и (если
+                    # auto_send=True) отправит.
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                      llm_reply=reply_text, llm_sent=False)
                     self._add_log(state.short, state.color,
-                        f"\U0001f916 Черновик [{employer}]: {reply_text[:80]}…", "info", neg_id=neg_id)
+                        f"\U0001f916 Черновик [{employer}] (вкл «Автоотправку» → отправлю): {reply_text[:60]}…", "info", neg_id=neg_id)
                     self.llm_log.appendleft({
                         "time": ts, "acc": state.short, "color": state.color,
                         "employer": employer, "vacancy_title": vacancy_title,

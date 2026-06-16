@@ -182,10 +182,13 @@ async def api_llm_reset_replied():
         n_replied = len(state.llm_replied_msgs)
         n_skip = len(state._llm_temp_skip)
         n_no_chat = len(state._llm_no_chat)
+        n_drafts = len(getattr(state, "_llm_drafts", {}) or {})
         state.llm_replied_msgs.clear()
         state._llm_temp_skip.clear()
         state._llm_no_chat.clear()
-        cleared.append({"acc": state.short, "replied_cleared": n_replied, "skip_cleared": n_skip, "no_chat_cleared": n_no_chat})
+        if hasattr(state, "_llm_drafts"):
+            state._llm_drafts.clear()
+        cleared.append({"acc": state.short, "replied_cleared": n_replied, "skip_cleared": n_skip, "no_chat_cleared": n_no_chat, "drafts_cleared": n_drafts})
     with bot._llm_sent_lock:
         n_global = len(bot._llm_sent_global)
         bot._llm_sent_global.clear()

@@ -986,6 +986,19 @@ function syncScheduleSettings(snap) {
                : 'female';
     gen.value = norm;
   }
+  // Баннер «есть несохранённые черновики»: показываем когда auto_send выкл
+  // и в llm_log есть незаотправленные записи. Чтобы юзер не пропустил что
+  // бот сгенерил кучу ответов и сидит ждёт флипа.
+  const draftsBanner = document.getElementById('llm-drafts-pending-banner');
+  if (draftsBanner) {
+    const autoSendOn = cfg.llm_auto_send === true;
+    const llmLog = State.lastSnapshot?.llm_log || [];
+    const draftsCount = llmLog.filter(r => !r.sent).length;
+    draftsBanner.style.display = (!autoSendOn && draftsCount > 0) ? '' : 'none';
+    if (!autoSendOn && draftsCount > 0) {
+      draftsBanner.innerHTML = `📝 <b>Есть ${draftsCount} несохранённых черновиков</b> — включи «Автоотправка» (чекбокс ниже) и они уйдут на следующем цикле без новых LLM-вызовов.`;
+    }
+  }
   // Smart search filters
   const fa = document.getElementById('filter-agencies');
   if (fa && cfg.filter_agencies !== undefined) fa.checked = cfg.filter_agencies;

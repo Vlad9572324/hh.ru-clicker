@@ -186,7 +186,7 @@ _CONFIG_KEYS = [
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
     "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
-    "hh_region", "llm_applicant_gender",
+    "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
 ]
 
 

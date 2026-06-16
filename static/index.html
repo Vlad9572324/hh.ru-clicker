@@ -726,9 +726,12 @@
       <div style="font-size:11px;color:var(--cyan);margin-bottom:10px">
         💡 Включить/выключить авто-ответы — кнопка во вкладке <b>🤖 LLM Ответы</b>
       </div>
+      <div id="llm-drafts-pending-banner" style="display:none;margin-bottom:8px;padding:8px 12px;background:rgba(255,170,0,0.12);border:1px solid var(--yellow);border-radius:6px;font-size:12px;color:var(--yellow)">
+        📝 <b>Есть несохранённые черновики</b> — включи «Автоотправка» и они уйдут на следующем цикле без новых LLM-вызовов.
+      </div>
       <div style="display:flex;gap:14px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
-          <input type="checkbox" id="llm-auto-send" style="accent-color:var(--green)" checked onchange="_llmMarkEditing()">
+          <input type="checkbox" id="llm-auto-send" style="accent-color:var(--green)" checked onchange="_llmMarkEditing();sendCmd({type:'set_config',key:'llm_auto_send',value:this.checked})">
           Отправлять автоматически (иначе только в лог)
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
