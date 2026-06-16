@@ -336,6 +336,14 @@
       <option value="robot">🤖 Робот-рекрутер</option>
       <option value="waiting_hr">⏳ Ждём HR</option>
     </select>
+    <select id="llm-log-sort" class="apply-input" style="font-size:11px;padding:3px 6px" onchange="llmInterviewsRender()" title="Порядок сортировки">
+      <option value="date_desc">📅 Недавние сверху</option>
+      <option value="date_asc">📅 Старые сверху</option>
+      <option value="pending_first">⏳ Ждут ответа сверху</option>
+      <option value="oldest_pending">🚨 Дольше всех без ответа</option>
+      <option value="employer">🔤 По работодателю A-Z</option>
+    </select>
+    <input id="llm-log-search" class="apply-input" type="text" placeholder="🔍 текст: компания / вакансия / сообщение" style="font-size:11px;padding:3px 6px;min-width:220px" oninput="llmInterviewsRender()">
     <button class="btn-sm" onclick="llmInterviewsLoad()">↻ Обновить</button>
     <button class="btn-sm" onclick="llmRunNow(this)" style="background:var(--cyan);color:#000;border-color:var(--cyan)">▶ Запустить сейчас</button>
     <button class="btn-sm" onclick="llmResetReplied(this)" title="Очистить историю «уже отвечали» — бот повторно обработает все чаты">🔄 Сбросить историю</button>

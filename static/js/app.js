@@ -1142,38 +1142,55 @@ function updateLlmStatusBar(snap) {
   const cfg = snap?.config || {};
   const accs = snap?.accounts || [];
   const globalOn = cfg.llm_enabled;
-  const interval = cfg.llm_check_interval || 15;
+  const autoSend = cfg.llm_auto_send;
+  const interval = Math.max(cfg.llm_check_interval || 5, 2);
   const anyAccOn = accs.some(a => a.llm_enabled !== false);
   const paused = snap?.paused || accs.every(a => a.paused);
+  const hasKey = (cfg.llm_api_key_set || (cfg.llm_profiles || []).some(p => p.key_set));
 
-  // State
-  if (!globalOn) {
-    stState.textContent = '⏹ ' + t('llm_st_off');
-    stState.style.color = 'var(--dim)';
+  // State — actionable hint в одной фразе.
+  let stateText, stateColor;
+  if (!hasKey) {
+    stateText = '🔑 Нет API-ключа';
+    stateColor = 'var(--red)';
+  } else if (!globalOn) {
+    stateText = '⏹ Тумблер LLM выключен (нажми кнопку ⏸ ВЫКЛ слева)';
+    stateColor = 'var(--dim)';
   } else if (paused) {
-    stState.textContent = '⏸ ' + t('llm_st_paused');
-    stState.style.color = 'var(--yellow)';
-  } else if (anyAccOn) {
-    stState.textContent = '✅ ' + t('llm_st_on');
-    stState.style.color = 'var(--green)';
+    stateText = '⏸ Все аккаунты на паузе (HH-лимит / ручная пауза)';
+    stateColor = 'var(--yellow)';
+  } else if (!anyAccOn) {
+    stateText = '⚠️ Ни один аккаунт не включён для LLM (тумблеры под фильтрами)';
+    stateColor = 'var(--yellow)';
+  } else if (!autoSend) {
+    stateText = '📝 Работает в режиме черновиков (включи «Автоотправку» чтобы отправлять)';
+    stateColor = 'var(--yellow)';
   } else {
-    stState.textContent = '⚠️ ' + t('llm_st_no_acc');
-    stState.style.color = 'var(--yellow)';
+    stateText = '✅ Работает — авто-ответы идут';
+    stateColor = 'var(--green)';
   }
+  stState.textContent = stateText;
+  stState.style.color = stateColor;
 
-  // Interval
-  stInterval.textContent = `🔄 каждые ${interval}м`;
+  // Interval + last activity
+  const llmLog = snap?.llm_log || [];
+  let last = '—';
+  if (llmLog.length > 0) {
+    const t = llmLog[0].time || '';
+    last = `последний: ${t}`;
+  }
+  stInterval.textContent = `🔄 каждые ${interval}м · ${last}`;
 
-  // Chat stats from accounts
+  // Pending + interviews per snapshot
   const totalInterviews = accs.reduce((s, a) => s + (a.hh_interviews || 0), 0);
-  const totalUnread = accs.reduce((s, a) => s + (a.hh_unread_by_employer || 0), 0);
-  stChats.textContent = `🎯 ${totalInterviews} интервью`;
+  const pendingByAcc = accs.reduce((s, a) => s + (a.llm_pending_chats || 0), 0);
+  stChats.textContent = `🎯 ${totalInterviews} интервью${pendingByAcc ? ` · ⏳ ${pendingByAcc} в обработке` : ''}`;
 
   // Replied count from llm_log
-  const llmLog = snap?.llm_log || [];
   const sentCount = llmLog.filter(l => l.sent).length;
   const draftCount = llmLog.filter(l => !l.sent).length;
-  stReplied.textContent = `✅ ${sentCount} отправлено · 📝 ${draftCount} черновиков`;
+  const draftHint = draftCount && !autoSend ? ' ← ждут «Автоотправку»' : '';
+  stReplied.textContent = `✅ ${sentCount} отправлено · 📝 ${draftCount} черновиков${draftHint}`;
 }
 
 function oauthToggleAccount(idx, btn) {
@@ -1186,6 +1203,8 @@ function oauthToggleAccount(idx, btn) {
 }
 
 // ── LLM tab: interviews from DB ───────────────────────────────
+let _llmRowsCache = [];
+
 async function llmInterviewsLoad() {
   if (_llmLoading) return;   // уже идёт запрос — не запускаем параллельный
   _llmLoading = true;
@@ -1203,28 +1222,58 @@ async function llmInterviewsLoad() {
   } finally {
     _llmLoading = false;
   }
+  _llmRowsCache = Array.isArray(rows) ? rows : [];
+  llmInterviewsRender();
+}
+
+function llmInterviewsRender() {
+  let rows = _llmRowsCache.slice();
+  const acc = document.getElementById('llm-log-acc-filter')?.value || '';
+  const statusF = document.getElementById('llm-log-sent-filter')?.value || '';
+  const sort = document.getElementById('llm-log-sort')?.value || 'date_desc';
+  const search = (document.getElementById('llm-log-search')?.value || '').trim().toLowerCase();
+
+  // Client-side search (по работодателю / вакансии / сообщению / ответу)
+  if (search) {
+    rows = rows.filter(r => {
+      const blob = `${r.employer||''} ${r.vacancy_title||''} ${r.employer_last_msg||''} ${r.llm_reply||''}`.toLowerCase();
+      return blob.includes(search);
+    });
+  }
+
+  // Sort
+  const t = (r) => Date.parse(r.last_seen || r.first_seen || '') || 0;
+  if (sort === 'date_desc')     rows.sort((a,b) => t(b) - t(a));
+  else if (sort === 'date_asc') rows.sort((a,b) => t(a) - t(b));
+  else if (sort === 'pending_first') {
+    const pri = (r) => (r.status === 'pending_reply') ? 0 : (r.status === 'draft') ? 1 : (r.status === 'replied') ? 2 : 3;
+    rows.sort((a,b) => pri(a) - pri(b) || t(b) - t(a));
+  }
+  else if (sort === 'oldest_pending') {
+    const isP = r => r.status === 'pending_reply' || r.status === 'draft';
+    rows.sort((a,b) => (isP(b)?0:1) - (isP(a)?0:1) || t(a) - t(b));
+  }
+  else if (sort === 'employer') rows.sort((a,b) => (a.employer||'').localeCompare(b.employer||'', 'ru'));
 
   const table = document.getElementById('llm-interviews-table');
   const empty = document.getElementById('llm-interviews-empty');
   const countEl = document.getElementById('llm-log-count');
   const tbody = document.getElementById('llm-interviews-body');
   if (!tbody) return;
-  if (countEl) countEl.textContent = rows.length ? `${rows.length} записей` : '';
+  if (countEl) {
+    const total = _llmRowsCache.length;
+    countEl.textContent = rows.length === total ? `${rows.length} записей` : `${rows.length} из ${total}`;
+  }
 
   if (rows.length === 0) {
-    const hasRows = tbody.querySelectorAll('tr').length > 0 &&
-                    !tbody.querySelector('tr td[colspan]');
-    if (statusF || acc) {
-      // Фильтр активен — показываем сообщение, таблицу не прячем
-      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--dim);padding:12px">Нет записей по выбранному фильтру</td></tr>`;
+    if (statusF || acc || search) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:12px">Нет записей по выбранному фильтру/поиску</td></tr>`;
       if (table) table.style.display = '';
       if (empty) empty.style.display = 'none';
-    } else if (!hasRows) {
-      // Таблица действительно пуста и раньше была пустой — показываем заглушку
+    } else if (_llmRowsCache.length === 0) {
       if (table) table.style.display = 'none';
       if (empty) empty.style.display = '';
     }
-    // Если hasRows && нет фильтра — оставляем текущее содержимое (избегаем мигания)
     return;
   }
   if (table) table.style.display = '';
@@ -1246,13 +1295,24 @@ async function llmInterviewsLoad() {
     return '';
   };
 
+  // Row background по статусу — чтобы юзер с расстояния видел что красное,
+  // что зелёное, что жёлтое.
+  const rowBg = (r) => {
+    if (r.status === 'replied')        return 'background:rgba(0,200,80,0.05);border-left:3px solid var(--green)';
+    if (r.status === 'draft')          return 'background:rgba(255,180,0,0.08);border-left:3px solid var(--yellow)';
+    if (r.status === 'pending_reply')  return 'background:rgba(255,80,80,0.08);border-left:3px solid var(--red)';
+    if (r.status === 'chat_closed')    return 'opacity:0.5;border-left:3px solid var(--dim)';
+    if (r.chat_status === 'robot')     return 'background:rgba(200,80,200,0.05);border-left:3px solid var(--magenta)';
+    return 'border-left:3px solid transparent';
+  };
+
   tbody.innerHTML = rows.map(r => {
     const empMsg = esc(r.employer_last_msg || '—').replace(/\n/g, '<br>');
     const botReply = esc(r.llm_reply || '').replace(/\n/g, '<br>');
     const negLink = r.neg_id
       ? `<a href="https://hh.ru/chat/${encodeURIComponent(r.neg_id)}" target="_blank" style="font-size:10px;color:var(--cyan)">🔗</a>` : '';
     const dateStr = (r.last_seen || r.first_seen || '').replace('T', ' ').slice(0, 16);
-    return `<tr>
+    return `<tr style="${rowBg(r)}">
       <td style="font-size:11px;color:var(--dim);white-space:nowrap">${dateStr}</td>
       <td style="font-size:11px;color:${colorVar(r.acc_color||'')}">${esc(r.acc||'')}</td>
       <td style="font-size:11px">${esc(r.employer||'')} ${negLink}</td>
