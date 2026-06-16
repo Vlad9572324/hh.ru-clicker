@@ -748,6 +748,11 @@ class BotManager:
                 "llm_use_resume": CONFIG.llm_use_resume,
                 "llm_model": CONFIG.llm_model,
                 "llm_base_url": CONFIG.llm_base_url,
+                # Системный промпт нужен в снимке: после релоада фронт инитит
+                # textarea дефолтом, а потом любая правка ругого поля LLM
+                # autosave'ила бы этот дефолт обратно на диск. Снимок служит
+                # источником истины для UI.
+                "llm_system_prompt": CONFIG.llm_system_prompt,
                 # Note: don't include llm_api_key in snapshot for security,
                 # но кладём fingerprint + key_set, чтобы UI мог показать
                 # «✓ ключ сохранён (sk-p…wxyz, 164 симв.)» после релоада —

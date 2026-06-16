@@ -5240,9 +5240,14 @@ function closeShortcutsHelp() {
 // ── Init ──────────────────────────────────────────────────────
 buildSettings();
 connect();
-// Set default system prompt for LLM if not yet configured
-const spEl = document.getElementById('llm-system-prompt');
-if (spEl && !spEl.value) spEl.value = 'Ты помощник соискателя работы. Отвечай вежливо и кратко (2-4 предложения) на сообщения от HR и работодателей. Пиши от первого лица, женский род. Соглашайся на предложенное время собеседования или уточни детали.';
+// System prompt textarea is populated via syncLlmSettings from
+// snapshot.config.llm_system_prompt (server is source of truth). We used to
+// inject a hardcoded JS default here, but that raced with the WS sync: if
+// the user reloaded the page after saving a custom prompt, this init wrote
+// the JS-default into the textarea, then the next autosave (triggered by
+// any unrelated field) shipped that default back to disk — silently
+// overwriting the saved prompt. Removing the init keeps the textarea empty
+// until the WS snapshot arrives (~200ms) which is the actual saved value.
 document.getElementById('lang-btn').textContent = lang.toUpperCase();
 // Restore last active tab from localStorage
 try {
