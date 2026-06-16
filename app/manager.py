@@ -32,7 +32,7 @@ def _today_msk() -> str:
 from app.config import (
     CONFIG, accounts_data,
     save_config, load_config, save_accounts, load_accounts,
-    _url_entry, _url_pages_map, hh_base,
+    _url_entry, _url_pages_map, hh_base, questionnaire_default_answer,
 )
 
 from app.storage import (
@@ -721,7 +721,7 @@ class BotManager:
                 "llm_check_interval": CONFIG.llm_check_interval,
                 "allowed_schedules": CONFIG.allowed_schedules,
                 "questionnaire_templates": CONFIG.questionnaire_templates,
-                "questionnaire_default_answer": CONFIG.questionnaire_default_answer,
+                "questionnaire_default_answer": questionnaire_default_answer(),
                 "letter_templates": CONFIG.letter_templates,
                 "url_pool": CONFIG.url_pool,
                 "skip_inconsistent": CONFIG.skip_inconsistent,
@@ -1255,7 +1255,7 @@ class BotManager:
                                               f"\U0001f4dd Опрос пройден: {display_title}", "success")
                                 q_info_full = {**state.vacancy_meta.get(vid, {}), **info}
                                 add_applied(acc["name"], vid, q_info_full)
-                                answer_preview = CONFIG.questionnaire_default_answer[:50]
+                                answer_preview = questionnaire_default_answer()[:50]
                                 self._add_acc_event(state, "\U0001f4dd", "questionnaire",
                                                     title or vid, company,
                                                     f"Ответ: {answer_preview}")

@@ -183,7 +183,7 @@ async def api_apply_check(body: dict):
             return {"status": "limit", "vacancy_id": vid, "message": "Достигнут дневной лимит откликов"}
 
         if "alreadyApplied" in txt:
-            return {"status": "already", "vacancy_id": vid, "message": "Уже откликались на эту вакансию"}
+            return {"status": "already", "vacancy_id": vid, "message": "Отклик на эту вакансию уже был отправлен"}
 
         if "test-required" in txt:
             qdata = await _fetch_questionnaire_data(acc, vid)

@@ -6,7 +6,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from app.config import CONFIG
+from app.config import CONFIG, questionnaire_default_answer
 from app.logging_utils import log_debug
 
 
@@ -19,7 +19,7 @@ def get_questionnaire_answer(question_text: str) -> str:
             continue
         if any(kw.lower() in q_lower for kw in keywords):
             return tmpl["answer"]
-    return CONFIG.questionnaire_default_answer
+    return questionnaire_default_answer()
 
 
 def _parse_questionnaire_fields(html: str) -> tuple:
