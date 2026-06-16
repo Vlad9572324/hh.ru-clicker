@@ -151,6 +151,16 @@ async def api_llm_run_now():
     """
     global _llm_run_now_last
     import time as _time
+    # Pre-flight: проверки конфига ДО загрузки чат-листов с HH (raw_config-уровень).
+    # Если LLM глобально выключен или нет ни одного рабочего профиля — впустую
+    # тащить список чатов и потом вылетать в цикле нет смысла.
+    if not CONFIG.llm_enabled:
+        return {"started": False, "error": "LLM глобально выключен — включи большой тумблер на этой вкладке"}
+    _has_llm = (CONFIG.llm_api_key or "").strip() or any(
+        p.get("api_key") for p in (CONFIG.llm_profiles or []) if p.get("enabled", True)
+    )
+    if not _has_llm:
+        return {"started": False, "error": "Нет ни одного API-ключа в LLM-профилях"}
     now = _time.time()
     if now - _llm_run_now_last < _LLM_RUN_NOW_COOLDOWN:
         wait = int(_LLM_RUN_NOW_COOLDOWN - (now - _llm_run_now_last))

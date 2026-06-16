@@ -1243,12 +1243,20 @@ async function llmRenderAccStats() {
 async function llmRunNow(btn) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
   try {
-    await fetch('/api/llm_run_now', {method:'POST'});
-    if (btn) { btn.textContent = '✅ Запущено'; }
-    setTimeout(() => { if (btn) { btn.textContent = '▶ Запустить сейчас'; btn.disabled = false; } }, 3000);
-    setTimeout(() => llmInterviewsLoad(), 8000);
+    const res = await fetch('/api/llm_run_now', {method:'POST'});
+    const data = await res.json();
+    if (data.started) {
+      if (btn) { btn.textContent = `✅ Запущено (${data.accounts || '?'} аккаунтов)`; }
+      setTimeout(() => llmInterviewsLoad(), 8000);
+    } else {
+      const msg = data.error || 'Не запустилось';
+      if (btn) { btn.textContent = '⚠️ ' + msg.slice(0, 60); }
+      console.warn('llm_run_now refused:', msg);
+    }
+    setTimeout(() => { if (btn) { btn.textContent = '▶ Запустить сейчас'; btn.disabled = false; } }, 5000);
   } catch(e) {
-    if (btn) { btn.textContent = '▶ Запустить сейчас'; btn.disabled = false; }
+    if (btn) { btn.textContent = '❌ ' + e; btn.disabled = false; }
+    setTimeout(() => { if (btn) btn.textContent = '▶ Запустить сейчас'; }, 4000);
   }
 }
 
