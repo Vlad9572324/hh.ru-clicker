@@ -925,25 +925,18 @@ function _llmAutoSave() {
   }, 1500);
 }
 
-// Делегирование: ловим blur на любых LP-полях профилей + статических чекбоксах.
-document.addEventListener('change', (e) => {
-  const t = e.target;
-  if (!t || !t.classList) return;
-  if (t.classList.contains('lp-name') || t.classList.contains('lp-key') ||
-      t.classList.contains('lp-url') || t.classList.contains('lp-model') ||
-      t.classList.contains('lp-enabled') || t.id === 'llm-system-prompt') {
-    _llmAutoSave();
-  }
-}, true);
-document.addEventListener('blur', (e) => {
-  const t = e.target;
-  if (!t || !t.classList) return;
-  if (t.classList.contains('lp-name') || t.classList.contains('lp-key') ||
-      t.classList.contains('lp-url') || t.classList.contains('lp-model') ||
-      t.id === 'llm-system-prompt') {
-    _llmAutoSave();
-  }
-}, true);
+// Делегирование на blur+input+change. Textarea с системным промптом не
+// генерит 'change' до blur, поэтому ловим ещё и 'input' (каждый keystroke,
+// дебаунс 1.5с защищает от спама /api/llm_*).
+function _isLlmAutoField(t) {
+  if (!t || !t.classList) return false;
+  return t.classList.contains('lp-name') || t.classList.contains('lp-key') ||
+         t.classList.contains('lp-url') || t.classList.contains('lp-model') ||
+         t.classList.contains('lp-enabled') || t.id === 'llm-system-prompt';
+}
+document.addEventListener('change', (e) => { if (_isLlmAutoField(e.target)) _llmAutoSave(); }, true);
+document.addEventListener('input',  (e) => { if (_isLlmAutoField(e.target)) _llmAutoSave(); }, true);
+document.addEventListener('blur',   (e) => { if (_isLlmAutoField(e.target)) _llmAutoSave(); }, true);
 
 function syncLlmSettings(snap) {
   const cfg = snap?.config || {};
@@ -961,6 +954,12 @@ function syncLlmSettings(snap) {
   if (modeEl && cfg.llm_profile_mode) modeEl.value = cfg.llm_profile_mode;
   // Update the global toggle button
   if (cfg.llm_enabled !== undefined) _llmUpdateToggleBtn(cfg.llm_enabled);
+  // Syncим текстовый промпт из конфига — но не во время редактирования и
+  // не если поле в фокусе (юзер сейчас печатает, не затирай).
+  const sp = document.getElementById('llm-system-prompt');
+  if (sp && cfg.llm_system_prompt !== undefined && !_llmSettingsEditing && document.activeElement !== sp) {
+    if (sp.value !== cfg.llm_system_prompt) sp.value = cfg.llm_system_prompt;
+  }
   // Render profiles only if list is empty to avoid wiping user edits
   const list = document.getElementById('llm-profiles-list');
   if (list && list.children.length === 0 && cfg.llm_profiles?.length) {
