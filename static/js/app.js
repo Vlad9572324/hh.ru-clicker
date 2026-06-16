@@ -1534,42 +1534,52 @@ function urlPoolBuild(snap) {
 }
 
 // ── URL selector on account cards ────────────────────────────
+function _renderAccUrlChecksInto(container, acc, pool) {
+  const selected = new Set(acc.urls || []);
+  if (!pool.length) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--dim)">Пул пустой — добавьте URL в Настройках или прямо ниже.</div>';
+    return;
+  }
+  const globalPages = State.lastSnapshot?.config?.pages_per_url || 40;
+  container.innerHTML = pool.map((item, i) => {
+    const url = typeof item === 'string' ? item : (item?.url || '');
+    const poolPages = typeof item === 'object' && item?.pages ? item.pages : globalPages;
+    const accPages = acc.url_pages?.[url] || '';
+    const checked = selected.has(url) ? 'checked' : '';
+    const badge = parseUrlFilter(url);
+    const urlCount = acc.url_stats?.[url];
+    const countInfo = urlCount != null ? `<span style="color:var(--green);font-size:10px;margin-left:4px">→${urlCount}</span>` : '';
+    const previewId = `url-prev-${acc.idx}-${i}`;
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+      <label style="display:flex;align-items:flex-start;gap:5px;cursor:pointer;font-size:11px;flex:1;min-width:0">
+        <input type="checkbox" value="${esc(url)}" ${checked} style="margin-top:2px;flex-shrink:0">
+        <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(badge)}${countInfo} <span id="${previewId}" data-url="${esc(url)}" data-acc="${acc.idx}" style="margin-left:4px"></span></span>
+      </label>
+      <input type="number" class="apply-input acc-url-pages-inp" data-url="${esc(url)}"
+        min="1" max="200" placeholder="${poolPages}"
+        value="${esc(String(accPages))}"
+        title="Глубина для этого URL (пусто = ${poolPages} стр. из пула)"
+        style="width:52px;font-size:10px;padding:2px 4px;text-align:center;flex-shrink:0">
+    </div>`;
+  }).join('');
+  container.querySelectorAll('[id^="url-prev-"]').forEach(el => urlPreviewLoad(el));
+}
+
 function syncAccUrlChecks(snap) {
   const pool = snap?.config?.url_pool || [];
   (snap?.accounts || []).forEach(acc => {
     const container = document.getElementById(`acc-url-checks-${acc.idx}`);
     const wrap = document.getElementById(`acc-url-wrap-${acc.idx}`);
-    if (!container || (wrap && wrap.open)) return; // don't overwrite while user is choosing
-    const selected = new Set(acc.urls || []);
-    if (!pool.length) {
-      container.innerHTML = '<div style="font-size:11px;color:var(--dim)">Пул пустой — добавьте URL в Настройках</div>';
-      return;
+    if (!container) return;
+    // Если details открыт — не перерисовываем чтобы не сбрасывать чекбоксы
+    // пока юзер их выбирает (UX). Но если кол-во URL'ов в пуле изменилось,
+    // принудительно делаем дозапись новой строки в конец (не теряя выборы).
+    if (wrap && wrap.open) {
+      const rendered = container.querySelectorAll('input[type=checkbox]').length;
+      if (rendered === pool.length) return; // ничего нового не появилось
+      // Иначе — перерендер: новые URL'ы добавились, нужно показать
     }
-    const globalPages = State.lastSnapshot?.config?.pages_per_url || 40;
-    container.innerHTML = pool.map((item, i) => {
-      const url = typeof item === 'string' ? item : (item?.url || '');
-      const poolPages = typeof item === 'object' && item?.pages ? item.pages : globalPages;
-      // Per-account override (0 = use pool/global)
-      const accPages = acc.url_pages?.[url] || '';
-      const checked = selected.has(url) ? 'checked' : '';
-      const badge = parseUrlFilter(url);
-      const urlCount = acc.url_stats?.[url];
-      const countInfo = urlCount != null ? `<span style="color:var(--green);font-size:10px;margin-left:4px">→${urlCount}</span>` : '';
-      const previewId = `url-prev-${acc.idx}-${i}`;
-      return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
-        <label style="display:flex;align-items:flex-start;gap:5px;cursor:pointer;font-size:11px;flex:1;min-width:0">
-          <input type="checkbox" value="${esc(url)}" ${checked} style="margin-top:2px;flex-shrink:0">
-          <span style="color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(badge)}${countInfo} <span id="${previewId}" data-url="${esc(url)}" data-acc="${acc.idx}" style="margin-left:4px"></span></span>
-        </label>
-        <input type="number" class="apply-input acc-url-pages-inp" data-url="${esc(url)}"
-          min="1" max="200" placeholder="${poolPages}"
-          value="${esc(String(accPages))}"
-          title="Глубина для этого URL (пусто = ${poolPages} стр. из пула)"
-          style="width:52px;font-size:10px;padding:2px 4px;text-align:center;flex-shrink:0">
-      </div>`;
-    }).join('');
-    // Lazy-load конкуренции после рендера (один раз на URL за сессию).
-    container.querySelectorAll('[id^="url-prev-"]').forEach(el => urlPreviewLoad(el));
+    _renderAccUrlChecksInto(container, acc, pool);
   });
 }
 
@@ -1726,6 +1736,13 @@ async function urlAccQuickAdd(accIdx, btn) {
     if (setRes.ok) {
       input.value = '';
       if (st) { st.textContent = exists ? `✅ Уже в пуле — включил для аккаунта (${setRes.count} URL)` : `✅ Добавлено в пул и включил (${setRes.count} URL)`; st.style.color = 'var(--green)'; }
+      // Принудительно перерендерим чекбоксы этой карточки СРАЗУ, не ждём
+      // следующего WS-тика (300мс) и не зависим от open-guard'а в syncAccUrlChecks.
+      try {
+        const container = document.getElementById(`acc-url-checks-${accIdx}`);
+        const localAcc = { ...acc, urls: accUrls };
+        if (container) _renderAccUrlChecksInto(container, localAcc, pool);
+      } catch(e) {}
     } else {
       const hint = setRes.hint ? ' (' + setRes.hint + ')' : '';
       if (st) { st.textContent = '⚠️ В пул сохранил, но включить не вышло: ' + (setRes.error || 'ошибка') + hint; st.style.color = 'var(--yellow)'; }
