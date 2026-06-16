@@ -2040,6 +2040,15 @@ function buildSessList(snap) {
           `<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">resume_hash</div>` +
             `<input id="sess-edit-hash-${acc.idx}" class="apply-input" style="font-size:11px;font-family:monospace" value="${esc(acc.resume_hash||'')}"></div>` +
         `</div>` +
+        `<div style="margin:8px 0 10px">` +
+          `<div style="font-size:11px;color:var(--dim);margin-bottom:3px">Обновить куки (cURL или строка cookie)</div>` +
+          `<textarea id="sess-edit-cookies-${acc.idx}" class="apply-input" rows="3" style="font-size:11px;margin-bottom:6px" ` +
+            `placeholder="curl 'https://hh.ru/...' -b 'hhtoken=...' ...&#10;— или: hhtoken=xxx; _xsrf=yyy; ..."></textarea>` +
+          `<div style="display:flex;gap:8px;align-items:center">` +
+            `<button class="btn-sm" onclick="updateCookiesFromTextarea(${acc.idx}, 'sess-edit-cookies-${acc.idx}', 'sess-edit-cookie-st-${acc.idx}')">🔑 Обновить куки</button>` +
+            `<span id="sess-edit-cookie-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>` +
+          `</div>` +
+        `</div>` +
         `<div style="display:flex;gap:8px;align-items:center">` +
           `<button class="btn-sm" onclick="sessProfileSave(${acc.idx},this)">💾 Сохранить</button>` +
           `<span id="sess-edit-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>` +
@@ -2169,8 +2178,12 @@ function buildAccCookiesList(snap) {
 }
 
 async function updateAccCookies(idx) {
-  const ta = document.getElementById('ck-ta-' + idx);
-  const st = document.getElementById('ck-st-' + idx);
+  return updateCookiesFromTextarea(idx, 'ck-ta-' + idx, 'ck-st-' + idx);
+}
+
+async function updateCookiesFromTextarea(idx, textareaId, statusId) {
+  const ta = document.getElementById(textareaId);
+  const st = document.getElementById(statusId);
   const val = ta?.value.trim();
   if (!val) { if (st) { st.textContent = '❌ Пусто'; st.style.color = 'var(--red)'; } return; }
   if (st) { st.textContent = '⏳ Обновляю...'; st.style.color = 'var(--dim)'; }
@@ -2301,7 +2314,11 @@ function renderAll(snap) {
   else if (State.currentTab === 'hh') renderHH(snap);
   else if (State.currentTab === 'llm') renderLlmLog(snap);
   else if (State.currentTab === 'views') loadViews();
-  else if (State.currentTab === 'settings') { buildSessList(snap); _syncSuggestAccSel(snap); }
+  else if (State.currentTab === 'settings') {
+    buildAccCookiesList(snap);
+    buildSessList(snap);
+    _syncSuggestAccSel(snap);
+  }
   else if (State.currentTab === 'apply') {
     applyBuildAccountSelect(snap);
   }
