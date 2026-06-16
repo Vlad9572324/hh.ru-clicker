@@ -910,6 +910,41 @@ function _llmMarkEditing() {
   _llmSettingsEditTimer = setTimeout(() => { _llmSettingsEditing = false; }, 5000);
 }
 
+// Автосейв LLM-формы при blur. Раньше юзер вводил api_key и забывал нажать
+// «💾 Сохранить» — профиль не уходил на бэк, /api/llm_run_now сваливался с
+// «нет ключа». Теперь любое изменение в форме (профиль/чекбоксы/промпт)
+// триггерит таймер, и через 1.5с без активности форма уезжает на сервер.
+let _llmAutoSaveTimer = null;
+function _llmAutoSave() {
+  _llmMarkEditing();
+  clearTimeout(_llmAutoSaveTimer);
+  _llmAutoSaveTimer = setTimeout(() => {
+    const st = document.getElementById('llm-status');
+    if (st && !st.textContent) st.textContent = '⏳ автосохранение…';
+    llmSave(null);
+  }, 1500);
+}
+
+// Делегирование: ловим blur на любых LP-полях профилей + статических чекбоксах.
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t || !t.classList) return;
+  if (t.classList.contains('lp-name') || t.classList.contains('lp-key') ||
+      t.classList.contains('lp-url') || t.classList.contains('lp-model') ||
+      t.classList.contains('lp-enabled') || t.id === 'llm-system-prompt') {
+    _llmAutoSave();
+  }
+}, true);
+document.addEventListener('blur', (e) => {
+  const t = e.target;
+  if (!t || !t.classList) return;
+  if (t.classList.contains('lp-name') || t.classList.contains('lp-key') ||
+      t.classList.contains('lp-url') || t.classList.contains('lp-model') ||
+      t.id === 'llm-system-prompt') {
+    _llmAutoSave();
+  }
+}, true);
+
 function syncLlmSettings(snap) {
   const cfg = snap?.config || {};
   const as = document.getElementById('llm-auto-send');
