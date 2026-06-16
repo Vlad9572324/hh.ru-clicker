@@ -1685,6 +1685,59 @@ function suggestAddToPool(url, btn) {
   if (btn) { btn.textContent = '✓'; btn.disabled = true; }
 }
 
+async function urlAccQuickAdd(accIdx, btn) {
+  const input = document.getElementById(`acc-url-new-${accIdx}`);
+  const st = document.getElementById(`url-quick-st-${accIdx}`);
+  if (!input) return;
+  let url = (input.value || '').trim();
+  if (!url) { if (st) { st.textContent = '⚠️ Введи URL'; st.style.color = 'var(--yellow)'; } return; }
+  // Auto-prefix https:// если юзер вставил без схемы
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  // Принимаем основной hh.ru или *.hh.ru/search/
+  if (!/^https:\/\/(?:[a-z0-9-]+\.)?hh\.ru\/search\//i.test(url)) {
+    if (st) { st.textContent = '❌ Должен быть hh.ru/search/vacancy?…'; st.style.color = 'var(--red)'; }
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ Добавляю…'; st.style.color = 'var(--dim)'; }
+  try {
+    // 1. Подтянуть текущий url_pool
+    const cfg = await (await fetch('/api/raw/config')).json();
+    const pool = Array.isArray(cfg.url_pool) ? cfg.url_pool.slice() : [];
+    const exists = pool.some(p => (typeof p === 'string' ? p : p?.url) === url);
+    if (!exists) pool.push({ url: url, pages: cfg.pages_per_url || 40 });
+    // 2. Сохранить пул
+    const saved = await (await fetch('/api/raw/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url_pool: pool })
+    })).json();
+    if (!saved.ok) {
+      if (st) { st.textContent = '❌ Не сохранилось: ' + (saved.error || JSON.stringify(saved.errors || {})); st.style.color = 'var(--red)'; }
+      return;
+    }
+    // 3. Включить URL для этого аккаунта (добавить в его список + сохранить)
+    const acc = (State.lastSnapshot?.accounts || []).find(a => a.idx === accIdx) || {};
+    const accUrls = Array.isArray(acc.urls) ? acc.urls.slice() : [];
+    if (!accUrls.includes(url)) accUrls.push(url);
+    const setRes = await (await fetch(`/api/account/${accIdx}/set_urls`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ urls: accUrls, url_pages: acc.url_pages || {}, short: acc.short || '', name: acc.name || '' })
+    })).json();
+    if (setRes.ok) {
+      input.value = '';
+      if (st) { st.textContent = exists ? `✅ Уже в пуле — включил для аккаунта (${setRes.count} URL)` : `✅ Добавлено в пул и включил (${setRes.count} URL)`; st.style.color = 'var(--green)'; }
+    } else {
+      const hint = setRes.hint ? ' (' + setRes.hint + ')' : '';
+      if (st) { st.textContent = '⚠️ В пул сохранил, но включить не вышло: ' + (setRes.error || 'ошибка') + hint; st.style.color = 'var(--yellow)'; }
+    }
+  } catch(e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) btn.disabled = false;
+    setTimeout(() => { if (st) st.textContent = ''; }, 6000);
+  }
+}
+
 async function urlAccSave(accIdx, btn) {
   const container = document.getElementById(`acc-url-checks-${accIdx}`);
   if (!container) return;
@@ -2355,9 +2408,17 @@ function buildCardHTML(acc) {
       <summary>${t('url_section')}</summary>
       <div class="acc-letter-body">
         <div id="acc-url-checks-${acc.idx}" style="margin-bottom:8px"></div>
-        <div style="display:flex;gap:6px;align-items:center">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
           <button class="btn-sm" onclick="urlAccSave(${acc.idx},this)">${t('btn_apply_url')}</button>
           <span id="url-acc-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:8px">
+          <div style="font-size:11px;color:var(--dim);margin-bottom:5px">➕ Добавить новый URL в пул и сразу включить:</div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input id="acc-url-new-${acc.idx}" class="apply-input" type="text" placeholder="https://hh.ru/search/vacancy?text=..." style="flex:1;min-width:200px;font-size:11px">
+            <button class="btn-sm" onclick="urlAccQuickAdd(${acc.idx},this)">＋ Добавить</button>
+            <span id="url-quick-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>
+          </div>
         </div>
       </div>
     </details>
