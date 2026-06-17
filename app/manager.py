@@ -988,9 +988,29 @@ class BotManager:
             test_count = 0
             salary_skipped = 0
             schedule_skipped = 0
+            title_skipped = 0
             apply_tests = state.apply_tests or CONFIG.auto_apply_tests
+            title_include_keywords = [
+                str(k).strip().lower()
+                for k in getattr(CONFIG, "title_include_keywords", [])
+                if str(k).strip()
+            ]
+            title_exclude_keywords = [
+                str(k).strip().lower()
+                for k in getattr(CONFIG, "title_exclude_keywords", [])
+                if str(k).strip()
+            ]
 
             for vid in unique_vacancies:
+                meta = state.vacancy_meta.get(vid, {})
+                title = (meta.get("title") or "").lower()
+                if title:
+                    if title_include_keywords and not any(k in title for k in title_include_keywords):
+                        title_skipped += 1
+                        continue
+                    if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
+                        title_skipped += 1
+                        continue
                 if is_applied(acc["name"], vid):
                     already_count += 1
                     state.already_applied += 1
@@ -1022,9 +1042,10 @@ class BotManager:
 
             sal_msg = f", \U0001f4b0 зарплата {salary_skipped}" if CONFIG.min_salary > 0 else ""
             sched_msg = f", \U0001f3e2 формат {schedule_skipped}" if CONFIG.allowed_schedules else ""
+            title_msg = f", \U0001f3f7️ заголовок {title_skipped}" if title_skipped else ""
             self._add_log(
                 state.short, state.color,
-                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}, \U0001f195 новые {len(filtered)}",
+                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}{title_msg}, \U0001f195 новые {len(filtered)}",
                 "info",
             )
 

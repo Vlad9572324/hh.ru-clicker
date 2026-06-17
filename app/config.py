@@ -58,6 +58,10 @@ class Config:
     # Фильтр по формату работы (пустой = без фильтра, все форматы)
     # Возможные значения: "fullDay", "remote", "flexible", "shift", "flyInFlyOut"
     allowed_schedules: list = []
+    # Фильтр по заголовку вакансии. Пустой include = все заголовки разрешены.
+    # Сравнение регистронезависимое, по вхождению подстроки.
+    title_include_keywords: list = []
+    title_exclude_keywords: list = []
 
     # LLM auto-reply settings
     llm_enabled: bool = False
@@ -217,6 +221,8 @@ def save_config():
     data["questionnaire_templates"] = CONFIG.questionnaire_templates
     data["letter_templates"] = CONFIG.letter_templates
     data["allowed_schedules"] = CONFIG.allowed_schedules
+    data["title_include_keywords"] = CONFIG.title_include_keywords
+    data["title_exclude_keywords"] = CONFIG.title_exclude_keywords
     data["auto_apply_tests"] = CONFIG.auto_apply_tests
     data["use_oauth_apply"] = CONFIG.use_oauth_apply
     data["url_pool"] = CONFIG.url_pool
@@ -283,6 +289,10 @@ def load_config():
                 setattr(CONFIG, k, bool(data[k]))
         if "allowed_schedules" in data and isinstance(data["allowed_schedules"], list):
             CONFIG.allowed_schedules = data["allowed_schedules"]
+        if "title_include_keywords" in data and isinstance(data["title_include_keywords"], list):
+            CONFIG.title_include_keywords = data["title_include_keywords"]
+        if "title_exclude_keywords" in data and isinstance(data["title_exclude_keywords"], list):
+            CONFIG.title_exclude_keywords = data["title_exclude_keywords"]
         if "auto_apply_tests" in data:
             CONFIG.auto_apply_tests = bool(data["auto_apply_tests"])
         if "use_oauth_apply" in data:
