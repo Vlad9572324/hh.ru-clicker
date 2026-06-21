@@ -985,6 +985,115 @@ document.addEventListener('change', (e) => { if (_isLlmAutoField(e.target)) _llm
 document.addEventListener('input',  (e) => { if (_isLlmAutoField(e.target)) _llmAutoSave(); }, true);
 document.addEventListener('blur',   (e) => { if (_isLlmAutoField(e.target)) _llmAutoSave(); }, true);
 
+// ⚡ Быстрая настройка LLM — вставил ключ, нажал Enter, готово.
+// Сам определяет провайдера по префиксу и подбирает дефолтную модель.
+// Юзеры терялись в форме из 5 полей и забывали нажать "Сохранить".
+function _llmDetectProvider(key) {
+  const k = (key || '').trim();
+  if (!k) return null;
+  if (k.startsWith('sk-or-'))   return {name:'OpenRouter', base_url:'https://openrouter.ai/api/v1', model:'openai/gpt-4o-mini'};
+  if (k.startsWith('sk-ant-'))  return {name:'Anthropic',  base_url:'https://api.anthropic.com/v1', model:'claude-haiku-4-5-20251001'};
+  if (k.startsWith('sk-proj-')) return {name:'OpenAI',     base_url:'https://api.openai.com/v1', model:'gpt-4o-mini'};
+  if (k.startsWith('gsk_'))     return {name:'Groq',       base_url:'https://api.groq.com/openai/v1', model:'llama-3.3-70b-versatile'};
+  if (k.startsWith('AIza'))     return {name:'Gemini',     base_url:'https://generativelanguage.googleapis.com/v1beta/openai', model:'gemini-2.0-flash'};
+  if (k.startsWith('hf_'))      return {name:'HuggingFace',base_url:'https://api-inference.huggingface.co/v1', model:'meta-llama/Llama-3.3-70B-Instruct'};
+  if (k.startsWith('sk-') && k.length < 45) return {name:'DeepSeek', base_url:'https://api.deepseek.com', model:'deepseek-chat'};
+  if (k.startsWith('sk-'))      return {name:'OpenAI',     base_url:'https://api.openai.com/v1', model:'gpt-4o-mini'};
+  return {name:'Custom', base_url:'https://api.openai.com/v1', model:'gpt-4o-mini'};
+}
+
+async function llmQuickSetup(inp) {
+  const status = document.getElementById('llm-quick-status');
+  const setStatus = (text, color) => {
+    if (!status) return;
+    status.textContent = text;
+    status.style.color = color || 'var(--dim)';
+  };
+  const key = (inp?.value || '').trim();
+  if (!key) { setStatus('⚠️ Вставь ключ в поле выше', 'var(--yellow)'); inp?.focus(); return; }
+  if (key.length < 20) { setStatus('⚠️ Ключ слишком короткий — проверь, что скопировал целиком', 'var(--yellow)'); return; }
+
+  const prov = _llmDetectProvider(key);
+  setStatus(`⏳ Сохраняю профиль ${prov.name}…`, 'var(--cyan)');
+
+  try {
+    // 1) Берём текущие профили (если есть), мерджим — не затираем чужие ключи.
+    let existing = [];
+    try {
+      const snapResp = await fetch('/api/raw/config');
+      if (snapResp.ok) {
+        const cfg = await snapResp.json();
+        existing = Array.isArray(cfg.llm_profiles) ? cfg.llm_profiles : [];
+      }
+    } catch(e) {}
+
+    const newProfile = {
+      name: prov.name,
+      api_key: key,
+      base_url: prov.base_url,
+      model: prov.model,
+      enabled: true,
+    };
+
+    // Если профиль с таким провайдером уже есть — обновим его, иначе добавим в начало.
+    let merged;
+    const idx = existing.findIndex(p => (p.base_url || '').trim() === prov.base_url);
+    if (idx >= 0) {
+      merged = existing.slice();
+      merged[idx] = {...existing[idx], ...newProfile};
+    } else {
+      merged = [newProfile, ...existing];
+    }
+
+    // 2) Сохраняем профили
+    const r1 = await fetch('/api/llm_profiles', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({profiles: merged, mode: 'fallback'})
+    });
+    if (!r1.ok) throw new Error('llm_profiles HTTP ' + r1.status);
+
+    // 3) Также пишем в плоский llm_config (legacy путь) и включаем авто-отправку
+    await fetch('/api/llm_config', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        api_key: key, base_url: prov.base_url, model: prov.model,
+        enabled: true, auto_send: true,
+      })
+    });
+
+    // 4) Глобальный тумблер LLM — llm_config выше уже выставил enabled=true,
+    //    но дублируем через WS на случай гонки и обновляем кнопку в UI.
+    try {
+      if (typeof sendCmd === 'function') {
+        sendCmd({type:'set_config', key:'llm_enabled', value:true});
+        sendCmd({type:'set_config', key:'llm_auto_send', value:true});
+      }
+      _llmUpdateToggleBtn(true);
+    } catch(e) {}
+
+    // 5) Проверяем, что ключ реально лёг на диск
+    let saved = false;
+    try {
+      const v = await fetch('/api/raw/config');
+      if (v.ok) {
+        const cfg = await v.json();
+        const profs = cfg.llm_profiles || [];
+        saved = profs.some(p => (p.api_key || '') === key) || (cfg.llm_api_key || '') === key;
+      }
+    } catch(e) {}
+
+    if (saved) {
+      const fp = key.slice(0,4) + '…' + key.slice(-4);
+      setStatus(`✅ ${prov.name} сохранён · ${fp} (${key.length} симв.) · модель: ${prov.model} · LLM включён`, 'var(--green)');
+      if (inp) inp.value = '';
+    } else {
+      setStatus('⚠️ Сохранение прошло, но при проверке ключ не виден. Проверь права на data/config.json', 'var(--yellow)');
+    }
+  } catch(e) {
+    setStatus('❌ ' + (e.message || e), 'var(--red)');
+  }
+}
+
 function syncLlmSettings(snap) {
   const cfg = snap?.config || {};
   const as = document.getElementById('llm-auto-send');

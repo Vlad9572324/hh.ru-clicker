@@ -784,8 +784,22 @@
           </div>
         </div>
         <div style="font-size:10px;color:var(--dim);margin-bottom:8px">Ключи не отображаются из соображений безопасности — введите повторно при изменении.</div>
+
+        <!-- ⚡ Быстрое добавление: одним полем, без раскладки на 4 input'а -->
+        <div style="background:rgba(0,200,255,0.06);border:1px dashed var(--cyan);border-radius:6px;padding:10px;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--cyan);margin-bottom:6px">⚡ Быстрая настройка — вставь ключ и жми Enter</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="llm-quick-key" type="password" class="apply-input" placeholder="sk-proj-... / sk-... / gsk_... / AIza... / hf_..."
+              style="flex:1;min-width:280px;font-family:monospace;font-size:12px;padding:6px 10px"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();llmQuickSetup(this);}">
+            <button class="btn-sm" style="background:var(--cyan);color:#000;border-color:var(--cyan);font-weight:600" onclick="llmQuickSetup(document.getElementById('llm-quick-key'))">📥 Сохранить и включить</button>
+          </div>
+          <div id="llm-quick-status" style="font-size:11px;color:var(--dim);margin-top:6px"></div>
+          <div style="font-size:10px;color:var(--dim);margin-top:4px">Бот сам определит провайдера (OpenAI / DeepSeek / Anthropic / Groq / Gemini / HuggingFace) по префиксу ключа и подставит base_url + типовую модель. Если хочешь другие настройки — раскрой профиль ниже вручную.</div>
+        </div>
+
         <div id="llm-profiles-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
-        <button class="btn-sm" onclick="llmProfileAdd()">＋ Добавить профиль</button>
+        <button class="btn-sm" onclick="llmProfileAdd()">＋ Добавить профиль вручную</button>
       </div>
       <div style="margin-bottom:8px">
         <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Системный промпт</div>
