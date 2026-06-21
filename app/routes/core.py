@@ -144,6 +144,21 @@ async def websocket_endpoint(ws: WebSocket):
                     CONFIG.allowed_schedules = [s for s in value if isinstance(s, str)]
                     save_config()
                     bot._add_log("", "", f"⚙️ Формат работы: {CONFIG.allowed_schedules or 'все'}", "info")
+                elif key in ("title_include_keywords", "title_exclude_keywords") and isinstance(value, list):
+                    # Нормализация: trim + lower + дедуп. Бот сравнивает в lower(), храним так же.
+                    seen = set()
+                    norm = []
+                    for s in value:
+                        if not isinstance(s, str):
+                            continue
+                        k = s.strip().lower()
+                        if k and k not in seen:
+                            seen.add(k)
+                            norm.append(k)
+                    setattr(CONFIG, key, norm)
+                    save_config()
+                    kind = "разрешено" if key == "title_include_keywords" else "запрещено"
+                    bot._add_log("", "", f"🏷️ Заголовки {kind}: {len(norm)} слов", "info")
                 elif key == "auto_apply_tests":
                     CONFIG.auto_apply_tests = bool(value)
                     save_config()

@@ -582,6 +582,25 @@
             <input type="checkbox" class="sched-cb" value="flyInFlyOut" style="accent-color:var(--red)"> Вахта
           </label>
         </div>
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px">
+          <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">🏷️ Фильтр по словам в названии</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:8px">
+            Регистронезависимо, по подстроке. Применяется до отклика — экономит запросы.
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div>
+              <div style="font-size:11px;color:var(--green);margin-bottom:4px">✅ Разрешить (include) — если непусто, оставляем только совпавшие</div>
+              <div id="title-incl-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px;min-height:18px"></div>
+              <input id="title-incl-input" class="apply-input" style="font-size:12px;padding:4px 8px" placeholder="например: python, backend, golang — Enter / запятая">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--red);margin-bottom:4px">🚫 Исключить (exclude) — выкинуть если содержит</div>
+              <div id="title-excl-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px;min-height:18px"></div>
+              <input id="title-excl-input" class="apply-input" style="font-size:12px;padding:4px 8px" placeholder="например: junior, стажёр, intern">
+            </div>
+          </div>
+          <div id="title-kw-status" style="font-size:11px;color:var(--dim);margin-top:6px"></div>
+        </div>
         <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:4px">
           <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--cyan)">Автопрохождение тестов</div>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">

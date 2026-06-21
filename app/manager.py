@@ -733,6 +733,8 @@ class BotManager:
                 "stop_on_hh_limit": CONFIG.stop_on_hh_limit,
                 "llm_check_interval": CONFIG.llm_check_interval,
                 "allowed_schedules": CONFIG.allowed_schedules,
+                "title_include_keywords": getattr(CONFIG, "title_include_keywords", []),
+                "title_exclude_keywords": getattr(CONFIG, "title_exclude_keywords", []),
                 "questionnaire_templates": CONFIG.questionnaire_templates,
                 "questionnaire_default_answer": questionnaire_default_answer(),
                 "letter_templates": CONFIG.letter_templates,

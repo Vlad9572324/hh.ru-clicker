@@ -1135,6 +1135,77 @@ function syncLlmSettings(snap) {
 
 // ── Schedule filter & auto-tests sync ────────────────────────
 let _schedInited = false;
+let _titleKwInited = false;
+// Локальный кэш активных списков — на нём строим WS-команду при добавлении/удалении.
+// Снапшот перезапишет его при следующем broadcast'е.
+const _titleKwState = {title_include_keywords: [], title_exclude_keywords: []};
+
+function _normKw(s) { return String(s || '').trim().toLowerCase(); }
+
+function _syncTitleKwTags(containerId, kws, key, color) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  // Не обновляем DOM если состояние уже совпадает — иначе крестики «прыгают» при каждом snapshot 300ms.
+  const arr = Array.isArray(kws) ? kws.map(_normKw).filter(Boolean) : [];
+  const prev = _titleKwState[key] || [];
+  _titleKwState[key] = arr.slice();
+  if (prev.length === arr.length && prev.every((v, i) => v === arr[i]) && box.children.length === arr.length) return;
+  box.innerHTML = '';
+  if (!arr.length) {
+    const hint = document.createElement('span');
+    hint.style.cssText = 'font-size:10px;color:var(--dim);font-style:italic';
+    hint.textContent = '(пусто)';
+    box.appendChild(hint);
+    return;
+  }
+  arr.forEach((kw, idx) => {
+    const tag = document.createElement('span');
+    tag.style.cssText = `display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,0.05);border:1px solid ${color};color:${color};padding:2px 6px;border-radius:10px;font-size:11px;font-family:monospace`;
+    tag.innerHTML = `<span></span><button type="button" title="Удалить" style="background:transparent;border:none;color:${color};cursor:pointer;font-size:13px;line-height:1;padding:0">×</button>`;
+    tag.querySelector('span').textContent = kw;
+    tag.querySelector('button').onclick = () => {
+      const next = (_titleKwState[key] || []).filter((_, i) => i !== idx);
+      _titleKwState[key] = next;
+      sendCmd({type:'set_config', key, value: next});
+      _titleKwStatus(`удалено: «${kw}» → ${next.length} осталось`);
+    };
+    box.appendChild(tag);
+  });
+}
+
+function _bindTitleKwInput(inputId, key) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const commit = () => {
+    const raw = inp.value;
+    const parts = raw.split(/[,;\n]/).map(_normKw).filter(Boolean);
+    if (!parts.length) return;
+    const cur = _titleKwState[key] || [];
+    const added = [];
+    const merged = cur.slice();
+    parts.forEach(p => {
+      if (!merged.includes(p)) { merged.push(p); added.push(p); }
+    });
+    _titleKwState[key] = merged;
+    sendCmd({type:'set_config', key, value: merged});
+    inp.value = '';
+    if (added.length) _titleKwStatus(`+ ${added.join(', ')} → всего ${merged.length}`);
+    else _titleKwStatus(`(уже есть, всего ${merged.length})`);
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); }
+  });
+  inp.addEventListener('blur', () => { if (inp.value.trim()) commit(); });
+}
+
+function _titleKwStatus(text) {
+  const st = document.getElementById('title-kw-status');
+  if (!st) return;
+  st.textContent = text;
+  st.style.color = 'var(--green)';
+  clearTimeout(_titleKwStatus._t);
+  _titleKwStatus._t = setTimeout(() => { st.textContent = ''; }, 3500);
+}
 function syncScheduleSettings(snap) {
   const cfg = snap?.config || {};
   // Sync schedule checkboxes
@@ -1152,6 +1223,16 @@ function syncScheduleSettings(snap) {
         sendCmd({type: 'set_config', key: 'allowed_schedules', value: checked});
       };
     });
+  }
+  // Title keyword filters (include/exclude) — теги + input по Enter/запятой.
+  // Не должен затирать ввод пока юзер печатает: только при изменении в снапшоте
+  // перерисовываем теги. Биндим обработчики один раз.
+  _syncTitleKwTags('title-incl-tags', cfg.title_include_keywords || [], 'title_include_keywords', 'var(--green)');
+  _syncTitleKwTags('title-excl-tags', cfg.title_exclude_keywords || [], 'title_exclude_keywords', 'var(--red)');
+  if (!_titleKwInited) {
+    _titleKwInited = true;
+    _bindTitleKwInput('title-incl-input', 'title_include_keywords');
+    _bindTitleKwInput('title-excl-input', 'title_exclude_keywords');
   }
   // Auto-tests
   const at = document.getElementById('auto-apply-tests');
