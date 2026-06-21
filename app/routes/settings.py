@@ -71,7 +71,8 @@ async def api_settings(update: ConfigUpdate):
 
 _RAW_LIST_KEYS = {
     "questionnaire_templates", "letter_templates", "url_pool",
-    "allowed_schedules", "llm_profiles",
+    "allowed_schedules", "title_include_keywords", "title_exclude_keywords",
+    "llm_profiles",
 }
 _RAW_LLM_KEYS = {
     "llm_enabled", "llm_auto_send", "llm_use_cover_letter", "llm_use_resume",
