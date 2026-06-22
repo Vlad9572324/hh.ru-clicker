@@ -898,11 +898,14 @@ def fetch_account_diagnostics(acc: dict) -> dict:
         }
         out["resumes"].append(rd)
         prefix = f"📄 [{title[:30]}]"
-        if not rd["hasPublicVisibility"]:
-            out["red_flags"].append(f"🚨 {prefix} Резюме НЕ видно публично — HR не найдут в поиске")
+        # hasPublicVisibility=false означает только «не индексируется в гугле без логина»,
+        # внутри HH резюме всё равно видно HR-клиентам с подпиской.
+        # Реально проблемно только accessType=no_one (скрыто ото всех).
+        if rd["accessType"] == "no_one":
+            out["red_flags"].append(f"🚨 {prefix} accessType=no_one — резюме скрыто от ВСЕХ работодателей")
         if rd["hasErrors"]:
             out["red_flags"].append(f"⚠️ {prefix} hasErrors=True — есть ошибки в полях")
-        if rd["accessType"] not in ("blacklist", "everyone", "clients", "direct_url", ""):
+        if rd["accessType"] not in ("clients", "whitelist", "blacklist", "direct", "direct_url", "no_one", ""):
             out["red_flags"].append(f"⚠️ {prefix} accessType={rd['accessType']} — нестандартный режим видимости")
 
     # 3) Stats
