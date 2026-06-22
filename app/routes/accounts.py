@@ -25,6 +25,7 @@ from app.hh_resume import (
     _analyze_resume, parse_hh_lux_ssr, _edit_resume_field,
     _resume_cache,
     fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
+    fetch_resume_views_aggregate,
 )
 from app.hh_negotiations import (
     auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy,
@@ -531,6 +532,15 @@ async def api_resume_views(idx: int):
             s.resume_free_touches = rs["free_touches"]
             s.resume_global_invitations = rs["global_invitations"]
             s.resume_new_invitations_total = rs["new_invitations_total"]
+        # Аггрегат за всё время + daily-graph 30 дней — отдельным fetch'ем,
+        # кэшируется в state. Бесплатный апсайд для UI: соискатель видит
+        # тренд просмотров (пики/провалы) и общий счётчик 18k+.
+        if not getattr(s, "resume_views_total", None):
+            loop = asyncio.get_event_loop()
+            agg = await loop.run_in_executor(None, fetch_resume_views_aggregate, s.acc)
+            s.resume_views_total = agg.get("total_all_time", 0)
+            s.resume_views_total_new = agg.get("total_new", 0)
+            s.resume_views_graph_30d = agg.get("graph_30d", [])
         return {
             "history": s.resume_view_history,
             "stats": {
@@ -543,6 +553,9 @@ async def api_resume_views(idx: int):
                 "new_invitations_total": s.resume_new_invitations_total,
                 "next_touch_seconds": s.resume_next_touch_seconds,
                 "free_touches": s.resume_free_touches,
+                "total_all_time": getattr(s, "resume_views_total", 0),
+                "total_new_unseen": getattr(s, "resume_views_total_new", 0),
+                "graph_30d": getattr(s, "resume_views_graph_30d", []),
             }
         }
     return {"ok": False, "error": "Invalid idx"}

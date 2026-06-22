@@ -927,3 +927,60 @@ def fetch_account_diagnostics(acc: dict) -> dict:
     out["stats"]["user_stats"] = ssr.get("userStats") or {}
     out["stats"]["global_invitations"] = ssr.get("globalInvitations")
     return out
+
+
+def fetch_resume_views_aggregate(acc: dict) -> dict:
+    """Достать агрегированные метрики просмотров резюме за всё время:
+      - total_all_time: суммарное число просмотров с момента создания
+      - total_new: число новых (непрочитанных тобой) просмотров
+      - graph_30d: [{date: 'YYYY-MM-DD', count: N}, ...] — daily breakdown
+        для sparkline графика. Берётся из graphHistoryViews — это стандартная
+        точка данных HH-фронта для своей UI-картинки.
+
+    Один SSR-запрос к /applicant/resumeview/history. Кэширования нет — на
+    верхнем уровне (route) данные кэшируются на state.
+    """
+    resume_hash = acc.get("resume_hash") or acc.get("resume", {}).get("hash") or ""
+    if not resume_hash:
+        return {"total_all_time": 0, "total_new": 0, "graph_30d": []}
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    out = {"total_all_time": 0, "total_new": 0, "graph_30d": []}
+    try:
+        r = requests.get(
+            f"{hh_base()}/applicant/resumeview/history",
+            params={"resumeHash": resume_hash},
+            headers={"User-Agent": ua, "Accept": "text/html", "Referer": f"{hh_base()}/applicant/resumes"},
+            cookies=acc.get("cookies") or {},
+            timeout=15, allow_redirects=True,
+        )
+        if r.status_code != 200:
+            return out
+        ssr = parse_hh_lux_ssr(r.text)
+        arvh = ssr.get("applicantResumeViewHistory") or {}
+        hv = arvh.get("historyViews") or {}
+        out["total_all_time"] = int(hv.get("total") or 0)
+        out["total_new"] = int(hv.get("new") or 0)
+        # graphHistoryViews — список {day, month, total}. HH не даёт год.
+        # Достраиваем дату из текущего года, мапим прошлые месяцы.
+        import datetime as _dt
+        today = _dt.date.today()
+        gh = arvh.get("graphHistoryViews")
+        if isinstance(gh, list):
+            for p in gh:
+                if not isinstance(p, dict):
+                    continue
+                day = int(p.get("day", 0))
+                month = int(p.get("month", 0))
+                total = int(p.get("total", 0))
+                if day < 1 or month < 1:
+                    continue
+                # Year heuristic: если month > сегодняшнего → прошлый год
+                year = today.year if month <= today.month else today.year - 1
+                try:
+                    d = _dt.date(year, month, day)
+                except ValueError:
+                    continue
+                out["graph_30d"].append({"date": d.isoformat(), "count": total})
+    except Exception as e:
+        log_debug(f"fetch_resume_views_aggregate error: {e}")
+    return out

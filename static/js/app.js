@@ -5005,12 +5005,49 @@ async function loadViewHistory(idx) {
     }
 
     el.dataset.loaded = '1'; // помечаем — больше не ретраить
+    // Aggregate за всё время + 30-day sparkline. Реверс-найдено в SSR
+    // applicantResumeViewHistory.historyViews.total + graphHistoryViews.
+    const totalAll = s.total_all_time || 0;
+    const totalNew = s.total_new_unseen || 0;
+    const graph = s.graph_30d || [];
+    let aggHtml = '';
+    if (totalAll || graph.length) {
+      // Inline SVG sparkline — 30 точек, последняя — вчера
+      let svg = '';
+      if (graph.length) {
+        const max = Math.max(...graph.map(p => p.count), 1);
+        const w = 240, h = 36, pad = 2;
+        const xstep = (w - pad*2) / Math.max(graph.length - 1, 1);
+        const points = graph.map((p, i) => {
+          const x = pad + i*xstep;
+          const y = h - pad - ((p.count / max) * (h - pad*2));
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+        const bars = graph.map((p, i) => {
+          const x = pad + i*xstep - 1.5;
+          const bh = (p.count / max) * (h - pad*2);
+          const y = h - pad - bh;
+          return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="3" height="${Math.max(bh,1).toFixed(1)}" fill="var(--cyan)" opacity="0.7"><title>${esc(p.date)}: ${p.count}</title></rect>`;
+        }).join('');
+        svg = `<svg width="${w}" height="${h}" style="display:block">${bars}<polyline points="${points}" fill="none" stroke="var(--cyan)" stroke-width="1" opacity="0.9"/></svg>`;
+      }
+      aggHtml = `
+        <div style="display:flex;gap:18px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:8px">
+          <div>
+            <div style="font-size:11px;color:var(--dim)">всего просмотров</div>
+            <div style="font-size:18px;color:var(--cyan);font-weight:600">${totalAll.toLocaleString('ru')}</div>
+            ${totalNew ? `<div style="font-size:10px;color:var(--green)">+${totalNew} новых</div>` : ''}
+          </div>
+          ${svg ? `<div><div style="font-size:11px;color:var(--dim);margin-bottom:2px">30 дней:</div>${svg}</div>` : ''}
+        </div>
+      `;
+    }
     const history = data.history || [];
     if (!history.length) {
-      el.innerHTML = `<div class="c-dim" style="font-size:12px;padding:8px 0">${t('views_no_data')}</div>`;
+      el.innerHTML = aggHtml + `<div class="c-dim" style="font-size:12px;padding:8px 0">${t('views_no_data')}</div>`;
       return;
     }
-    el.innerHTML = `
+    el.innerHTML = aggHtml + `
       <table class="views-table">
         <thead><tr><th>${t('col_date')}</th><th>${t('col_employer')}</th><th>${t('col_vacancy')}</th></tr></thead>
         <tbody>
