@@ -77,6 +77,7 @@ from app.hh_chat import (
     _fetch_chat_list, _build_thread_from_chat_item, _check_chat_locked,
     _fetch_chat_history,
     send_negotiation_message,
+    ChatikWSClient,
 )
 
 from app.hh_resume import (
@@ -204,6 +205,10 @@ class BotManager:
         t2 = threading.Thread(target=self._fetch_hh_stats_worker, args=(900 + temp_idx, state), daemon=True, name=f"stats-{temp_idx}")
         t1.start()
         t2.start()
+        try:
+            self._start_ws_push(state)
+        except Exception as e:
+            log_debug(f"_start_ws_push temp({temp_idx}): {e}")
         log_debug(f"activate_session({temp_idx}): threads started t1={t1.is_alive()} t2={t2.is_alive()}")
         self._add_log(state.short, "yellow", f"\U0001f310 Сессия {ts['name']} запущена как бот", "success")
         return True
@@ -222,6 +227,37 @@ class BotManager:
         if 0 <= idx < len(self.account_states):
             return self.account_states[idx]
         return None
+
+    def _start_ws_push(self, state) -> None:
+        """Подписать аккаунт на chatik WS push.
+        На chat_message_create — дёргаем _process_llm_replies в фоне (с debounce).
+        Защита от спама: не чаще раз в 10с на аккаунт (HH может прислать пачку событий).
+        """
+        if not getattr(CONFIG, "llm_ws_push_enabled", True):
+            return
+        if getattr(state, "_ws_client", None) and state._ws_client.alive:
+            return
+        _last_trigger = [0.0]  # mutable nonlocal для closure
+        _self = self
+
+        def _on_event(event_name: str, payload: dict) -> None:
+            if event_name == "chat_message_create":
+                import time as _t
+                now = _t.time()
+                if now - _last_trigger[0] < 10:
+                    return
+                _last_trigger[0] = now
+                if not CONFIG.llm_enabled or not state.llm_enabled or state.paused or _self.paused:
+                    return
+                log_debug(f"WS push [{state.short}] {event_name} → триггерим LLM")
+                threading.Thread(
+                    target=_self._process_llm_replies, args=(state,),
+                    daemon=True, name=f"ws-llm-{state.short}",
+                ).start()
+            elif event_name in ("chat_state_changed", "chat_message_deleted"):
+                log_debug(f"WS push [{state.short}] {event_name}: {str(payload)[:200]}")
+        state._ws_client = ChatikWSClient(state.acc, _on_event, label=state.short)
+        state._ws_client.start()
 
     def start(self):
         _load_cache()
@@ -259,6 +295,10 @@ class BotManager:
             )
             t1.start()
             t2.start()
+            try:
+                self._start_ws_push(state)
+            except Exception as e:
+                log_debug(f"_start_ws_push({state.short}): {e}")
         # Авто-активация браузерных сессий, которые были запущены до перезапуска
         log_debug(f"start(): {len(self.temp_sessions)} temp sessions to check")
         for i, ts in enumerate(self.temp_sessions):
@@ -274,6 +314,14 @@ class BotManager:
 
     def stop(self):
         self._stop_event.set()
+        # Останавливаем WS-клиенты у всех аккаунтов (regular + temp)
+        for st in list(self.account_states) + list(self.temp_states.values()):
+            ws = getattr(st, "_ws_client", None)
+            if ws:
+                try:
+                    ws.stop()
+                except Exception:
+                    pass
 
     def toggle_pause(self):
         self.paused = not self.paused

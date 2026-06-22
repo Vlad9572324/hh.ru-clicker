@@ -374,6 +374,168 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
         return False
 
 
+# ── Chatik WebSocket push-канал ────────────────────────────────────────
+# Reverse-engineered: chatik фронт подключается к wss://websocket.hh.ru/ws/connect
+# через iframe-proxy. На WS приходят push-события chat_message_create,
+# chat_state_changed и т.д. Это даёт мгновенный триггер LLM-ответа вместо
+# 5-минутного polling-цикла.
+#
+# Протокол (из chunk 220 chatik-фронта):
+#   1) GET https://websocket.hh.ru/connection/data?connectionMode=direct&appVersion=X
+#      с HH-куками → {"url": "wss://websocket.hh.ru/ws/connect?sd=<auth>"}
+#   2) WebSocket(url) — auth вшит в sd= токен, отдельной подписки не нужно
+#   3) Сервер шлёт JSON {type/event: "chat_message_create", ...}
+#   4) Ping каждые 180с (как в HH-фронте), reconnect через 2с до 120 попыток
+
+_WS_BASE = "https://websocket.hh.ru"
+_WS_APP_VERSION = "1.9.45"
+_WS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+_KNOWN_WS_EVENTS = {
+    "connect", "disconnect",
+    "chat_message_create", "chat_message_deleted", "chat_message_edited",
+    "chat_state_changed", "last_viewed_message_change", "chat_participant_action",
+}
+
+
+def fetch_chatik_ws_url(acc: dict) -> str | None:
+    """Получить персональный wss-URL для аккаунта. Возвращает None при ошибке."""
+    _ensure_chatik_cookies(acc)
+    try:
+        r = requests.get(
+            f"{_WS_BASE}/connection/data",
+            params={"connectionMode": "direct", "appVersion": _WS_APP_VERSION},
+            cookies=acc.get("cookies") or {},
+            headers={
+                "User-Agent": _WS_UA,
+                "Accept": "application/json, text/plain, */*",
+                "Origin": _WS_BASE,
+                "Referer": f"{_WS_BASE}/proxy-webapp/index.html",
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            log_debug(f"fetch_chatik_ws_url: HTTP {r.status_code} | {r.text[:200]}")
+            return None
+        url = (r.json() or {}).get("url", "").strip()
+        if not url.startswith("wss://websocket.hh."):
+            log_debug(f"fetch_chatik_ws_url: подозрительный URL {url[:80]!r} — отбрасываем")
+            return None
+        return url
+    except Exception as e:
+        log_debug(f"fetch_chatik_ws_url: {e}")
+        return None
+
+
+class ChatikWSClient:
+    """Per-account длинный WS к websocket.hh.ru.
+
+    Колбэк on_event(event_name, payload_dict) вызывается на каждое распарсенное
+    JSON-сообщение. Клиент сам реконнектится с экспоненциальным backoff'ом
+    (как HH-фронт: до 120 попыток с шагом 2с), пингует pong/ping каждые 180с.
+    """
+    def __init__(self, acc: dict, on_event, label: str = ""):
+        self.acc = acc
+        self.on_event = on_event
+        self.label = label or (acc.get("name") or "?")
+        import threading as _t
+        self._stop_evt = _t.Event()
+        self._thread = None
+        self._ws = None
+        self._attempts = 0
+        self._lock = _t.Lock()
+
+    def start(self):
+        import threading as _t
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_evt.clear()
+            self._attempts = 0
+            self._thread = _t.Thread(target=self._run, daemon=True, name=f"chatik-ws-{self.label}")
+            self._thread.start()
+
+    def stop(self):
+        self._stop_evt.set()
+        try:
+            if self._ws:
+                self._ws.close()
+        except Exception:
+            pass
+
+    @property
+    def alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive() and not self._stop_evt.is_set())
+
+    def _run(self):
+        try:
+            import websocket as _ws_mod
+        except ImportError:
+            log_debug(f"chatik WS [{self.label}]: websocket-client не установлен — push выключен")
+            return
+        while not self._stop_evt.is_set():
+            url = fetch_chatik_ws_url(self.acc)
+            if not url:
+                # Куки протухли или сеть — ждём 30с и пробуем снова
+                if self._stop_evt.wait(30):
+                    return
+                continue
+            cookie_str = ";".join(f"{k}={v}" for k, v in (self.acc.get("cookies") or {}).items())
+            self._ws = _ws_mod.WebSocketApp(
+                url,
+                on_open=lambda w: self._on_open(),
+                on_message=lambda w, m: self._on_message(m),
+                on_error=lambda w, e: log_debug(f"chatik WS [{self.label}] err: {e}"),
+                on_close=lambda w, c, r: log_debug(f"chatik WS [{self.label}] closed code={c}"),
+                cookie=cookie_str,
+                header={"User-Agent": _WS_UA, "Origin": _WS_BASE},
+            )
+            try:
+                self._ws.run_forever(ping_interval=180, ping_timeout=20, skip_utf8_validation=True)
+            except Exception as e:
+                log_debug(f"chatik WS [{self.label}] run_forever err: {e}")
+            if self._stop_evt.is_set():
+                return
+            self._attempts += 1
+            if self._attempts > 120:
+                log_debug(f"chatik WS [{self.label}]: max attempts reached — стоп")
+                return
+            # backoff 2с + 0.5с/попытка, потолок 30с (как у HH-фронта)
+            delay = min(2 + self._attempts * 0.5, 30)
+            if self._stop_evt.wait(delay):
+                return
+
+    def _on_open(self):
+        log_debug(f"chatik WS [{self.label}]: OPEN (attempt={self._attempts})")
+        self._attempts = 0
+        try:
+            self.on_event("connect", {})
+        except Exception as e:
+            log_debug(f"chatik WS [{self.label}] on_event(connect) err: {e}")
+
+    def _on_message(self, raw):
+        try:
+            msg = __import__("json").loads(raw)
+        except Exception:
+            log_debug(f"chatik WS [{self.label}]: non-JSON {raw[:100]!r}")
+            return
+        # HH-фронт читает s.I.on(name, handler); name — это либо msg.type, либо msg.event.
+        event = (msg.get("type") if isinstance(msg, dict) else None) or msg.get("event") or ""
+        if not event:
+            # Иногда событие приходит как {<event_name>: {...}} — берём первый ключ.
+            for k in (msg if isinstance(msg, dict) else {}):
+                if k in _KNOWN_WS_EVENTS:
+                    event = k
+                    break
+        if not event:
+            log_debug(f"chatik WS [{self.label}]: неизвестный формат {str(msg)[:200]!r}")
+            return
+        try:
+            self.on_event(event, msg if isinstance(msg, dict) else {})
+        except Exception as e:
+            log_debug(f"chatik WS [{self.label}] on_event({event}) err: {e}")
+
+
 def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
     """Mark a chatik chat as read up to the given message ID."""
     try:
