@@ -1530,6 +1530,7 @@ async function _enrichEmpRatings() {
           ratings: d.ratings,
           politeness: d.politeness || null,
           hr_activity: d.hr_activity || null,
+          topic: d.topic || null,
         } : null;
         _EmpRatingCache[vid] = cached;
         _renderEmpRatingSlots(vid, cached);
@@ -1565,6 +1566,32 @@ function _renderEmpRatingSlots(vid, data) {
       const tot = p.total_topics ? ` (на ${p.total_topics} откл.)` : '';
       const tooltip = `Работодатель читает ${rp}% откликов, отвечает за ${p.reply_days} дн${tot}`;
       parts.push(`<span style="color:${polColor};font-size:10px" title="${esc(tooltip)}">📖${rp}%·${p.reply_days}д</span>`);
+    }
+    // 2b) Topic state — viewed_by_opponent + last_state
+    if (data.topic) {
+      const tp = data.topic;
+      // last_state chip
+      const stateLabels = {
+        DISCARD:  '<span style="color:var(--red);font-size:10px" title="HH-статус: HR отказал">🚫 отказ</span>',
+        INVITE:   '<span style="color:var(--green);font-size:10px" title="HH-статус: HR пригласил">🎯 invite</span>',
+        RESPONSE: '<span style="color:var(--dim);font-size:10px" title="HH-статус: отклик">📨 отклик</span>',
+        INTERVIEW:'<span style="color:var(--cyan);font-weight:600;font-size:10px" title="HH-статус: интервью">💼 интервью</span>',
+        HIRED:    '<span style="color:var(--green);font-weight:600;font-size:10px" title="HH-статус: нанят">🎉 нанят</span>',
+      };
+      if (stateLabels[tp.last_state]) parts.push(stateLabels[tp.last_state]);
+      // viewedByOpponent
+      if (tp.viewed_by_opponent) {
+        parts.push('<span style="color:var(--cyan);font-size:10px" title="HR увидел наш отклик">👁 видел</span>');
+      } else if (tp.viewed_by_opponent === false && tp.last_state) {
+        parts.push('<span style="color:var(--dim);font-size:10px" title="HR ещё не открыл наш отклик">💤 не видел</span>');
+      }
+      // unread_by_employer: сообщений от нас, которые HR не прочитал
+      if (tp.unread_by_employer > 0) {
+        parts.push(`<span style="color:var(--yellow);font-size:10px" title="HR не прочитал ${tp.unread_by_employer} ваших сообщений">📬 ${tp.unread_by_employer}</span>`);
+      }
+      if (tp.inbox_availability_state === 'DISABLED_BY_EMPLOYER') {
+        parts.push('<span style="color:var(--red);font-size:10px" title="Работодатель отключил свой inbox — наши сообщения не дойдут">📪 inbox off</span>');
+      }
     }
     // 3) HR online-status chip
     if (data.hr_activity) {

@@ -489,17 +489,21 @@ _NEG_META_LOCK = _t_emp.Lock()
 
 
 def fetch_negotiations_metadata(acc: dict) -> dict:
-    """Достать politeness + HR activity из /applicant/negotiations SSR.
+    """Достать politeness + HR activity + per-topic статусы из
+    /applicant/negotiations SSR.
 
     politeness: {employer_id: {read_percent, reply_days, total_topics}}
     activity:   {hr_hhid: {trl_code, inactive_minutes, inactive_days}}
-    Кэш 1ч (per acc identity).
+    topics_by_vid: {vacancy_id: {viewed_by_opponent, unread_by_employer,
+                                last_state, has_pending_survey, has_new_messages,
+                                inbox_availability_state}}
+    Кэш 1ч (per acc identity). Все 3 источника достаются одним SSR-запросом.
     """
     # Идентификатор аккаунта — hhuid + hhtoken hash (стабильный для сессии)
     cookies = acc.get("cookies") or {}
     acc_key = (cookies.get("hhuid") or "") + ":" + (cookies.get("hhtoken","") or "")[:16]
     if not acc_key:
-        return {"politeness": {}, "activity": {}}
+        return {"politeness": {}, "activity": {}, "topics_by_vid": {}}
     now = _time_emp.time()
     with _NEG_META_LOCK:
         hit = _NEG_META_CACHE.get(acc_key)
@@ -507,7 +511,7 @@ def fetch_negotiations_metadata(acc: dict) -> dict:
             return hit[1]
 
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
-    out = {"politeness": {}, "activity": {}}
+    out = {"politeness": {}, "activity": {}, "topics_by_vid": {}}
     try:
         import requests as _rq
         r = _rq.get(
@@ -538,6 +542,23 @@ def fetch_negotiations_metadata(acc: dict) -> dict:
                 "trl_code": a.get("trl_code", ""),
                 "inactive_minutes": a.get("@inactiveMinutes"),
                 "inactive_days": a.get("inactive_days"),
+            }
+        # Per-topic статусы из applicantNegotiations.topicList: ключевая инфа —
+        # увидел ли HR наше сообщение (viewedByOpponent) и сколько у него
+        # непрочитанных от нас (conversationUnreadByEmployerCount).
+        an = ssr.get("applicantNegotiations") or {}
+        for t in (an.get("topicList") or []):
+            if not isinstance(t, dict): continue
+            vid = t.get("vacancyId")
+            if not vid: continue
+            out["topics_by_vid"][str(vid)] = {
+                "viewed_by_opponent": bool(t.get("viewedByOpponent")),
+                "unread_by_employer": t.get("conversationUnreadByEmployerCount", 0),
+                "last_state": t.get("lastState", ""),
+                "has_pending_survey": bool(t.get("hasPendingAutoActionSurvey")),
+                "has_new_messages": bool(t.get("hasNewMessages")),
+                "inbox_availability_state": t.get("inboxAvailabilityState", ""),
+                "applicant_summary_enabled": bool(t.get("applicantVacancySummaryEnabled")),
             }
     except Exception as e:
         log_debug(f"fetch_negotiations_metadata: {e}")

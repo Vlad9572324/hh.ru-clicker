@@ -182,7 +182,12 @@ async def api_rating_by_vacancy(idx: int, vacancy_id: int):
         if activity:
             out["hr_activity"] = activity
             out["hr_hhid"] = hr_hhid
-    if not rating and "politeness" not in out and "hr_activity" not in out:
+    # Per-topic статус: видел ли HR наш отклик, сколько непрочитанных,
+    # last_state (DISCARD/INVITE/RESPONSE), etc.
+    topic = (meta.get("topics_by_vid") or {}).get(str(vacancy_id))
+    if topic:
+        out["topic"] = topic
+    if not rating and "politeness" not in out and "hr_activity" not in out and "topic" not in out:
         return {"ok": False, "error": "Ни рейтинга, ни metadata для этого работодателя"}
     return out
 
