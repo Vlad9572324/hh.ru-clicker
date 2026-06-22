@@ -1795,15 +1795,20 @@ class BotManager:
                 _text_buttons = _raw_actions.get("text_buttons", [])
                 _is_bot_msg = (_last_emp_raw or {}).get("is_bot", False)
                 if _text_buttons:
-                    btn_text = _text_buttons[0].get("text", "ДА")
-                    for b in _text_buttons:
-                        t_lower = b.get("text", "").lower()
-                        if t_lower in ("да", "yes", "согласен", "подтверждаю", "готов", "готова"):
-                            btn_text = b["text"]
-                            break
-                    log_debug(f"LLM [{state.short}] {neg_id}: робот-рекрутер, кнопки={[b.get('text') for b in _text_buttons]}, отвечаю '{btn_text}'")
+                    # Умный выбор кнопки: heuristic для очевидных Да/Нет,
+                    # LLM-консультация если кнопок 3+ или Да/Нет не определяется.
+                    from app.llm import pick_robot_button as _pick_robot_button
+                    _btn_idx, btn_text, _btn_source = _pick_robot_button(
+                        _text_buttons, conversation, thread.get("employer_name", ""), state.short,
+                    )
+                    if not btn_text:
+                        btn_text = (_text_buttons[0].get("text") if _text_buttons else "ДА") or "ДА"
+                    log_debug(
+                        f"LLM [{state.short}] {neg_id}: робот-рекрутер, кнопки={[b.get('text') for b in _text_buttons]}, "
+                        f"выбрана [{_btn_idx}] '{btn_text}' (src={_btn_source})"
+                    )
                     self._add_log(state.short, state.color,
-                        f"\U0001f916 [{employer_short}] \U0001f916 Робот → '{btn_text}'", "info", neg_id=neg_id)
+                        f"\U0001f916 [{employer_short}] \U0001f916 Робот → '{btn_text}' ({_btn_source})", "info", neg_id=neg_id)
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                      employer=employer_short, vacancy_title=vacancy_title,
                                      chat_status="robot")

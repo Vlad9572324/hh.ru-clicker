@@ -203,6 +203,137 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
         return ""
 
 
+# Префиксы для эвристики выбора кнопок робота-рекрутера. Используются ДО LLM,
+# чтобы простые «Да/Нет»-сценарии решать без сетевого вызова.
+_BTN_AFFIRM_PREFIXES = (
+    "да", "yes", "ок", "хорошо", "конечно", "согл", "готов", "подтвер",
+    "продолж", "начн", "сейчас", "верно", "верн", "yep", "sure", "agree",
+)
+_BTN_NEGATIVE_PREFIXES = (
+    "нет", "no", "отказ", "отмен", "стоп", "не сейчас", "позже", "потом",
+    "не готов", "не согл", "cancel", "skip",
+)
+
+
+def classify_robot_button(text: str) -> str:
+    """Грубо классифицировать кнопку робота-рекрутера: 'affirm' | 'negative' | 'neutral'."""
+    t = (text or "").strip().lower()
+    if not t:
+        return "neutral"
+    # Сначала отрицания — чтобы «Не согласен» не съел префикс «не»→neutral
+    for pref in _BTN_NEGATIVE_PREFIXES:
+        if t.startswith(pref):
+            return "negative"
+    for pref in _BTN_AFFIRM_PREFIXES:
+        if t.startswith(pref):
+            return "affirm"
+    return "neutral"
+
+
+def pick_robot_button(buttons: list, conversation: list, employer_name: str = "", account_key: str = "") -> tuple:
+    """Выбрать какую кнопку робота-рекрутера нажать.
+
+    Возвращает (index, text, source) где source ∈ {'heuristic_yes', 'llm', 'fallback'}.
+    Стратегия:
+      1) Если ровно 2 кнопки и одна явно affirm, другая — negative → берём affirm (без LLM).
+      2) Если 3+ кнопок ИЛИ обе affirm/обе neutral → спрашиваем LLM с явной задачей выбрать индекс.
+      3) Если LLM пуст/недоступен — берём первую affirm-кнопку, иначе первую вообще.
+    """
+    texts = [str(b.get("text", "")).strip() for b in buttons if isinstance(b, dict)]
+    if not texts:
+        return -1, "", "fallback"
+    kinds = [classify_robot_button(t) for t in texts]
+
+    # 1) yes/no — выбираем «yes» без LLM
+    if len(texts) == 2:
+        affirms = [i for i, k in enumerate(kinds) if k == "affirm"]
+        negatives = [i for i, k in enumerate(kinds) if k == "negative"]
+        if len(affirms) == 1 and len(negatives) == 1:
+            i = affirms[0]
+            return i, texts[i], "heuristic_yes"
+
+    # 2) Спрашиваем LLM
+    idx = _llm_pick_button_index(conversation, texts, employer_name, account_key)
+    if 0 <= idx < len(texts):
+        return idx, texts[idx], "llm"
+
+    # 3) Fallback — первая affirm, иначе первая
+    for i, k in enumerate(kinds):
+        if k == "affirm":
+            return i, texts[i], "fallback"
+    return 0, texts[0], "fallback"
+
+
+def _llm_pick_button_index(conversation: list, buttons: list, employer_name: str = "", account_key: str = "") -> int:
+    """Спросить LLM какую кнопку выбрать. Возвращает индекс или -1 при ошибке."""
+    profiles = [p for p in (CONFIG.llm_profiles or []) if p.get("enabled", True) and p.get("api_key")]
+    if not profiles and CONFIG.llm_api_key:
+        profiles = [{"api_key": CONFIG.llm_api_key, "base_url": CONFIG.llm_base_url, "model": CONFIG.llm_model}]
+    if not profiles or not _openai_available:
+        return -1
+
+    forms = applicant_gender_forms()
+    system = (
+        "Ты помогаешь соискателю выбрать ответ на вопрос робота-рекрутера HH.ru. "
+        "Робот предлагает кнопки — нужно выбрать одну. "
+        f"Соискатель {forms.get('responded','откликнулся(ась)')} на вакансию и заинтересован(а) в работе — "
+        "обычно выбирай вариант, который продолжает процесс отклика (например «Да», «Согласен», «Начнем»). "
+        "Отклоняй только если кнопка явно вредит соискателю (отказ от вакансии, удаление отклика). "
+        "Отвечай ТОЛЬКО JSON: {\"index\": N, \"reason\": \"короткое объяснение\"}. "
+        "index — номер кнопки от 0 до N-1."
+    )
+    btn_list = "\n".join(f"  [{i}] {t}" for i, t in enumerate(buttons))
+    user = (
+        f"Работодатель: {employer_name[:120]}\n\n"
+        f"Последние сообщения переписки:\n"
+    )
+    for msg in conversation[-6:]:
+        role = "HR/робот" if msg.get("sender") == "employer" else "Я"
+        text = (msg.get("text") or "")[:600]
+        user += f"  {role}: {text}\n"
+    user += f"\nДоступные кнопки:\n{btn_list}\n\nВыбери индекс."
+
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    for profile in profiles[:2]:
+        pname = profile.get("name") or profile.get("model") or "?"
+        model = profile.get("model") or "gpt-4o-mini"
+        try:
+            client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+            resp = client.chat.completions.create(
+                model=model, messages=messages, max_tokens=80, temperature=0.0,
+                response_format={"type": "json_object"} if "openai" in (profile.get("base_url") or "") else None,
+            )
+            if not getattr(resp, "choices", None):
+                continue
+            raw = (resp.choices[0].message.content or "").strip()
+            parsed = _extract_json(raw) or {}
+            idx = parsed.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(buttons):
+                log_debug(f"pick_robot_button: LLM ({pname}) выбрал [{idx}] '{buttons[idx]}' — {parsed.get('reason','')[:80]}")
+                _track_usage(account_key, "button_pick")
+                return idx
+        except TypeError:
+            # provider doesn't support response_format → retry without it
+            try:
+                client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=80, temperature=0.0,
+                )
+                raw = (resp.choices[0].message.content or "").strip()
+                parsed = _extract_json(raw) or {}
+                idx = parsed.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(buttons):
+                    _track_usage(account_key, "button_pick")
+                    return idx
+            except Exception as e:
+                log_debug(f"pick_robot_button retry {pname}: {e}")
+                continue
+        except Exception as e:
+            log_debug(f"pick_robot_button {pname}: {e}")
+            continue
+    return -1
+
+
 def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
     """Generate a chat reply through local OpenClaw/Codex CLI.
 
