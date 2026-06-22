@@ -1057,6 +1057,7 @@ class BotManager:
                 if str(k).strip()
             ]
 
+            discard_skipped = 0
             for vid in unique_vacancies:
                 meta = state.vacancy_meta.get(vid, {})
                 title = (meta.get("title") or "").lower()
@@ -1067,6 +1068,12 @@ class BotManager:
                     if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
                         title_skipped += 1
                         continue
+                # HH сам метит вакансии меткой DISCARD когда нас уже отвергли —
+                # повторный отклик чаще всего бесполезен, экономим лимит/токены.
+                hh_labels = meta.get("hh_labels") or []
+                if "DISCARD" in hh_labels:
+                    discard_skipped += 1
+                    continue
                 if is_applied(acc["name"], vid):
                     already_count += 1
                     state.already_applied += 1
@@ -1099,9 +1106,10 @@ class BotManager:
             sal_msg = f", \U0001f4b0 зарплата {salary_skipped}" if CONFIG.min_salary > 0 else ""
             sched_msg = f", \U0001f3e2 формат {schedule_skipped}" if CONFIG.allowed_schedules else ""
             title_msg = f", \U0001f3f7️ заголовок {title_skipped}" if title_skipped else ""
+            discard_msg = f", \U0001f6ab отказали {discard_skipped}" if discard_skipped else ""
             self._add_log(
                 state.short, state.color,
-                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}{title_msg}, \U0001f195 новые {len(filtered)}",
+                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}{title_msg}{discard_msg}, \U0001f195 новые {len(filtered)}",
                 "info",
             )
 

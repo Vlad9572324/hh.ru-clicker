@@ -223,6 +223,16 @@ def parse_apply_strategy_meta(html: str) -> dict:
             return out
         vsr = ssr.get("vacancySearchResult") or ssr.get("relatedVacancies") or {}
         vacs = vsr.get("vacancies") or []
+        labels_map = ssr.get("userLabelsForVacancies") or {}
+
+        def _lab_for(vid_str):
+            labs = labels_map.get(vid_str)
+            if labs is None and vid_str.isdigit():
+                labs = labels_map.get(int(vid_str))
+            if not isinstance(labs, list):
+                return []
+            return [str(l) for l in labs if isinstance(l, str)]
+
         for v in vacs:
             if not isinstance(v, dict):
                 continue
@@ -237,7 +247,17 @@ def parse_apply_strategy_meta(html: str) -> dict:
                 "chat_write_possibility": v.get("chatWritePossibility", ""),
                 "response_letter_required": v.get("@responseLetterRequired"),
                 "hr_online": em.get("latestActivity", ""),
+                "hh_labels": _lab_for(vid),
             }
+        # Также для вакансий с labels, но без полной meta (не в vacancies[]) —
+        # хотя бы labels сохраним: DISCARD-фильтр пригодится по всем известным id.
+        for vid_raw, labs in labels_map.items():
+            vid_s = str(vid_raw)
+            if vid_s in out:
+                continue
+            normalized = [str(l) for l in (labs or []) if isinstance(l, str)]
+            if normalized:
+                out[vid_s] = {"hh_labels": normalized}
     except Exception as e:
         log_debug(f"parse_apply_strategy_meta error: {e}")
     return out
