@@ -1751,6 +1751,11 @@ class BotManager:
                 employer = thread.get("employer_name", neg_id)[:35]
                 employer_msg = thread.get("last_employer_msg", "")
                 vacancy_title = thread.get("vacancy_title", "")
+                # vacancy_id из resources чата — нужен фронту чтобы дёрнуть рейтинг
+                # работодателя по цепочке vid→employerId→rating (без extra fetch
+                # здесь — фронт делает lazy lookup только когда строка видна).
+                _vac_resources = (item.get("resources") or {}).get("VACANCY") or []
+                vacancy_id = str(_vac_resources[0]) if _vac_resources else ""
 
                 if not thread.get("needs_reply") and not thread.get("chat_locked"):
                     raw_item = items_by_id.get(neg_id, {})
@@ -1773,7 +1778,7 @@ class BotManager:
                     continue
 
                 upsert_interview(neg_id, acc=state.short, acc_color=state.color,
-                                 employer=employer, vacancy_title=vacancy_title,
+                                 employer=employer, vacancy_title=vacancy_title, vacancy_id=vacancy_id,
                                  employer_last_msg=employer_msg if employer_msg else None,
                                  needs_reply=bool(thread.get("needs_reply")))
 
@@ -1858,7 +1863,7 @@ class BotManager:
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] \U0001f916 Робот → '{btn_text}' ({_btn_source})", "info", neg_id=neg_id)
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
-                                     employer=employer_short, vacancy_title=vacancy_title,
+                                     employer=employer_short, vacancy_title=vacancy_title, vacancy_id=vacancy_id,
                                      chat_status="robot")
                     ok = send_negotiation_message(state.acc, neg_id, btn_text)
                     if ok and ok != "chat_not_found":
@@ -1868,7 +1873,7 @@ class BotManager:
                         self.llm_log.appendleft({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer_short, "vacancy_title": vacancy_title,
-                            "neg_id": neg_id, "employer_msg": employer_msg[:50],
+                            "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg[:50],
                             "bot_reply": f"\U0001f916 Кнопка: {btn_text}", "sent": True,
                         })
                         self._persist_llm_log({
@@ -1957,7 +1962,7 @@ class BotManager:
                         state.llm_replied_msgs[key] = None
                         state._llm_no_chat.add(neg_id)
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
-                                         employer=employer, vacancy_title=vacancy_title,
+                                         employer=employer, vacancy_title=vacancy_title, vacancy_id=vacancy_id,
                                          chat_not_found=True)
                         self._add_log(state.short, state.color,
                             f"\U0001f916 [{employer_short}] \U0001f512 переписка закрыта (409), пропуск", "warning", neg_id=neg_id)
@@ -1976,7 +1981,7 @@ class BotManager:
                         self.llm_log.appendleft({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer, "vacancy_title": vacancy_title,
-                            "neg_id": neg_id, "employer_msg": employer_msg,
+                            "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
                             "bot_reply": reply_text, "sent": True,
                         })
                         self._persist_llm_log({
@@ -2001,7 +2006,7 @@ class BotManager:
                         self.llm_log.appendleft({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer, "vacancy_title": vacancy_title,
-                            "neg_id": neg_id, "employer_msg": employer_msg,
+                            "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
                             "bot_reply": reply_text, "sent": False,
                         })
                         self._persist_llm_log({
@@ -2029,7 +2034,7 @@ class BotManager:
                     self.llm_log.appendleft({
                         "time": ts, "acc": state.short, "color": state.color,
                         "employer": employer, "vacancy_title": vacancy_title,
-                        "neg_id": neg_id, "employer_msg": employer_msg,
+                        "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
                         "bot_reply": reply_text, "sent": False,
                     })
                     self._persist_llm_log({

@@ -26,7 +26,7 @@ from app.hh_resume import (
     _resume_cache,
     fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
 )
-from app.hh_negotiations import auto_decline_discards, fetch_employer_rating
+from app.hh_negotiations import auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy
 from app.state import AccountState
 from app.config import CONFIG
 from app.instances import bot
@@ -146,6 +146,20 @@ async def api_account_diagnostics(idx: int):
     data["ok"] = True
     data["available_statuses"] = _JOB_SEARCH_STATUSES
     return data
+
+
+@router.get("/api/account/{idx}/rating_by_vacancy/{vacancy_id}")
+async def api_rating_by_vacancy(idx: int, vacancy_id: int):
+    """Rating через цепочку vacancy_id → employer_id → rating.
+    Использует кэш на каждом шаге (7 дней vac→emp, 24ч emp→rating)."""
+    acc = bot._get_apply_acc(idx)
+    if not acc:
+        return {"ok": False, "error": "Аккаунт не найден"}
+    import asyncio as _aio
+    rating = await _aio.get_event_loop().run_in_executor(None, fetch_rating_by_vacancy, acc, vacancy_id)
+    if rating is None:
+        return {"ok": False, "error": "Рейтинг недоступен"}
+    return {"ok": True, **rating}
 
 
 @router.get("/api/account/{idx}/employer_rating/{employer_id}")

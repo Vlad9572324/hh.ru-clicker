@@ -206,7 +206,8 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
                      employer_last_msg: str = None, needs_reply: bool = None,
                      llm_reply: str = None, llm_sent: bool = None,
                      chat_not_found: bool = None, chat_status: str = None,
-                     replied_msg_id: str = None):
+                     replied_msg_id: str = None,
+                     vacancy_id: str = ""):
     """Создать или обновить запись об интервью-переговоре."""
     _load_cache()
     now = datetime.now().isoformat(timespec="seconds")
@@ -222,6 +223,8 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
             record["employer"] = employer
         if vacancy_title:
             record["vacancy_title"] = vacancy_title
+        if vacancy_id:
+            record["vacancy_id"] = str(vacancy_id)
         if "first_seen" not in record:
             record["first_seen"] = now
         record["last_seen"] = now

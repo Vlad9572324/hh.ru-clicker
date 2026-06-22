@@ -410,3 +410,71 @@ def fetch_employer_rating(acc: dict, employer_id) -> dict | None:
     with _EMPLOYER_RATING_LOCK:
         _EMPLOYER_RATING_CACHE[eid] = (now, compact)
     return compact
+
+
+# Кэш vacancy_id → employer_id. Меняется крайне редко (когда вакансия
+# переезжает между юр.лицами), TTL 7 дней нормально.
+_VACANCY_EMPLOYER_CACHE: dict = {}
+_VACANCY_EMPLOYER_TTL = 7 * 24 * 3600
+_VACANCY_EMPLOYER_LOCK = _t_emp.Lock()
+
+
+def fetch_employer_id_for_vacancy(acc: dict, vacancy_id) -> int | None:
+    """Достать employerId по vacancy_id через SSR /vacancy/{vid} → vacancyView.employer.id.
+    Кэш на 7 дней. None если страница недоступна или вакансия снята.
+    """
+    try:
+        vid = int(str(vacancy_id).strip())
+    except (ValueError, TypeError):
+        return None
+    if vid <= 0:
+        return None
+    now = _time_emp.time()
+    with _VACANCY_EMPLOYER_LOCK:
+        hit = _VACANCY_EMPLOYER_CACHE.get(vid)
+        if hit:
+            cached_at, eid = hit
+            if now - cached_at < _VACANCY_EMPLOYER_TTL:
+                return eid
+
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"{hh_base()}/vacancy/{vid}",
+            cookies=acc.get("cookies") or {},
+            headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
+            timeout=12, allow_redirects=True,
+        )
+        if r.status_code != 200:
+            with _VACANCY_EMPLOYER_LOCK:
+                _VACANCY_EMPLOYER_CACHE[vid] = (now, None)
+            return None
+        from app.hh_resume import parse_hh_lux_ssr
+        ssr = parse_hh_lux_ssr(r.text)
+        vv = ssr.get("vacancyView") or {}
+        # HH мигрировали с vacancyView.employer на vacancyView.company —
+        # держим оба варианта на случай отката или регионального различия.
+        co = vv.get("company") or vv.get("employer") or {}
+        eid = co.get("id") or co.get("mainEmployerId")
+        if isinstance(eid, str):
+            try: eid = int(eid)
+            except (ValueError, TypeError): eid = None
+        with _VACANCY_EMPLOYER_LOCK:
+            _VACANCY_EMPLOYER_CACHE[vid] = (now, eid)
+        return eid
+    except Exception as e:
+        log_debug(f"fetch_employer_id_for_vacancy({vid}): {e}")
+        with _VACANCY_EMPLOYER_LOCK:
+            _VACANCY_EMPLOYER_CACHE[vid] = (now, None)
+        return None
+
+
+def fetch_rating_by_vacancy(acc: dict, vacancy_id) -> dict | None:
+    """Цепочка vid → employerId → rating. Возвращает rating-dict (см.
+    fetch_employer_rating) или None.
+    """
+    eid = fetch_employer_id_for_vacancy(acc, vacancy_id)
+    if not eid:
+        return None
+    return fetch_employer_rating(acc, eid)

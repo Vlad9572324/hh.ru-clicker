@@ -1499,6 +1499,62 @@ function oauthToggleAccount(idx, btn) {
 // ── LLM tab: interviews from DB ───────────────────────────────
 let _llmRowsCache = [];
 
+// Кэш рейтингов работодателей: vacancy_id → {total, recommend_pct, name} | null.
+// Бэкенд тоже кэширует 24ч, но клиентский кэш экономит сетевой round-trip
+// при перерисовках таблицы (фильтр/сорт/поиск дёргают render).
+const _EmpRatingCache = {};
+let _enrichInflight = new Set();
+
+async function _enrichEmpRatings() {
+  // Берём первый аккаунт из snapshot — для backend cookies'ов нужен валидный acc idx.
+  const accs = (State.lastSnapshot?.accounts || []).filter(a => !a.cookies_expired);
+  if (!accs.length) return;
+  const accIdx = accs[0].idx;
+  const slots = document.querySelectorAll('.emp-rating-slot');
+  // Уникальные vacancy_id в порядке появления (видимые ряды грузятся первыми).
+  const uniqVids = [...new Set([...slots].map(s => s.dataset.vid).filter(Boolean))];
+  for (const vid of uniqVids) {
+    // Если уже знаем — рендерим из кэша.
+    if (vid in _EmpRatingCache) {
+      _renderEmpRatingSlots(vid, _EmpRatingCache[vid]);
+      continue;
+    }
+    if (_enrichInflight.has(vid)) continue;
+    _enrichInflight.add(vid);
+    (async () => {
+      try {
+        const r = await fetch(`/api/account/${accIdx}/rating_by_vacancy/${encodeURIComponent(vid)}`);
+        const d = r.ok ? await r.json() : null;
+        const cached = (d && d.ok) ? {
+          total: d.total, recommend_pct: d.recommend_pct, name: d.name,
+          ratings: d.ratings,
+        } : null;
+        _EmpRatingCache[vid] = cached;
+        _renderEmpRatingSlots(vid, cached);
+      } catch(e) {
+        _EmpRatingCache[vid] = null;
+      } finally {
+        _enrichInflight.delete(vid);
+      }
+    })();
+  }
+}
+
+function _renderEmpRatingSlots(vid, data) {
+  document.querySelectorAll(`.emp-rating-slot[data-vid="${CSS.escape(vid)}"]`).forEach(slot => {
+    if (!data || !data.total) { slot.textContent = ''; return; }
+    const total = Number(data.total).toFixed(1);
+    const color = data.total >= 4.3 ? 'var(--green)'
+                : data.total >= 3.8 ? 'var(--yellow)'
+                : 'var(--red)';
+    const recommend = data.recommend_pct != null ? ` ${data.recommend_pct}%` : '';
+    // Tooltip с разбивкой
+    const r = data.ratings || {};
+    const tooltip = `Workplace ${r.workplace||'?'} · Team ${r.team||'?'} · Management ${r.management||'?'} · Career ${r.career||'?'} · Rest ${r.rest||'?'} · Salary ${r.salary||'?'}`;
+    slot.innerHTML = `<span style="color:${color};font-weight:600" title="${esc(tooltip)}">⭐${total}${recommend}</span>`;
+  });
+}
+
 async function llmInterviewsLoad() {
   if (_llmLoading) return;   // уже идёт запрос — не запускаем параллельный
   _llmLoading = true;
@@ -1606,10 +1662,14 @@ function llmInterviewsRender() {
     const negLink = r.neg_id
       ? `<a href="https://hh.ru/chat/${encodeURIComponent(r.neg_id)}" target="_blank" style="font-size:10px;color:var(--cyan)">🔗</a>` : '';
     const dateStr = (r.last_seen || r.first_seen || '').replace('T', ' ').slice(0, 16);
+    // Slot для async-чипа рейтинга — заполнится через _enrichRatings ниже
+    const ratingSlot = r.vacancy_id
+      ? `<span class="emp-rating-slot" data-vid="${esc(r.vacancy_id)}" style="font-size:10px;color:var(--dim);margin-left:4px"></span>`
+      : '';
     return `<tr style="${rowBg(r)}">
       <td style="font-size:11px;color:var(--dim);white-space:nowrap">${dateStr}</td>
       <td style="font-size:11px;color:${colorVar(r.acc_color||'')}">${esc(r.acc||'')}</td>
-      <td style="font-size:11px">${esc(r.employer||'')} ${negLink}</td>
+      <td style="font-size:11px">${esc(r.employer||'')} ${negLink}${ratingSlot}</td>
       <td style="font-size:11px;color:var(--dim)">${esc(r.vacancy_title||'')}</td>
       <td class="llm-msg-cell">${empMsg}</td>
       <td class="llm-reply-cell">${botReply}</td>
@@ -1617,6 +1677,9 @@ function llmInterviewsRender() {
       <td>${chatBadge(r.chat_status || '')}</td>
     </tr>`;
   }).join('');
+  // Подгрузим рейтинги для всех уникальных vacancy_id в таблице. Делается
+  // лениво и in-the-background, не блокирует первый рендер.
+  _enrichEmpRatings();
 
   // Populate account filter from loaded data
   const accSel = document.getElementById('llm-log-acc-filter');
