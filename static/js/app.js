@@ -3446,12 +3446,26 @@ function renderRecentResponses(snap) {
   State.lastResponsesHash = hash;
   list.innerHTML = snap.recent_responses.slice(0, 50).map(r => {
     const title = r.title ? r.title.substring(0, 35) + (r.title.length > 35 ? '…' : '') : `ID:${r.id}`;
+    // HR online / chat status chips — данные пришли с бэка в vacancy_meta.
+    const chips = [];
+    if (r.hr_online === 'online') {
+      chips.push('<span style="color:var(--green);font-size:10px" title="HR онлайн прямо сейчас">🟢</span>');
+    } else if (r.hr_online === 'offline') {
+      chips.push('<span style="color:var(--dim);font-size:10px" title="HR offline">⚫</span>');
+    }
+    if ((r.chat_write || '').toUpperCase() === 'DISABLED') {
+      chips.push('<span style="color:var(--red);font-size:10px" title="Чат закрыт работодателем — нельзя писать">🚫</span>');
+    }
+    if (r.accept_auto === false) {
+      chips.push('<span style="color:var(--yellow);font-size:10px" title="Требует cover letter или опросник">📝</span>');
+    }
+    const chipsHtml = chips.length ? ` ${chips.join(' ')}` : '';
     return `
       <div class="resp-item">
         <span class="resp-time">${r.time}</span>
         <span>${r.icon}</span>
         <div>
-          <div class="resp-title">${esc(title)}</div>
+          <div class="resp-title">${esc(title)}${chipsHtml}</div>
           ${r.company ? `<div class="resp-company">@ ${esc(r.company)}</div>` : ''}
         </div>
       </div>

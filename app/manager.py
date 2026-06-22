@@ -495,6 +495,9 @@ class BotManager:
             "limit": "\U0001f6ab",
             "error": "❌",
         }
+        # HR online/offline + chat status вытаскиваем из vacancy_meta —
+        # фронт показывает их в карточке отклика без extra-fetch'ей.
+        _vm = state.vacancy_meta.get(vid, {}) if hasattr(state, "vacancy_meta") else {}
         self.recent_responses.appendleft({
             "time": datetime.now().strftime("%H:%M:%S"),
             "acc": state.short,
@@ -505,6 +508,9 @@ class BotManager:
             "salary": salary,
             "result": result,
             "icon": result_icons.get(result, "❓"),
+            "hr_online": _vm.get("hr_online", ""),
+            "chat_write": _vm.get("chat_write_possibility", ""),
+            "accept_auto": _vm.get("accept_auto_response"),
         })
 
     def get_state_snapshot(self) -> dict:
