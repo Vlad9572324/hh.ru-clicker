@@ -3723,11 +3723,65 @@ function appliedFillTable(items) {
     return `<tr class="${hasTitle ? '' : 'row-no-title'}">
       <td class="c-dim" style="white-space:nowrap">${dt}</td>
       <td style="white-space:nowrap">${esc(acc)}</td>
-      <td>${titleCell}</td>
+      <td>${titleCell} <button class="btn-sm" style="padding:0 6px;font-size:11px" title="Похожие вакансии (api.hh.ru)" onclick="showSimilarVacancies('${esc(item.vacancy_id)}',this)">🔁</button></td>
       <td>${esc(item.company || '')}</td>
       <td class="c-green" style="white-space:nowrap">${sal}</td>
     </tr>`;
   }).join('');
+}
+
+// Similar vacancies expand: api.hh.ru /vacancies/{vid}/similar_vacancies
+// public endpoint, 36k результатов на один seed. Backend кэширует 6ч.
+const _SimilarCache = {};
+async function showSimilarVacancies(vid, btn) {
+  if (!vid || !btn) return;
+  const tr = btn.closest('tr');
+  if (!tr) return;
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('similar-row')) {
+    existing.remove();
+    return;
+  }
+  const newTr = document.createElement('tr');
+  newTr.className = 'similar-row';
+  newTr.innerHTML = `<td colspan="5" style="padding:8px 12px;background:rgba(0,200,255,0.03)"><div style="color:var(--dim);font-size:12px">⏳ Загружаю похожие…</div></td>`;
+  tr.parentNode.insertBefore(newTr, tr.nextSibling);
+  let data = _SimilarCache[vid];
+  if (!data) {
+    try {
+      const r = await fetch(`/api/vacancy/${encodeURIComponent(vid)}/similar?per_page=10`);
+      data = await r.json();
+      _SimilarCache[vid] = data;
+    } catch(e) {
+      newTr.querySelector('div').textContent = '❌ Ошибка загрузки';
+      return;
+    }
+  }
+  const items = data.items || [];
+  if (!items.length) {
+    newTr.querySelector('div').textContent = '— похожих не найдено';
+    return;
+  }
+  const rowsHtml = items.map(v => {
+    const sal = v.salary_from || v.salary_to
+      ? `${v.salary_from ? v.salary_from.toLocaleString('ru') : '?'} — ${v.salary_to ? v.salary_to.toLocaleString('ru') : '?'} ${v.salary_currency||''}`
+      : '<span style="color:var(--dim)">—</span>';
+    const chips = [];
+    if (v.has_test) chips.push('<span style="color:var(--yellow);font-size:10px" title="С тестом">🧪</span>');
+    if (v.response_letter_required) chips.push('<span style="color:var(--yellow);font-size:10px" title="Нужно письмо">📝</span>');
+    if (v.accept_incomplete_resumes) chips.push('<span style="color:var(--green);font-size:10px" title="Принимают неполные резюме">✅</span>');
+    if (v.internship) chips.push('<span style="color:var(--dim);font-size:10px" title="Стажировка">🎓</span>');
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:3px 6px;font-size:11px"><a href="${safeHref(v.alternate_url)}" target="_blank" rel="noopener">${esc(v.name||'?').slice(0,55)}</a> ${chips.join(' ')}</td>
+      <td style="padding:3px 6px;font-size:11px">${esc(v.employer_name||'').slice(0,25)}</td>
+      <td style="padding:3px 6px;font-size:10px;color:var(--dim)">${esc(v.area_name)} · ${esc(v.schedule)} · ${esc(v.experience)}</td>
+      <td style="padding:3px 6px;font-size:11px;color:var(--green);white-space:nowrap">${sal}</td>
+    </tr>`;
+  }).join('');
+  newTr.querySelector('td').innerHTML = `
+    <div style="font-size:11px;color:var(--dim);margin-bottom:4px">HH знает ${(data.found||0).toLocaleString('ru')} похожих на эту вакансию · показано ${items.length}</div>
+    <table style="width:100%"><tbody>${rowsHtml}</tbody></table>
+  `;
 }
 
 // ── Vacancy DB tab ───────────────────────────────────────────────

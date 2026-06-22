@@ -610,3 +610,84 @@ def fetch_vacancy_owner_hr_hhid(acc: dict, vacancy_id) -> int | None:
     except Exception as e:
         log_debug(f"fetch_vacancy_owner_hr_hhid({vid}): {e}")
         return None
+
+
+# Похожие вакансии через официальный api.hh.ru — это паблик endpoint,
+# OAuth не нужен. Дополнительный пул вакансий: HH сам помечает «как эта»
+# до 36k вакансий per seed. Кэш per-vid 6ч (вакансии добавляются медленно).
+_SIMILAR_CACHE: dict = {}
+_SIMILAR_LOCK = _t_emp.Lock()
+_SIMILAR_TTL = 6 * 3600
+
+
+def fetch_similar_vacancies(vacancy_id, page: int = 0, per_page: int = 20) -> dict:
+    """GET https://api.hh.ru/vacancies/{vid}/similar_vacancies.
+
+    Без OAuth. User-Agent с email обязателен — иначе blacklisted.
+    Возвращает {found, pages, items: [...]} с compact-проекцией.
+    Кэш по (vid, page, per_page) на 6ч.
+    """
+    try:
+        vid = int(str(vacancy_id).strip())
+    except (ValueError, TypeError):
+        return {"found": 0, "items": []}
+    if vid <= 0 or per_page < 1 or per_page > 100 or page < 0 or page > 399:
+        return {"found": 0, "items": []}
+    key = (vid, page, per_page)
+    now = _time_emp.time()
+    with _SIMILAR_LOCK:
+        hit = _SIMILAR_CACHE.get(key)
+        if hit and now - hit[0] < _SIMILAR_TTL:
+            return hit[1]
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"https://api.hh.ru/vacancies/{vid}/similar_vacancies",
+            params={"page": page, "per_page": per_page},
+            headers={
+                "User-Agent": "hh-clicker/1.0 (lexuskrefft@mail.com)",
+                "Accept": "application/json",
+            },
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return {"found": 0, "items": []}
+        d = r.json()
+    except Exception as e:
+        log_debug(f"fetch_similar_vacancies({vid}): {e}")
+        return {"found": 0, "items": []}
+    # Compact-проекция — UI не нужны все 47 полей
+    items = []
+    for v in (d.get("items") or [])[:per_page]:
+        if not isinstance(v, dict):
+            continue
+        sal = v.get("salary") or v.get("salary_range") or {}
+        items.append({
+            "id": v.get("id"),
+            "name": v.get("name", ""),
+            "employer_id": (v.get("employer") or {}).get("id"),
+            "employer_name": (v.get("employer") or {}).get("name", ""),
+            "area_name": (v.get("area") or {}).get("name", ""),
+            "schedule": (v.get("schedule") or {}).get("name", ""),
+            "experience": (v.get("experience") or {}).get("name", ""),
+            "salary_from": sal.get("from"),
+            "salary_to": sal.get("to"),
+            "salary_currency": sal.get("currency"),
+            "has_test": bool(v.get("has_test")),
+            "response_letter_required": bool(v.get("response_letter_required")),
+            "accept_incomplete_resumes": bool(v.get("accept_incomplete_resumes")),
+            "internship": bool(v.get("internship")),
+            "published_at": v.get("published_at", ""),
+            "snippet_requirement": (v.get("snippet") or {}).get("requirement", "") or "",
+            "alternate_url": v.get("alternate_url", ""),
+        })
+    out = {
+        "found": d.get("found", 0),
+        "pages": d.get("pages", 0),
+        "page": page,
+        "per_page": per_page,
+        "items": items,
+    }
+    with _SIMILAR_LOCK:
+        _SIMILAR_CACHE[key] = (now, out)
+    return out

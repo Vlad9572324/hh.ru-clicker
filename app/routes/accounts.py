@@ -30,6 +30,7 @@ from app.hh_resume import (
 from app.hh_negotiations import (
     auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy,
     fetch_employer_id_for_vacancy, fetch_negotiations_metadata, fetch_vacancy_owner_hr_hhid,
+    fetch_similar_vacancies,
 )
 from app.state import AccountState
 from app.config import CONFIG
@@ -150,6 +151,18 @@ async def api_account_diagnostics(idx: int):
     data["ok"] = True
     data["available_statuses"] = _JOB_SEARCH_STATUSES
     return data
+
+
+@router.get("/api/vacancy/{vacancy_id}/similar")
+async def api_similar_vacancies(vacancy_id: int, page: int = 0, per_page: int = 20):
+    """Похожие вакансии через официальный api.hh.ru без OAuth.
+    HH знает что 134438591 → похоже на 36686 других. Дополнительный пул
+    для бота + UI «откликнуться к похожим». Кэш 6ч."""
+    import asyncio as _aio
+    out = await _aio.get_event_loop().run_in_executor(
+        None, fetch_similar_vacancies, vacancy_id, page, per_page
+    )
+    return out
 
 
 @router.get("/api/account/{idx}/rating_by_vacancy/{vacancy_id}")
