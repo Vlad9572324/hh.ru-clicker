@@ -311,9 +311,36 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
 
 
 def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = "") -> bool:
-    """Send a message in an HH negotiation thread via chatik.hh.ru/chatik/api/send."""
+    """Send a message in an HH negotiation thread.
+
+    Если CONFIG.chat_use_oauth — сначала пробуем ОФИЦИАЛЬНЫЙ путь
+    `POST api.hh.ru/common/chats/{chat_id}/messages` через OAuth Bearer.
+    Это ToS-compliant и помечает сообщение `is_automated: true`.
+    На любую ошибку OAuth (нет токена/403/network) — fallback на
+    reverse-engineered chatik.hh.ru/chatik/api/send (старый working путь).
+    """
     import uuid as _uuid
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    # OAuth-first path
+    try:
+        from app.config import CONFIG as _CFG
+        if getattr(_CFG, "chat_use_oauth", False):
+            try:
+                from app.oauth import send_chat_message_oauth as _oauth_send
+                _r = _oauth_send(acc, neg_id, text, is_automated=True)
+                if _r is True:
+                    return True
+                if _r == "chat_not_found":
+                    return "chat_not_found"
+                if _r == "no_token":
+                    log_debug(f"OAuth chat send neg={neg_id}: нет токена, fallback на chatik")
+                else:
+                    log_debug(f"OAuth chat send neg={neg_id}: result={_r!r}, fallback на chatik")
+            except Exception as _e:
+                log_debug(f"OAuth chat send neg={neg_id} exception: {_e}, fallback на chatik")
+    except Exception:
+        pass
 
     # Ensure we have chatik auth cookies (hhuid/crypted_hhuid)
     _ensure_chatik_cookies(acc)

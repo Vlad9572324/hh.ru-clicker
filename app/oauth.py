@@ -466,3 +466,70 @@ def _oauth_touch_resume(acc: dict) -> tuple:
             return False, f"HTTP {r.status_code}: {r.text[:100]}"
     except Exception as e:
         return False, f"Ошибка: {str(e)[:50]}"
+
+
+def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = True):
+    """Отправить сообщение в чат через ОФИЦИАЛЬНЫЙ HH OAuth API.
+
+    POST https://api.hh.ru/common/chats/{chat_id}/messages с Bearer token.
+    Возвращает True (ok), "chat_not_found", "no_token", или False (другая ошибка).
+
+    Отличия от reverse-engineered chatik.hh.ru/api/send:
+    - Официальный путь, не нарушает HH ToS
+    - is_automated: true честно помечает что сообщение от AI (требуется
+      по правилам HH для AI-generated content)
+    - Используется тот же chat_id что и chatik (числовой ID)
+    """
+    import uuid as _uuid
+    token = _obtain_oauth_token(acc)
+    if not token:
+        return "no_token"
+    try:
+        cid = int(str(chat_id).strip())
+    except (ValueError, TypeError):
+        return False
+    ua = "hh-clicker/1.0 (lexuskrefft@mail.com)"
+    payload = {
+        "text": text,
+        "idempotency_key": str(_uuid.uuid4()),
+        "is_automated": bool(is_automated),
+    }
+    try:
+        import requests as _rq
+        r = _rq.post(
+            f"https://api.hh.ru/common/chats/{cid}/messages",
+            json=payload,
+            headers={
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=15,
+        )
+        log_debug(f"OAuth chat send chat_id={cid}: HTTP {r.status_code} | {r.text[:300]}")
+        if r.status_code in (200, 201, 204):
+            return True
+        if r.status_code == 404:
+            return "chat_not_found"
+        if r.status_code == 403:
+            # OAuth token может протухнуть. Invalidate чтобы _obtain_oauth_token
+            # сделал refresh на следующем вызове.
+            resume_hash = acc.get("resume_hash", "")
+            if resume_hash:
+                invalidate_oauth_token(resume_hash, acc)
+            return False
+        if r.status_code == 409:
+            try:
+                body = r.json()
+            except Exception:
+                body = {}
+            errs = body.get("errors") or []
+            joined = " ".join(str(e.get("type",""))+" "+str(e.get("value","")) for e in errs).lower()
+            if any(m in joined for m in ("not_found","not_exist","archived","closed","chat_not_found")):
+                return "chat_not_found"
+            return False
+        return False
+    except Exception as e:
+        log_debug(f"OAuth chat send chat_id={cid} error: {e}")
+        return False

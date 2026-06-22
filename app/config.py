@@ -86,6 +86,8 @@ class Config:
     llm_fill_questionnaire: bool = False  # Использовать LLM для заполнения опросников
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_ws_push_enabled: bool = True  # Подписаться на wss://websocket.hh.ru для мгновенных ответов
+    chat_use_oauth: bool = False  # Сначала пробовать официальный OAuth-путь POST /common/chats/{id}/messages,
+                                  # fallback на reverse-engineered chatik.hh.ru/api/send. Требует у аккаунта OAuth-токен.
     llm_system_prompt: str = (
         "Ты помощник соискателя работы. Отвечай вежливо и кратко (2-4 предложения) "
         "на сообщения от HR и работодателей. Пиши от первого лица. "
@@ -192,7 +194,7 @@ _CONFIG_KEYS = [
     "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
-    "llm_ws_push_enabled",
+    "llm_ws_push_enabled", "chat_use_oauth",
 ]
 
 
