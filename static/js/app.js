@@ -1309,6 +1309,110 @@ async function llmPreviewResume(btn) {
   }
 }
 
+// ── Account diagnostics ──────────────────────────────────────
+// SSR / shards reveal: jobSearchStatus, hasPublicVisibility, accessType,
+// hasErrors per resume. Дёргаем при отрисовке карточки, кэшируем
+// чтоб не бомбить /api при каждом snapshot (raw HTML 700KB+).
+const _AccDiagCache = {}; // idx → {data, fetchedAt}
+const _ACC_DIAG_TTL_MS = 5 * 60 * 1000;
+
+async function _accDiagFetch(idx) {
+  const cached = _AccDiagCache[idx];
+  if (cached && Date.now() - cached.fetchedAt < _ACC_DIAG_TTL_MS) return cached.data;
+  try {
+    const r = await fetch(`/api/account/${idx}/diagnostics`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    _AccDiagCache[idx] = {data: d, fetchedAt: Date.now()};
+    return d;
+  } catch(e) { return null; }
+}
+
+function _accDiagBadgeApply(idx, data) {
+  const el = document.getElementById('acc-diagbadge-' + idx);
+  if (!el) return;
+  const flags = (data && data.red_flags) || [];
+  if (!flags.length) {
+    el.style.display = 'none';
+    return;
+  }
+  // Только заголовок в badge; подробности по клику
+  el.style.display = 'block';
+  const status = data.status || '?';
+  const statusLbl = data.status_label || status;
+  el.innerHTML = `⚠️ Диагностика: ${flags.length} проблем${flags.length>1?'ы':'а'} · статус: ${esc(statusLbl)} · 👁 раскрыть`;
+  el.dataset.expanded = '0';
+}
+
+async function _accDiagAutoLoad(idx) {
+  const data = await _accDiagFetch(idx);
+  if (data) _accDiagBadgeApply(idx, data);
+}
+
+async function accDiagnostics(idx, btn) {
+  if (!btn) return;
+  // Принудительно обновляем кэш
+  delete _AccDiagCache[idx];
+  const data = await _accDiagFetch(idx);
+  if (!data) { btn.textContent = '❌ Не удалось загрузить'; return; }
+  const expanded = btn.dataset.expanded === '1';
+  if (expanded) { _accDiagBadgeApply(idx, data); return; }
+  btn.dataset.expanded = '1';
+  const statusKeys = Object.keys(data.available_statuses || {});
+  const statusOptions = statusKeys.map(k => {
+    const lbl = data.available_statuses[k];
+    const sel = data.status === k ? 'selected' : '';
+    return `<option value="${k}" ${sel}>${esc(lbl)}</option>`;
+  }).join('');
+  const flagsHtml = (data.red_flags || []).map(f => `<div style="padding:2px 0">${esc(f)}</div>`).join('') || '<div style="color:var(--green)">✅ Проблем не найдено</div>';
+  const stats = data.stats || {};
+  let statsHtml = '';
+  for (const [rh, s] of Object.entries(stats.per_resume || {})) {
+    statsHtml += `<div style="font-size:10px;color:var(--dim);padding:2px 0">📊 ${esc(rh.slice(0,8))}…: показы ${s.search_shows}, просмотры ${s.views} (+${s.views_new}), инвайты ${s.invitations} (+${s.invites_new}) за ${s.period_days}д · ${esc(s.recommendation||'')}</div>`;
+  }
+  const userStats = stats.user_stats || {};
+  const newInv = userStats['new-applicant-invitations'];
+  const totalView = userStats['resumes-views'];
+  const extraStats = (newInv !== undefined || totalView !== undefined)
+    ? `<div style="font-size:10px;color:var(--dim);padding:2px 0">📬 непрочитанных инвайтов: <b>${newInv ?? '?'}</b> · всего просмотров: ${totalView ?? '?'}</div>` : '';
+  btn.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span>Сменить статус:</span>
+        <select id="acc-jobstatus-${idx}" class="apply-input" style="font-size:11px;padding:2px 6px">${statusOptions}</select>
+        <button type="button" class="btn-sm" onclick="event.stopPropagation();accSetJobStatus(${idx},this)" style="font-size:11px;padding:2px 6px">💾</button>
+      </div>
+      <div>${flagsHtml}</div>
+      ${statsHtml ? `<div>${statsHtml}</div>` : ''}
+      ${extraStats}
+      <div style="text-align:right;font-size:10px"><span style="color:var(--dim);cursor:pointer" onclick="event.stopPropagation();_accDiagBadgeApply(${idx}, _AccDiagCache[${idx}]?.data)">▲ свернуть</span></div>
+    </div>`;
+}
+
+async function accSetJobStatus(idx, btn) {
+  const sel = document.getElementById('acc-jobstatus-' + idx);
+  const status = sel?.value;
+  if (!status) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/account/${idx}/job_status`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({status}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      // Инвалидируем кэш + перезагружаем
+      delete _AccDiagCache[idx];
+      const data = await _accDiagFetch(idx);
+      if (data) _accDiagBadgeApply(idx, data);
+    } else {
+      alert('Ошибка: ' + (d.error || 'unknown'));
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── LLM per-account toggle ────────────────────────────────────
 function llmToggleAccount(idx, btn) {
   // Double-click guard: блокируем кнопку на 800мс — иначе rapid clicks
@@ -2688,6 +2792,9 @@ function renderAccounts(snap) {
       card.className = 'acc-card color-' + (acc.color || 'yellow');
       card.innerHTML = buildCardHTML(acc);
       grid.appendChild(card);
+      // Диагностику не дёргаем сразу для всех — иначе на старте N запросов
+      // подряд + 700KB SSR HTML каждый. Отложим на 2с после первого рендера.
+      setTimeout(() => _accDiagAutoLoad(acc.idx), 2000 + acc.idx * 500);
     } else {
       card.className = 'acc-card color-' + (acc.color || 'yellow');
       updateCard(card, acc);
@@ -2754,6 +2861,7 @@ function buildCardHTML(acc) {
     <div class="acc-event-log" id="acc-elog-${acc.idx}"></div>
     <div id="acc-errbadge-${acc.idx}" style="display:none;font-size:11px;padding:2px 0;margin-bottom:2px"></div>
     <div id="acc-cookiesbadge-${acc.idx}" class="cookies-expired-badge" style="display:none">${t('cookies_expired_badge')}</div>
+    <div id="acc-diagbadge-${acc.idx}" style="display:none;font-size:11px;padding:4px 6px;margin-bottom:4px;background:rgba(255,180,0,0.08);border:1px solid var(--yellow);border-radius:4px;color:var(--yellow);cursor:pointer" onclick="accDiagnostics(${acc.idx},this)" title="Кликни — раскрыть подробности"></div>
     <label class="acc-skip-tests${acc.apply_tests ? ' active' : ''}" id="acc-apply-label-${acc.idx}">
       <input type="checkbox" id="acc-apply-cb-${acc.idx}" ${acc.apply_tests ? 'checked' : ''}
         onchange="applyTestsToggle(${acc.idx}, this)">
