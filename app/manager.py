@@ -63,7 +63,7 @@ from app.oauth import (
 
 from app.hh_api import (
     get_headers, parse_ids, parse_vacancy_meta, parse_salaries,
-    parse_work_schedules, extract_search_query,
+    parse_work_schedules, extract_search_query, parse_apply_strategy_meta,
 )
 
 from app.llm import generate_llm_reply
@@ -1560,6 +1560,15 @@ class BotManager:
                     salaries = parse_salaries(html, ids)
                     meta = parse_vacancy_meta(html)
                     schedules = parse_work_schedules(html, ids)
+                    # Pre-apply стратегические поля из SSR (autoResponse,
+                    # chatWritePossibility, HR online). Без extra-fetch'ей —
+                    # эти данные уже в HTML поисковой страницы.
+                    strat = parse_apply_strategy_meta(html)
+                    for vid, sm in strat.items():
+                        if vid in meta:
+                            meta[vid].update(sm)
+                        else:
+                            meta[vid] = sm
                     return url, ids, salaries, meta, schedules
                 return url, set(), {}, {}, {}
 
@@ -1756,6 +1765,21 @@ class BotManager:
                 # здесь — фронт делает lazy lookup только когда строка видна).
                 _vac_resources = (item.get("resources") or {}).get("VACANCY") or []
                 vacancy_id = str(_vac_resources[0]) if _vac_resources else ""
+
+                # Pre-filter: chatWritePossibility=DISABLED → LLM-ответ гарантированно
+                # отбракуется HH'ом. Не жжём токены, не делаем сетевой вызов.
+                # Поле кладётся parse_apply_strategy_meta при сборе search-страницы.
+                if vacancy_id:
+                    vac_meta = state.vacancy_meta.get(vacancy_id, {})
+                    cwp = (vac_meta.get("chat_write_possibility") or "").upper()
+                    if cwp == "DISABLED":
+                        log_debug(f"LLM [{state.short}] {neg_id}: chatWritePossibility=DISABLED — пропуск (vacancy {vacancy_id})")
+                        self._add_log(state.short, state.color,
+                            f"\U0001f916 [{employer_short}] \U0001f6ab чат закрыт работодателем (chatWritePossibility=DISABLED), пропуск",
+                            "warning", neg_id=neg_id)
+                        state._llm_no_chat.add(neg_id)
+                        state.llm_replied_msgs[key] = None
+                        continue
 
                 if not thread.get("needs_reply") and not thread.get("chat_locked"):
                     raw_item = items_by_id.get(neg_id, {})

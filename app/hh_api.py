@@ -205,3 +205,39 @@ def extract_search_query(url: str) -> str:
     if "resume=" in url:
         return "По резюме"
     return "Поиск"
+
+
+def parse_apply_strategy_meta(html: str) -> dict:
+    """Из SSR JSON поисковой выдачи достаём apply-стратегические поля по
+    каждой вакансии: {vacancy_id: {accept_auto_response, chat_write_possibility, hr_online}}.
+
+    Парсится из <template id="HH-Lux-InitialState">…vacancySearchResult.vacancies[]…</template>.
+    Эти поля HH отдает только в списке (на странице /vacancy/{vid} они null),
+    так что собираем когда чанк уже загружен — без дополнительных fetch'ей.
+    """
+    from app.hh_resume import parse_hh_lux_ssr
+    out: dict[str, dict] = {}
+    try:
+        ssr = parse_hh_lux_ssr(html)
+        if not isinstance(ssr, dict):
+            return out
+        vsr = ssr.get("vacancySearchResult") or ssr.get("relatedVacancies") or {}
+        vacs = vsr.get("vacancies") or []
+        for v in vacs:
+            if not isinstance(v, dict):
+                continue
+            vid = v.get("vacancyId") or v.get("id")
+            if not vid:
+                continue
+            vid = str(vid)
+            ar = (v.get("autoResponse") or {})
+            em = (v.get("employerManager") or {})
+            out[vid] = {
+                "accept_auto_response": bool(ar.get("acceptAutoResponse")) if "acceptAutoResponse" in ar else None,
+                "chat_write_possibility": v.get("chatWritePossibility", ""),
+                "response_letter_required": v.get("@responseLetterRequired"),
+                "hr_online": em.get("latestActivity", ""),
+            }
+    except Exception as e:
+        log_debug(f"parse_apply_strategy_meta error: {e}")
+    return out
