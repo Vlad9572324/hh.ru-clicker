@@ -24,6 +24,7 @@ from app.hh_resume import (
     fetch_resume_text, fetch_resume_stats, fetch_resume_view_history,
     _analyze_resume, parse_hh_lux_ssr, _edit_resume_field,
     _resume_cache,
+    fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
 )
 from app.hh_negotiations import auto_decline_discards
 from app.state import AccountState
@@ -129,6 +130,46 @@ async def api_account_llm_toggle(idx: int):
 async def api_resume_touch(idx: int):
     bot.trigger_resume_touch(idx)
     return {"ok": True}
+
+
+@router.get("/api/account/{idx}/diagnostics")
+async def api_account_diagnostics(idx: int):
+    """Прогнать диагностику аккаунта: jobSearchStatus, видимость резюме,
+    статистика, red flags. Делает один GET на /applicant/resumes — кэширования
+    нет, всегда свежие данные.
+    """
+    acc = bot._get_apply_acc(idx)
+    if not acc:
+        return {"ok": False, "error": "Аккаунт не найден"}
+    import asyncio as _aio
+    data = await _aio.get_event_loop().run_in_executor(None, fetch_account_diagnostics, acc)
+    data["ok"] = True
+    data["available_statuses"] = _JOB_SEARCH_STATUSES
+    return data
+
+
+@router.post("/api/account/{idx}/job_status")
+async def api_set_job_status(idx: int, request: Request):
+    """Сменить публичный статус поиска работы.
+    Body: {"status": "active_search"}. Допустимые значения см. диагностику.
+    """
+    acc = bot._get_apply_acc(idx)
+    if not acc:
+        return {"ok": False, "error": "Аккаунт не найден"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "bad json"}
+    status = str(body.get("status", "")).strip().lower()
+    import asyncio as _aio
+    result = await _aio.get_event_loop().run_in_executor(None, set_job_search_status, acc, status)
+    if result.get("ok"):
+        # лог в боте для аудита
+        state = bot._get_apply_state(idx)
+        if state:
+            bot._add_log(state.short, state.color,
+                         f"🟢 Статус поиска работы изменён → {result.get('label','?')}", "success")
+    return result
 
 
 @router.post("/api/account/{idx}/resume_touch_toggle")

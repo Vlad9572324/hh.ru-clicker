@@ -799,3 +799,128 @@ def _edit_resume_field(acc: dict, resume_hash: str, fields: dict) -> dict:
             s.close()
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── Job-search status (/shards/user_statuses/job_search_status) ────────
+# Узнали реверсом chatik-чанков App.70eb24dc02eddc32.js: PUT с query
+# ?status=<value>, body пустой. GET → 405. Только PUT.
+
+_JOB_SEARCH_STATUSES = {
+    "active_search":        "🟢 Активно ищу работу",
+    "looking_for_offers":   "🟡 Рассматриваю предложения",
+    "accept_offers":        "🟡 Готова к предложениям",
+    "has_job_offer":        "🟠 Есть оффер",
+    "accepted_job_offer":   "🔵 Принят оффер",
+    "not_looking_for_job":  "🔴 Не ищу работу",
+}
+
+
+def set_job_search_status(acc: dict, status: str) -> dict:
+    """PUT /shards/user_statuses/job_search_status?status=<...>.
+    Возвращает {ok: bool, status: <new>, error?: str}.
+    """
+    status = (status or "").strip().lower()
+    if status not in _JOB_SEARCH_STATUSES:
+        return {"ok": False, "error": f"Неизвестный статус: {status!r}. Доступные: {list(_JOB_SEARCH_STATUSES)}"}
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
+    try:
+        r = requests.put(
+            f"{hh_base()}/shards/user_statuses/job_search_status",
+            params={"status": status},
+            cookies=acc.get("cookies") or {},
+            headers={
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-XSRFToken": xsrf,
+                "Origin": hh_base(),
+                "Referer": f"{hh_base()}/applicant/resumes",
+            },
+            timeout=10,
+        )
+        if r.status_code in (200, 204):
+            return {"ok": True, "status": status, "label": _JOB_SEARCH_STATUSES[status]}
+        return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def fetch_account_diagnostics(acc: dict) -> dict:
+    """Прогнать «диагностику аккаунта» через SSR /applicant/resumes.
+    Возвращает {status: str|None, red_flags: [str], stats: {...}, resumes: [{...}]}
+    red_flags — список понятных строк, которые надо показать юзеру.
+    """
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    out = {"status": None, "status_label": None, "red_flags": [], "stats": {}, "resumes": []}
+    try:
+        r = requests.get(
+            f"{hh_base()}/applicant/resumes",
+            cookies=acc.get("cookies") or {},
+            headers={"User-Agent": ua, "Accept": "text/html", "Referer": f"{hh_base()}/"},
+            timeout=15, allow_redirects=True,
+        )
+        if r.status_code != 200 or _is_login_page(r.text):
+            out["red_flags"].append("⚠️ Куки протухли — не удалось загрузить /applicant/resumes")
+            return out
+        ssr = parse_hh_lux_ssr(r.text)
+        if not ssr:
+            out["red_flags"].append("⚠️ SSR-стейт не нашли — может HH обновил вёрстку")
+            return out
+    except Exception as e:
+        out["red_flags"].append(f"⚠️ Ошибка загрузки: {e}")
+        return out
+
+    # 1) jobSearchStatus
+    aus = (ssr.get("applicantUserStatuses") or {}).get("jobSearchStatus") or {}
+    name = (aus.get("name") or "").lower()
+    out["status"] = name
+    out["status_label"] = _JOB_SEARCH_STATUSES.get(name, name)
+    if name == "not_looking_for_job":
+        out["red_flags"].append("🚨 Статус «Не ищу работу» — HR видят бейдж, % ответов падает. Переключи на «active_search».")
+    elif name not in ("active_search", "looking_for_offers", "accept_offers"):
+        out["red_flags"].append(f"⚠️ Статус «{name}» — лучше переключить на active_search или looking_for_offers")
+
+    # 2) Resumes
+    for res in (ssr.get("applicantResumes") or []):
+        attrs = res.get("_attributes") or {}
+        title = _hh_ssr_str(res.get("title")) or "(без названия)"
+        rh = res.get("hash") or attrs.get("hash") or ""
+        rd = {
+            "title": title,
+            "hash": rh,
+            "canTouch": attrs.get("canTouch", True),
+            "canPublishOrUpdate": attrs.get("canPublishOrUpdate", True),
+            "hasPublicVisibility": attrs.get("hasPublicVisibility", True),
+            "hasErrors": attrs.get("hasErrors", False),
+            "hasConditions": attrs.get("hasConditions", False),
+            "accessType": _hh_ssr_str(res.get("accessType")) or "",
+        }
+        out["resumes"].append(rd)
+        prefix = f"📄 [{title[:30]}]"
+        if not rd["hasPublicVisibility"]:
+            out["red_flags"].append(f"🚨 {prefix} Резюме НЕ видно публично — HR не найдут в поиске")
+        if rd["hasErrors"]:
+            out["red_flags"].append(f"⚠️ {prefix} hasErrors=True — есть ошибки в полях")
+        if rd["accessType"] not in ("blacklist", "everyone", "clients", "direct_url", ""):
+            out["red_flags"].append(f"⚠️ {prefix} accessType={rd['accessType']} — нестандартный режим видимости")
+
+    # 3) Stats
+    stats_raw = (ssr.get("applicantResumesStatistics") or {}).get("resumes") or {}
+    out["stats"]["per_resume"] = {}
+    for rh, info in stats_raw.items():
+        s = info.get("statistics") or {}
+        out["stats"]["per_resume"][rh] = {
+            "search_shows": (s.get("searchShows") or {}).get("count", 0),
+            "views":        (s.get("views") or {}).get("count", 0),
+            "views_new":    (s.get("views") or {}).get("countNew", 0),
+            "invitations":  (s.get("invitations") or {}).get("count", 0),
+            "invites_new":  (s.get("invitations") or {}).get("countNew", 0),
+            "period_days":  s.get("periodDays", 7),
+            "recommendation": info.get("recommendation", ""),
+        }
+    out["stats"]["resume_limits"] = ssr.get("resumeLimits") or {}
+    out["stats"]["suitable_vacancies"] = ssr.get("applicantSuitableVacancyByResume") or {}
+    out["stats"]["user_stats"] = ssr.get("userStats") or {}
+    out["stats"]["global_invitations"] = ssr.get("globalInvitations")
+    return out
