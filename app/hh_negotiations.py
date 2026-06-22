@@ -478,3 +478,114 @@ def fetch_rating_by_vacancy(acc: dict, vacancy_id) -> dict | None:
     if not eid:
         return None
     return fetch_employer_rating(acc, eid)
+
+
+# Кэш метаданных переговоров: politeness (per-employer % чтения и дни ответа)
+# + activity (per-HR онлайн-статус). Одним SSR-запросом /applicant/negotiations
+# получаем всё — обновляем раз в час.
+_NEG_META_CACHE: dict = {}  # acc_key → (cached_at, {politeness, activity})
+_NEG_META_TTL = 3600
+_NEG_META_LOCK = _t_emp.Lock()
+
+
+def fetch_negotiations_metadata(acc: dict) -> dict:
+    """Достать politeness + HR activity из /applicant/negotiations SSR.
+
+    politeness: {employer_id: {read_percent, reply_days, total_topics}}
+    activity:   {hr_hhid: {trl_code, inactive_minutes, inactive_days}}
+    Кэш 1ч (per acc identity).
+    """
+    # Идентификатор аккаунта — hhuid + hhtoken hash (стабильный для сессии)
+    cookies = acc.get("cookies") or {}
+    acc_key = (cookies.get("hhuid") or "") + ":" + (cookies.get("hhtoken","") or "")[:16]
+    if not acc_key:
+        return {"politeness": {}, "activity": {}}
+    now = _time_emp.time()
+    with _NEG_META_LOCK:
+        hit = _NEG_META_CACHE.get(acc_key)
+        if hit and now - hit[0] < _NEG_META_TTL:
+            return hit[1]
+
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    out = {"politeness": {}, "activity": {}}
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"{hh_base()}/applicant/negotiations",
+            cookies=cookies,
+            headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
+            timeout=15, allow_redirects=True,
+        )
+        if r.status_code != 200:
+            return out
+        from app.hh_resume import parse_hh_lux_ssr
+        ssr = parse_hh_lux_ssr(r.text)
+        pol_idx = (ssr.get("applicantEmployerPoliteness") or {}).get("employerPolitenessIndexes") or {}
+        for _, p in pol_idx.items():
+            if not isinstance(p, dict): continue
+            eid = p.get("employerId")
+            if not eid: continue
+            out["politeness"][int(eid)] = {
+                "read_percent": p.get("readTopicPercent"),
+                "reply_days": p.get("replyTotalWorkingTimeDays"),
+                "total_topics": p.get("allTopicCount"),
+            }
+        for a in (ssr.get("applicantEmployerManagersActivity") or []):
+            if not isinstance(a, dict): continue
+            hhid = a.get("@managerHhid")
+            if not hhid: continue
+            out["activity"][int(hhid)] = {
+                "trl_code": a.get("trl_code", ""),
+                "inactive_minutes": a.get("@inactiveMinutes"),
+                "inactive_days": a.get("inactive_days"),
+            }
+    except Exception as e:
+        log_debug(f"fetch_negotiations_metadata: {e}")
+    with _NEG_META_LOCK:
+        _NEG_META_CACHE[acc_key] = (now, out)
+    return out
+
+
+# Кэш vacancy_id → owner HR's @managerHhid (из vacancyInternalInfo).
+# Меняется ОЧЕНЬ редко, TTL 7 дней.
+_VACANCY_HR_CACHE: dict = {}
+_VACANCY_HR_LOCK = _t_emp.Lock()
+
+
+def fetch_vacancy_owner_hr_hhid(acc: dict, vacancy_id) -> int | None:
+    """Кто конкретно (HR) опубликовал эту вакансию. Возвращает их @managerHhid."""
+    try:
+        vid = int(str(vacancy_id).strip())
+    except (ValueError, TypeError):
+        return None
+    if vid <= 0:
+        return None
+    now = _time_emp.time()
+    with _VACANCY_HR_LOCK:
+        hit = _VACANCY_HR_CACHE.get(vid)
+        if hit and now - hit[0] < _VACANCY_EMPLOYER_TTL:
+            return hit[1]
+    ua = "Mozilla/5.0 Chrome/120"
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"{hh_base()}/vacancy/{vid}",
+            cookies=acc.get("cookies") or {},
+            headers={"User-Agent": ua, "Accept": "text/html"},
+            timeout=10, allow_redirects=True,
+        )
+        if r.status_code != 200:
+            return None
+        from app.hh_resume import parse_hh_lux_ssr
+        ssr = parse_hh_lux_ssr(r.text)
+        vii = ssr.get("vacancyInternalInfo") or {}
+        hhid = vii.get("ownerEmployerManagerHhid")
+        if isinstance(hhid, str):
+            try: hhid = int(hhid)
+            except (ValueError, TypeError): hhid = None
+        with _VACANCY_HR_LOCK:
+            _VACANCY_HR_CACHE[vid] = (now, hhid)
+        return hhid
+    except Exception as e:
+        log_debug(f"fetch_vacancy_owner_hr_hhid({vid}): {e}")
+        return None

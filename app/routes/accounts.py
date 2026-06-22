@@ -26,7 +26,10 @@ from app.hh_resume import (
     _resume_cache,
     fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
 )
-from app.hh_negotiations import auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy
+from app.hh_negotiations import (
+    auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy,
+    fetch_employer_id_for_vacancy, fetch_negotiations_metadata, fetch_vacancy_owner_hr_hhid,
+)
 from app.state import AccountState
 from app.config import CONFIG
 from app.instances import bot
@@ -150,16 +153,38 @@ async def api_account_diagnostics(idx: int):
 
 @router.get("/api/account/{idx}/rating_by_vacancy/{vacancy_id}")
 async def api_rating_by_vacancy(idx: int, vacancy_id: int):
-    """Rating через цепочку vacancy_id → employer_id → rating.
-    Использует кэш на каждом шаге (7 дней vac→emp, 24ч emp→rating)."""
+    """Rating + politeness + HR online через цепочку vacancy_id → employer_id.
+    Все шаги кэшированы (7д vac→emp, 24ч emp→rating, 1ч politeness/activity).
+    """
     acc = bot._get_apply_acc(idx)
     if not acc:
         return {"ok": False, "error": "Аккаунт не найден"}
     import asyncio as _aio
-    rating = await _aio.get_event_loop().run_in_executor(None, fetch_rating_by_vacancy, acc, vacancy_id)
-    if rating is None:
-        return {"ok": False, "error": "Рейтинг недоступен"}
-    return {"ok": True, **rating}
+    loop = _aio.get_event_loop()
+
+    # Параллельно: vac→emp, vac→HR, neg-метаданные (politeness + activity).
+    eid_task   = loop.run_in_executor(None, fetch_employer_id_for_vacancy, acc, vacancy_id)
+    hr_task    = loop.run_in_executor(None, fetch_vacancy_owner_hr_hhid, acc, vacancy_id)
+    meta_task  = loop.run_in_executor(None, fetch_negotiations_metadata, acc)
+    eid, hr_hhid, meta = await _aio.gather(eid_task, hr_task, meta_task)
+
+    if not eid:
+        return {"ok": False, "error": "Не удалось определить работодателя"}
+    rating = await loop.run_in_executor(None, fetch_employer_rating, acc, eid)
+    out = {"ok": True}
+    if rating:
+        out.update(rating)
+    politeness = (meta.get("politeness") or {}).get(int(eid))
+    if politeness:
+        out["politeness"] = politeness
+    if hr_hhid:
+        activity = (meta.get("activity") or {}).get(int(hr_hhid))
+        if activity:
+            out["hr_activity"] = activity
+            out["hr_hhid"] = hr_hhid
+    if not rating and "politeness" not in out and "hr_activity" not in out:
+        return {"ok": False, "error": "Ни рейтинга, ни metadata для этого работодателя"}
+    return out
 
 
 @router.get("/api/account/{idx}/employer_rating/{employer_id}")

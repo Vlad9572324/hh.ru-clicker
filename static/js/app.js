@@ -1528,6 +1528,8 @@ async function _enrichEmpRatings() {
         const cached = (d && d.ok) ? {
           total: d.total, recommend_pct: d.recommend_pct, name: d.name,
           ratings: d.ratings,
+          politeness: d.politeness || null,
+          hr_activity: d.hr_activity || null,
         } : null;
         _EmpRatingCache[vid] = cached;
         _renderEmpRatingSlots(vid, cached);
@@ -1542,16 +1544,39 @@ async function _enrichEmpRatings() {
 
 function _renderEmpRatingSlots(vid, data) {
   document.querySelectorAll(`.emp-rating-slot[data-vid="${CSS.escape(vid)}"]`).forEach(slot => {
-    if (!data || !data.total) { slot.textContent = ''; return; }
-    const total = Number(data.total).toFixed(1);
-    const color = data.total >= 4.3 ? 'var(--green)'
-                : data.total >= 3.8 ? 'var(--yellow)'
-                : 'var(--red)';
-    const recommend = data.recommend_pct != null ? ` ${data.recommend_pct}%` : '';
-    // Tooltip с разбивкой
-    const r = data.ratings || {};
-    const tooltip = `Workplace ${r.workplace||'?'} · Team ${r.team||'?'} · Management ${r.management||'?'} · Career ${r.career||'?'} · Rest ${r.rest||'?'} · Salary ${r.salary||'?'}`;
-    slot.innerHTML = `<span style="color:${color};font-weight:600" title="${esc(tooltip)}">⭐${total}${recommend}</span>`;
+    if (!data) { slot.textContent = ''; return; }
+    const parts = [];
+    // 1) Rating chip
+    if (data.total) {
+      const total = Number(data.total).toFixed(1);
+      const color = data.total >= 4.3 ? 'var(--green)'
+                  : data.total >= 3.8 ? 'var(--yellow)'
+                  : 'var(--red)';
+      const recommend = data.recommend_pct != null ? ` ${data.recommend_pct}%` : '';
+      const r = data.ratings || {};
+      const tooltip = `Workplace ${r.workplace||'?'} · Team ${r.team||'?'} · Management ${r.management||'?'} · Career ${r.career||'?'} · Rest ${r.rest||'?'} · Salary ${r.salary||'?'}`;
+      parts.push(`<span style="color:${color};font-weight:600" title="${esc(tooltip)}">⭐${total}${recommend}</span>`);
+    }
+    // 2) Politeness chip: % чтения откликов + дни ответа
+    if (data.politeness) {
+      const p = data.politeness;
+      const rp = p.read_percent;
+      const polColor = rp >= 90 ? 'var(--green)' : rp >= 70 ? 'var(--yellow)' : 'var(--red)';
+      const tot = p.total_topics ? ` (на ${p.total_topics} откл.)` : '';
+      const tooltip = `Работодатель читает ${rp}% откликов, отвечает за ${p.reply_days} дн${tot}`;
+      parts.push(`<span style="color:${polColor};font-size:10px" title="${esc(tooltip)}">📖${rp}%·${p.reply_days}д</span>`);
+    }
+    // 3) HR online-status chip
+    if (data.hr_activity) {
+      const a = data.hr_activity;
+      const code = (a.trl_code || '').toLowerCase();
+      const labels = {online:'🟢 онлайн', today:'🟡 сегодня', yesterday:'🟠 вчера', weekexact:'🔴 неделю назад'};
+      const label = labels[code] || code;
+      const mins = a.inactive_minutes;
+      const tip = `Owner HR (id ${a.hr_hhid||''}): ${code} (был ${mins!=null ? mins+' мин назад' : '?'})`;
+      parts.push(`<span style="font-size:10px" title="${esc(tip)}">${label}</span>`);
+    }
+    slot.innerHTML = parts.length ? '· ' + parts.join(' · ') : '';
   });
 }
 
