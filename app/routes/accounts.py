@@ -26,7 +26,7 @@ from app.hh_resume import (
     _resume_cache,
     fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
 )
-from app.hh_negotiations import auto_decline_discards
+from app.hh_negotiations import auto_decline_discards, fetch_employer_rating
 from app.state import AccountState
 from app.config import CONFIG
 from app.instances import bot
@@ -146,6 +146,22 @@ async def api_account_diagnostics(idx: int):
     data["ok"] = True
     data["available_statuses"] = _JOB_SEARCH_STATUSES
     return data
+
+
+@router.get("/api/account/{idx}/employer_rating/{employer_id}")
+async def api_employer_rating(idx: int, employer_id: int):
+    """Получить рейтинг работодателя по employerId через cookies аккаунта.
+    Возвращает {total, recommend_pct, ratings, advantages, reviews_count,
+    neg_count, staff_count, status, is_open} или {ok:False} если закрытый.
+    """
+    acc = bot._get_apply_acc(idx)
+    if not acc:
+        return {"ok": False, "error": "Аккаунт не найден"}
+    import asyncio as _aio
+    rating = await _aio.get_event_loop().run_in_executor(None, fetch_employer_rating, acc, employer_id)
+    if rating is None:
+        return {"ok": False, "error": "Работодатель не имеет отзывов или закрыт"}
+    return {"ok": True, **rating}
 
 
 @router.post("/api/account/{idx}/job_status")

@@ -305,3 +305,108 @@ def auto_decline_discards(acc: dict) -> int:
     except Exception as e:
         log_debug(f"auto_decline_discards error: {e}")
     return declined
+
+
+# ── Employer ratings (employer_reviews/proxy_components/small_widget) ──
+# Reverse-engineered from /employer/{id} SSR microFrontends config.
+# Один JSON-вызов отдаёт: totalRating (1-5), recommendationsPercent,
+# 6 категорий (workplace/team/management/career/rest/salary),
+# топ advantages с counts, общее число отзывов, негативных.
+# Используется для показа «Яндекс ⭐4.3 (81%)» рядом с employer name.
+
+import threading as _t_emp
+import time as _time_emp
+
+_EMPLOYER_RATING_CACHE: dict = {}  # employer_id → (cached_at_ts, data|None)
+_EMPLOYER_RATING_TTL = 24 * 3600   # 24ч (рейтинг меняется медленно)
+_EMPLOYER_RATING_LOCK = _t_emp.Lock()
+_EMPLOYER_RATING_NULL_TTL = 3600   # отрицательные ответы кэшируем час
+
+
+def fetch_employer_rating(acc: dict, employer_id) -> dict | None:
+    """GET /employer_reviews/proxy_components/small_widget?employerId=N.
+
+    Возвращает компактный dict {total, recommend_pct, ratings, advantages,
+    reviews_count, neg_count, staff_count, status} или None если работодатель
+    закрыт/без отзывов. Все вызовы кэшируются в памяти на 24ч.
+    """
+    try:
+        eid = int(str(employer_id).strip())
+    except (ValueError, TypeError):
+        return None
+    if eid <= 0:
+        return None
+    now = _time_emp.time()
+    with _EMPLOYER_RATING_LOCK:
+        hit = _EMPLOYER_RATING_CACHE.get(eid)
+        if hit:
+            cached_at, data = hit
+            ttl = _EMPLOYER_RATING_TTL if data else _EMPLOYER_RATING_NULL_TTL
+            if now - cached_at < ttl:
+                return data
+
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"{hh_base()}/employer_reviews/proxy_components/small_widget",
+            params={"employerId": eid},
+            cookies=acc.get("cookies") or {},
+            headers={
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Referer": f"{hh_base()}/employer/{eid}",
+            },
+            timeout=10,
+        )
+        if r.status_code != 200 or "json" not in r.headers.get("Content-Type", ""):
+            with _EMPLOYER_RATING_LOCK:
+                _EMPLOYER_RATING_CACHE[eid] = (now, None)
+            return None
+        body = r.json() or {}
+    except Exception as e:
+        log_debug(f"fetch_employer_rating({eid}): {e}")
+        with _EMPLOYER_RATING_LOCK:
+            _EMPLOYER_RATING_CACHE[eid] = (now, None)
+        return None
+
+    rev = body.get("employerReviews") or {}
+    if not rev or not rev.get("totalRating"):
+        with _EMPLOYER_RATING_LOCK:
+            _EMPLOYER_RATING_CACHE[eid] = (now, None)
+        return None
+
+    # Compact projection — то что реально нужно UI
+    try:
+        total = float(rev.get("totalRating") or 0)
+    except (ValueError, TypeError):
+        total = 0.0
+    ratings = {x.get("id"): x.get("value") for x in (rev.get("ratings") or []) if isinstance(x, dict)}
+    advantages = [
+        {"name": a.get("name", ""), "count": a.get("count", 0)}
+        for a in (rev.get("advantages") or [])[:3] if isinstance(a, dict)
+    ]
+    name = (body.get("employerNameMap") or {}).get(str(eid)) or ""
+    compact = {
+        "id": eid,
+        "name": name,
+        "total": round(total, 1),
+        "recommend_pct": rev.get("recommendationsPercent"),
+        "ratings": {
+            "workplace": ratings.get("WORKPLACE"),
+            "team": ratings.get("TEAM"),
+            "management": ratings.get("MANAGEMENT"),
+            "career": ratings.get("CAREER"),
+            "rest": ratings.get("REST_RECOVERY"),
+            "salary": ratings.get("SALARY"),
+        },
+        "advantages": advantages,
+        "reviews_count": rev.get("reviewsCount", 0),
+        "neg_count": rev.get("negativeReviewsCount", 0),
+        "staff_count": rev.get("staffCount", ""),  # STAFF_COUNT_MORE_10000 etc.
+        "status": rev.get("activityStatus", ""),    # ACTIVE_EMPLOYER / etc.
+        "is_open": rev.get("isOpenEmployer", False),
+    }
+    with _EMPLOYER_RATING_LOCK:
+        _EMPLOYER_RATING_CACHE[eid] = (now, compact)
+    return compact
