@@ -3433,28 +3433,42 @@ function updateCard(card, acc) {
     llmBtn.classList.toggle('llm-on', enabled);
     llmBtn.classList.toggle('llm-off', !enabled);
   }
-  // LLM status line on card
+  // LLM status block on card — HUD with reply counter + queue + state
   const llmSt = document.getElementById('acc-llm-status-' + acc.idx);
   if (llmSt) {
     const globalLlm = State.lastSnapshot?.config?.llm_enabled;
     const accLlm = acc.llm_enabled !== false;
+    const replied = acc.llm_replied_count || 0;
+    const pending = acc.llm_pending_chats || 0;
+    let stateChip = '';
+    let stateColor = 'var(--dim)';
+    let off = false;
     if (!globalLlm) {
-      llmSt.style.display = '';
-      llmSt.textContent = '🤖 LLM глобально выключен';
-      llmSt.style.color = 'var(--red)';
+      stateChip = 'LLM выкл (глобально)'; stateColor = 'var(--red)'; off = true;
     } else if (!accLlm) {
-      llmSt.style.display = '';
-      llmSt.textContent = '🤖 LLM выключен для аккаунта';
-      llmSt.style.color = 'var(--dim)';
+      stateChip = 'LLM выкл (для акка)'; stateColor = 'var(--dim)'; off = true;
     } else if (acc.llm_status) {
-      llmSt.style.display = '';
-      llmSt.textContent = '🤖 ' + acc.llm_status + (acc.llm_replied_count ? ` (всего: ${acc.llm_replied_count})` : '');
-      llmSt.style.color = acc.llm_status.startsWith('✅') ? 'var(--green)' : acc.llm_status.startsWith('💤') ? 'var(--dim)' : 'var(--cyan)';
+      stateChip = acc.llm_status;
+      stateColor = acc.llm_status.startsWith('✅') ? 'var(--green)'
+                 : acc.llm_status.startsWith('💤') ? 'var(--dim)'
+                 : 'var(--cyan)';
     } else {
-      llmSt.style.display = '';
-      llmSt.textContent = '🤖 LLM: ожидание первого цикла';
-      llmSt.style.color = 'var(--dim)';
+      stateChip = 'ожидание первого цикла'; stateColor = 'var(--dim)';
     }
+    llmSt.style.display = 'flex';
+    llmSt.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 8px;margin:4px 0;'
+      + 'background:linear-gradient(180deg,rgba(0,240,255,0.04) 0%,rgba(0,0,0,0.25) 100%);'
+      + 'border:1px solid var(--border);border-left:3px solid '+stateColor+';'
+      + 'border-radius:3px;font-size:11px;';
+    llmSt.innerHTML = `
+      <span style="color:${stateColor};text-shadow:0 0 6px ${stateColor};font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:10px">🤖 ${esc(stateChip)}</span>
+      <span style="color:var(--dim);font-size:9px;letter-spacing:0.08em;text-transform:uppercase">всего</span>
+      <span style="color:var(--green);font-weight:800;font-size:14px;font-variant-numeric:tabular-nums;text-shadow:0 0 6px rgba(0,255,136,0.5)">${replied.toLocaleString('ru')}</span>
+      ${off ? '' : `
+        <span style="color:var(--dim);font-size:9px;letter-spacing:0.08em;text-transform:uppercase">в очереди</span>
+        <span style="color:${pending>0?'var(--yellow)':'var(--dim)'};font-weight:800;font-size:14px;font-variant-numeric:tabular-nums${pending>0?';text-shadow:0 0 6px rgba(255,212,0,0.5)':''}">${pending}</span>
+      `}
+    `;
   }
   const oauthBtn = document.getElementById('acc-oauth-btn-' + acc.idx);
   if (oauthBtn) {
