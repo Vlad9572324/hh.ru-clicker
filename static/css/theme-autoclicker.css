@@ -27,25 +27,53 @@
   --glow-magenta: 0 0 6px rgba(255,76,255,0.55),0 0 18px rgba(255,76,255,0.15);
 }
 
-/* ─── Body: лёгкий grid-pattern + сканирующая полоса ─── */
+/* ─── Body: заметная циан-сетка + сине-фиолетовый радиал + движущийся glow ─── */
 body {
   background:
-    repeating-linear-gradient(90deg, transparent 0, transparent 39px, rgba(0,240,255,0.025) 39px, rgba(0,240,255,0.025) 40px),
-    repeating-linear-gradient(0deg,  transparent 0, transparent 39px, rgba(0,240,255,0.025) 39px, rgba(0,240,255,0.025) 40px),
-    radial-gradient(ellipse at top, #0e1420 0%, #050608 70%);
+    /* Циановая сетка 40×40, теперь видимая */
+    repeating-linear-gradient(90deg, transparent 0, transparent 39px, rgba(0,240,255,0.10) 39px, rgba(0,240,255,0.10) 40px),
+    repeating-linear-gradient(0deg,  transparent 0, transparent 39px, rgba(0,240,255,0.10) 39px, rgba(0,240,255,0.10) 40px),
+    /* Толстые опорные линии каждые 200px — даёт «технический» масштаб */
+    repeating-linear-gradient(90deg, transparent 0, transparent 199px, rgba(0,240,255,0.18) 199px, rgba(0,240,255,0.18) 200px),
+    repeating-linear-gradient(0deg,  transparent 0, transparent 199px, rgba(0,240,255,0.18) 199px, rgba(0,240,255,0.18) 200px),
+    /* Базовый градиент: тёплая фиолетово-чёрная глубина */
+    radial-gradient(ellipse at 20% 0%,  #112144 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 100%,#1a1444 0%, transparent 60%),
+    radial-gradient(ellipse at center,  #0a0e1a 0%, #04050a 90%);
   background-attachment: fixed;
 }
 
 body::before {
-  /* Тонкие CRT-сканлайны */
+  /* CRT-сканлайны — повеселее, всё ещё неагрессивные */
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0,0,0,0.18) 2px, rgba(0,0,0,0.18) 3px);
+  background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0,0,0,0.30) 2px, rgba(0,0,0,0.30) 3px);
   z-index: 9999;
   mix-blend-mode: multiply;
-  opacity: 0.35;
+  opacity: 0.55;
+}
+
+body::after {
+  /* Медленно сканирующая горизонтальная полоса glow — как радар */
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg,
+      transparent 0%,
+      transparent 40%,
+      rgba(0,240,255,0.05) 50%,
+      transparent 60%,
+      transparent 100%);
+  z-index: 9998;
+  animation: bg-scan 10s linear infinite;
+}
+@keyframes bg-scan {
+  0%   { transform: translateY(-50%); }
+  100% { transform: translateY(50%); }
 }
 
 /* ─── Header: техно-bar с glow ─── */
