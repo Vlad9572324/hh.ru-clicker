@@ -1424,11 +1424,15 @@ class BotManager:
                             # Hard stop — no retries
                             state.hard_stopped = True
                             state.paused = True
+                            # paused_reason="limit" — чтобы _maybe_roll_daily_counter
+                            # автоматически снял паузу в полночь МСК. Без этого
+                            # бот сидел на паузе несколько дней подряд (bug fix).
+                            state.paused_reason = "limit"
                             state.status = "limit"
-                            state.status_detail = "\U0001f6d1 Лимит HH — остановлен до завтра"
+                            state.status_detail = "\U0001f6d1 Лимит HH — остановлен до 00:00 МСК"
                             self._add_log(
                                 state.short, state.color,
-                                f"\U0001f6d1 ЛИМИТ HH! Бот остановлен. Сбросится в 00:00 МСК. Снимите паузу вручную.",
+                                f"\U0001f6d1 ЛИМИТ HH! Бот остановлен. Автоматический сброс в 00:00 МСК.",
                                 "error",
                             )
                         else:
