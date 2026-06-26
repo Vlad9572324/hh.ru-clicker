@@ -264,6 +264,32 @@ hh.ru-clicker/
 | `HH_BOT_API_KEY` | (пусто) | API-ключ для авторизации REST/WS |
 | `HH_BOT_ALLOWED_ORIGINS` | (пусто) | Доп. хосты в WS Origin whitelist |
 | `HH_CHATIK_BASE` | `https://chatik.hh.ru` | Chatik base URL (есть allowlist) |
+| `LLM_PROXY` | (пусто) | Прокси **только** для запросов к LLM (см. ниже) |
+
+### Прокси для LLM (`LLM_PROXY`)
+
+Если сервер с российским IP не может достучаться до LLM-провайдера
+(OpenAI и т.п.), запросы к нему можно завернуть в прокси, **не трогая
+hh.ru-трафик** (он по-прежнему идёт напрямую — это важно, потому что hh.ru
+обычно наоборот хочет видеть РФ-IP).
+
+```bash
+# http/https или socks5 (для socks нужен пакет httpx[socks])
+LLM_PROXY="http://user:pass@1.2.3.4:8080"
+# LLM_PROXY="socks5://user:pass@1.2.3.4:1080"
+```
+
+В Docker — добавьте в `environment:` сервиса `hh-bot` (`docker-compose.yml`):
+
+```yaml
+    environment:
+      LLM_PROXY: "http://user:pass@1.2.3.4:8080"
+```
+
+Через прокси идут и реальные чат-вызовы, и тест-коннект «Проверить ключ».
+В отличие от глобального `HTTPS_PROXY`, `LLM_PROXY` **не** заворачивает
+запросы к hh.ru. Реализация: [`app/llm.py`](app/llm.py) (`_make_openai_client`)
+и [`app/routes/llm.py`](app/routes/llm.py) (`_llm_proxies`).
 
 ### Региональный поддомен
 

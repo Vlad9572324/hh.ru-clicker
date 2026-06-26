@@ -2,6 +2,7 @@
 LLM configuration and control routes.
 """
 
+import os
 import threading
 
 import requests
@@ -13,6 +14,16 @@ from app.instances import bot
 
 
 router = APIRouter()
+
+
+def _llm_proxies():
+    """proxies-dict для requests к LLM-провайдеру, если задан env LLM_PROXY.
+
+    Держим тест-коннект и реальные вызовы (см. app.llm._make_openai_client) на
+    одном прокси — иначе проверка ключа падает с РФ-IP, хотя сам чат работает.
+    """
+    proxy = os.environ.get("LLM_PROXY", "").strip()
+    return {"http": proxy, "https": proxy} if proxy else None
 
 
 # Модели которые стоит исключить из чат-списка
@@ -266,6 +277,7 @@ async def api_llm_detect(request: Request):
             f"{base_url.rstrip('/')}/models",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=12,
+            proxies=_llm_proxies(),
         )
         if resp.status_code != 200:
             return {"ok": False, "base_url": base_url, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
