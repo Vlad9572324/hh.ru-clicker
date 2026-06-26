@@ -247,7 +247,10 @@ class BotManager:
                 if now - _last_trigger[0] < 10:
                     return
                 _last_trigger[0] = now
-                if not CONFIG.llm_enabled or not state.llm_enabled or state.paused or _self.paused:
+                # HH-limit пауза НЕ распространяется на чат-ответы, только на
+                # новые отклики. Стопаем только manual/auth, остальное пропускаем.
+                _is_blocking_pause = _self.paused or (state.paused and state.paused_reason in ("manual", "auth"))
+                if not CONFIG.llm_enabled or not state.llm_enabled or _is_blocking_pause:
                     return
                 log_debug(f"WS push [{state.short}] {event_name} → триггерим LLM")
                 threading.Thread(
@@ -2218,8 +2221,13 @@ class BotManager:
                     f"{rs['views']} просмотров резюме, {rs['new_invitations_total']} новых инвайтов"
                 )
 
-                if self.paused or state.paused:
-                    log_debug(f"LLM [{state.short}]: пропуск — на паузе")
+                # HH-лимит applies только к НОВЫМ откликам, не к ответам в
+                # существующих чатах. Так что limit-пауза НЕ должна стопать LLM.
+                # Стопаем только на manual паузу или auth (куки протухли — LLM
+                # всё равно не отправит).
+                _llm_skip = self.paused or (state.paused and state.paused_reason in ("manual", "auth"))
+                if _llm_skip:
+                    log_debug(f"LLM [{state.short}]: пропуск — на паузе (reason={state.paused_reason or 'global'})")
                     state.hh_stats_loading = False
                     if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):
                         return
