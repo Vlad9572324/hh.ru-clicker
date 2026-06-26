@@ -621,6 +621,7 @@ class BotManager:
                 "daily_limit": CONFIG.daily_apply_limit,
                 "hard_stopped": s.hard_stopped,
                 "last_apply_at": s.last_apply_at,
+                "last_apply_attempt_at": s.last_apply_attempt_at,
                 "paused_reason": s.paused_reason,
             })
 
@@ -717,6 +718,7 @@ class BotManager:
                     "daily_limit": CONFIG.daily_apply_limit,
                     "hard_stopped": s.hard_stopped,
                     "last_apply_at": s.last_apply_at,
+                    "last_apply_attempt_at": s.last_apply_attempt_at,
                     "paused_reason": s.paused_reason,
                 })
             else:
@@ -1282,6 +1284,10 @@ class BotManager:
                     # не продолжаем отправлять оставшиеся вакансии (swarm-12 #10).
                     if state.paused or state.hard_stopped:
                         break
+                    # Любая итерация — это попытка отклика. Запоминаем время,
+                    # чтобы UI мог показать «бот живой, последний раз пробовал
+                    # 30с назад» даже когда удачных откликов давно не было.
+                    state.last_apply_attempt_at = datetime.now().isoformat(timespec="seconds")
                     if isinstance(result_data, Exception):
                         state.errors += 1
                         state.consecutive_errors += 1

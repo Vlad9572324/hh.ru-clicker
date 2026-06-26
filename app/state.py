@@ -32,9 +32,13 @@ class AccountState:
         self.errors = 0
         self.already_applied = 0
         self.found_vacancies = 0
-        # ISO-строка datetime последнего успешного отклика (result=='sent').
-        # Используется в UI: «последний отклик: 14:23 (5 мин назад)»
+        # ISO datetime последнего УСПЕШНОГО отклика (result=='sent') — для UI
+        # «удачный отклик: 14:23, 5м назад».
         self.last_apply_at: str = ""
+        # ISO datetime последней ПОПЫТКИ отклика (любой result: sent/test/
+        # already/limit/error). Используется чтоб видеть «бот вообще что-то
+        # пробовал» когда last_apply_at пустой / далеко в прошлом.
+        self.last_apply_attempt_at: str = ""
 
         self.total_urls = len(acc_data["urls"])
 

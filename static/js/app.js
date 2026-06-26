@@ -3138,20 +3138,32 @@ function updateCard(card, acc) {
   const touchLabelEl  = document.getElementById('acc-touch-label-' + acc.idx);
   const touchBtn      = document.getElementById('acc-touch-btn-' + acc.idx);
   // ── Last apply + limit ETA ──
+  // Helper: ISO → {time, ago} или null
+  const fmtTimeAgo = (iso) => {
+    if (!iso) return null;
+    const ts = new Date(iso);
+    const diffSec = Math.max(0, Math.floor((Date.now() - ts.getTime()) / 1000));
+    let ago;
+    if      (diffSec < 60)    ago = `${diffSec}с`;
+    else if (diffSec < 3600)  ago = `${Math.floor(diffSec/60)}м`;
+    else if (diffSec < 86400) ago = `${Math.floor(diffSec/3600)}ч ${Math.floor((diffSec%3600)/60)}м`;
+    else                       ago = `${Math.floor(diffSec/86400)}д`;
+    return {time: ts.toLocaleTimeString('ru', {hour:'2-digit',minute:'2-digit'}), ago};
+  };
   const laEl = document.getElementById('acc-last-apply-' + acc.idx);
   if (laEl) {
-    if (acc.last_apply_at) {
-      const ts = new Date(acc.last_apply_at);
-      const now = Date.now();
-      const diffSec = Math.max(0, Math.floor((now - ts.getTime()) / 1000));
-      let ago;
-      if (diffSec < 60) ago = `${diffSec}с`;
-      else if (diffSec < 3600) ago = `${Math.floor(diffSec/60)}м`;
-      else if (diffSec < 86400) ago = `${Math.floor(diffSec/3600)}ч ${Math.floor((diffSec%3600)/60)}м`;
-      else ago = `${Math.floor(diffSec/86400)}д`;
-      const tStr = ts.toLocaleTimeString('ru', {hour:'2-digit',minute:'2-digit'});
+    const parts = [];
+    const attempt = fmtTimeAgo(acc.last_apply_attempt_at);
+    const sent    = fmtTimeAgo(acc.last_apply_at);
+    if (attempt) {
+      parts.push(`📤 попытка: <span style="color:var(--cyan)">${esc(attempt.time)}</span> · ${esc(attempt.ago)} назад`);
+    }
+    if (sent) {
+      parts.push(`✅ удачный: <span style="color:var(--green)">${esc(sent.time)}</span> · ${esc(sent.ago)} назад`);
+    }
+    if (parts.length) {
       laEl.style.display = 'block';
-      laEl.innerHTML = `📤 последний отклик: <span style="color:var(--cyan)">${esc(tStr)}</span> · ${esc(ago)} назад`;
+      laEl.innerHTML = parts.join('<br>');
     } else {
       laEl.style.display = 'none';
     }
