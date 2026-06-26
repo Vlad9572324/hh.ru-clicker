@@ -48,6 +48,30 @@ def _get_today_str() -> str:
         return _time_mod.strftime("%Y-%m-%d", _time_mod.gmtime())
 
 
+def _make_openai_client(profile: dict):
+    """Сборка OpenAI-клиента c опциональным прокси ТОЛЬКО для LLM-трафика.
+
+    Если задан env LLM_PROXY (например http://user:pass@ip:port или socks5://...),
+    запросы к LLM идут через него, а hh.ru-трафик (requests/aiohttp) — напрямую.
+    Полезно, когда сервер с РФ-IP не может достучаться до OpenAI, но должен
+    ходить на hh.ru без прокси. Глобальный HTTPS_PROXY завернул бы и hh.ru тоже.
+    """
+    kwargs = {"api_key": profile["api_key"], "base_url": profile.get("base_url") or None}
+    proxy = os.environ.get("LLM_PROXY", "").strip()
+    if proxy:
+        try:
+            import httpx
+            try:
+                kwargs["http_client"] = httpx.Client(proxy=proxy, timeout=60.0)
+            except TypeError:
+                # httpx < 0.26 — параметр назывался proxies=
+                kwargs["http_client"] = httpx.Client(proxies=proxy, timeout=60.0)
+        except Exception as e:
+            # Прокси не собрался — не валим запрос, идём напрямую (видно в логе).
+            log_debug(f"LLM_PROXY задан, но клиент не собрался ({e}) — идём напрямую")
+    return _openai_mod.OpenAI(**kwargs)
+
+
 def _check_questionnaire_quota(account_key: str) -> bool:
     today = _get_today_str()
     key = account_key or "__global__"
@@ -152,7 +176,7 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
         model = profile.get("model") or "gpt-4o-mini"
         log_debug(f"generate_llm_reply: roundrobin → {pname} ({model}), {len(messages)-1} сообщений")
         try:
-            client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+            client = _make_openai_client(profile)
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -181,7 +205,7 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
             model = profile.get("model") or "gpt-4o-mini"
             log_debug(f"generate_llm_reply: fallback {i+1}/{len(profiles)} → {pname} ({model}), {len(messages)-1} сообщений")
             try:
-                client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+                client = _make_openai_client(profile)
                 resp = client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -298,7 +322,7 @@ def _llm_pick_button_index(conversation: list, buttons: list, employer_name: str
         pname = profile.get("name") or profile.get("model") or "?"
         model = profile.get("model") or "gpt-4o-mini"
         try:
-            client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+            client = _make_openai_client(profile)
             resp = client.chat.completions.create(
                 model=model, messages=messages, max_tokens=80, temperature=0.0,
                 response_format={"type": "json_object"} if "openai" in (profile.get("base_url") or "") else None,
@@ -315,7 +339,7 @@ def _llm_pick_button_index(conversation: list, buttons: list, employer_name: str
         except TypeError:
             # provider doesn't support response_format → retry without it
             try:
-                client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+                client = _make_openai_client(profile)
                 resp = client.chat.completions.create(
                     model=model, messages=messages, max_tokens=80, temperature=0.0,
                 )
@@ -533,7 +557,7 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
         model = profile.get("model") or "gpt-4o-mini"
         log_debug(f"generate_llm_questionnaire_answers: {pname} ({model}), {len(rich_questions)} вопросов")
         try:
-            client = _openai_mod.OpenAI(api_key=profile["api_key"], base_url=profile.get("base_url") or None)
+            client = _make_openai_client(profile)
             resp = client.chat.completions.create(
                 model=model, messages=messages, max_tokens=600, temperature=0.3,
             )
