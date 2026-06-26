@@ -1,0 +1,339 @@
+/* ==========================================================================
+   Autoclicker / Cheat-Engine vibe — visual overlay on top of style.css
+   Подключается ПОСЛЕ style.css. Только визуал — никаких новых селекторов
+   из JS, никакой ломки layout'а.
+   ========================================================================== */
+
+:root {
+  /* Перенасыщенный неон поверх существующих vars */
+  --bg:         #08090d;
+  --bg-card:    #11141a;
+  --bg-card2:   #161a23;
+  --border:     #2a3140;
+  --cyan:       #00f0ff;
+  --green:      #00ff88;
+  --yellow:     #ffd400;
+  --red:        #ff3850;
+  --magenta:    #ff4cff;
+  --blue:       #4cc3ff;
+  --dim:        #6e7a8a;
+  --text:       #e8f0ff;
+
+  /* Glow-палитра */
+  --glow-cyan:    0 0 6px rgba(0,240,255,0.55), 0 0 18px rgba(0,240,255,0.18);
+  --glow-green:   0 0 6px rgba(0,255,136,0.55), 0 0 18px rgba(0,255,136,0.18);
+  --glow-yellow:  0 0 6px rgba(255,212,0,0.55), 0 0 18px rgba(255,212,0,0.15);
+  --glow-red:     0 0 6px rgba(255,56,80,0.55), 0 0 18px rgba(255,56,80,0.20);
+  --glow-magenta: 0 0 6px rgba(255,76,255,0.55),0 0 18px rgba(255,76,255,0.15);
+}
+
+/* ─── Body: лёгкий grid-pattern + сканирующая полоса ─── */
+body {
+  background:
+    repeating-linear-gradient(90deg, transparent 0, transparent 39px, rgba(0,240,255,0.025) 39px, rgba(0,240,255,0.025) 40px),
+    repeating-linear-gradient(0deg,  transparent 0, transparent 39px, rgba(0,240,255,0.025) 39px, rgba(0,240,255,0.025) 40px),
+    radial-gradient(ellipse at top, #0e1420 0%, #050608 70%);
+  background-attachment: fixed;
+}
+
+body::before {
+  /* Тонкие CRT-сканлайны */
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0,0,0,0.18) 2px, rgba(0,0,0,0.18) 3px);
+  z-index: 9999;
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+
+/* ─── Header: техно-bar с glow ─── */
+#header {
+  background: linear-gradient(180deg, #0d1119 0%, #11141a 100%);
+  border-bottom: 1px solid var(--cyan);
+  box-shadow: 0 1px 0 rgba(0,240,255,0.15), 0 6px 18px rgba(0,0,0,0.55);
+}
+#header h1 {
+  color: var(--cyan);
+  text-shadow: var(--glow-cyan);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#conn-dot {
+  box-shadow: 0 0 8px currentColor;
+}
+#conn-dot.connected {
+  background: var(--green);
+  color: var(--green);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 6px var(--green), 0 0 12px rgba(0,255,136,0.45); }
+  50%      { box-shadow: 0 0 12px var(--green), 0 0 24px rgba(0,255,136,0.7); }
+}
+#global-sent  { text-shadow: var(--glow-green); }
+#global-found { text-shadow: var(--glow-cyan); }
+#storage-total { text-shadow: 0 0 6px rgba(76,195,255,0.55); }
+#uptime { font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+/* ─── Tabs: подсветка активной как HUD ─── */
+.tab {
+  border-bottom: 2px solid transparent;
+  transition: color .12s, border-color .12s, text-shadow .12s, background .12s;
+  letter-spacing: 0.03em;
+}
+.tab:hover {
+  color: var(--cyan);
+  text-shadow: var(--glow-cyan);
+  background: rgba(0,240,255,0.03);
+}
+.tab.active {
+  color: var(--cyan) !important;
+  background: var(--tab-active);
+  border-bottom-color: var(--cyan);
+  text-shadow: var(--glow-cyan);
+  box-shadow: inset 0 -1px 0 var(--cyan), 0 4px 12px rgba(0,240,255,0.12);
+}
+
+/* ─── Кнопки (общая стилизация) ─── */
+button, .btn-sm, #pause-btn, #lang-btn {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: border-color .12s, color .12s, background .12s, box-shadow .12s, transform .08s;
+}
+button:hover, .btn-sm:hover {
+  box-shadow: 0 0 0 1px currentColor inset, 0 0 12px rgba(0,240,255,0.25);
+}
+button:active, .btn-sm:active { transform: translateY(1px); }
+
+#pause-btn {
+  border-radius: 2px;
+  border-width: 1px;
+}
+#pause-btn:hover {
+  color: var(--yellow);
+  border-color: var(--yellow);
+  box-shadow: var(--glow-yellow);
+  text-shadow: 0 0 6px rgba(255,212,0,0.6);
+}
+#pause-btn.paused {
+  color: var(--red);
+  border-color: var(--red);
+  box-shadow: var(--glow-red);
+  text-shadow: 0 0 6px rgba(255,56,80,0.6);
+  animation: pulse-paused 2s ease-in-out infinite;
+}
+@keyframes pulse-paused {
+  0%, 100% { box-shadow: 0 0 0 1px var(--red), 0 0 8px rgba(255,56,80,0.25); }
+  50%      { box-shadow: 0 0 0 1px var(--red), 0 0 22px rgba(255,56,80,0.65); }
+}
+
+/* ─── Cards / account-cards: terminal-window vibe ─── */
+.card, .acc-card {
+  background: linear-gradient(180deg, var(--bg-card) 0%, #0e1219 100%);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  position: relative;
+  transition: border-color .15s, box-shadow .15s, transform .08s;
+}
+.card::before, .acc-card::before {
+  /* Угловые «уголки» как в game HUD */
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--cyan) 50%, transparent 100%);
+  opacity: 0.4;
+  pointer-events: none;
+}
+.card:hover, .acc-card:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px rgba(0,240,255,0.25), 0 8px 24px rgba(0,0,0,0.55);
+}
+
+.card-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Acc-card: HUD-стиль ─── */
+.acc-name {
+  color: var(--cyan);
+  text-shadow: var(--glow-cyan);
+  letter-spacing: 0.04em;
+}
+.acc-status-badge {
+  border-radius: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-width: 1px;
+}
+.status-idle      { color: var(--dim);   border-color: var(--dim); }
+.status-collecting{ color: var(--cyan);  border-color: var(--cyan);  text-shadow: var(--glow-cyan);   box-shadow: 0 0 8px rgba(0,240,255,0.25); }
+.status-applying  { color: var(--green); border-color: var(--green); text-shadow: var(--glow-green);  box-shadow: 0 0 8px rgba(0,255,136,0.25); animation: pulse-status 1.4s ease-in-out infinite; }
+.status-limit     { color: var(--red);   border-color: var(--red);   text-shadow: 0 0 6px rgba(255,56,80,0.55); }
+.status-waiting   { color: var(--yellow);border-color: var(--yellow);text-shadow: var(--glow-yellow); }
+.status-checking  { color: var(--cyan);  border-color: var(--cyan);  text-shadow: var(--glow-cyan); }
+@keyframes pulse-status {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 1.0; }
+}
+
+/* ─── Stat-box: «дисплей счётчика» ─── */
+.stat-box {
+  background: linear-gradient(180deg, #0a0d13 0%, #11141a 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding-block: 6px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.stat-box:hover {
+  border-color: var(--cyan);
+  box-shadow: var(--glow-cyan);
+}
+.stat-val {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 4px currentColor;
+}
+.stat-lbl { text-transform: uppercase; letter-spacing: 0.07em; }
+
+/* ─── Цветные классы — все с glow ─── */
+.c-green   { color: var(--green);   text-shadow: var(--glow-green); }
+.c-cyan    { color: var(--cyan);    text-shadow: var(--glow-cyan); }
+.c-yellow  { color: var(--yellow);  text-shadow: var(--glow-yellow); }
+.c-red     { color: var(--red);     text-shadow: 0 0 6px rgba(255,56,80,0.55); }
+.c-magenta { color: var(--magenta); text-shadow: var(--glow-magenta); }
+.c-blue    { color: var(--blue);    text-shadow: 0 0 6px rgba(76,195,255,0.55); }
+.c-dim     { color: var(--dim); /* без glow — это второстепенное */ }
+
+/* ─── Recent responses items: lightweight log-row ─── */
+.resp-item {
+  border-left: 2px solid var(--border);
+  transition: border-color .12s, background .12s;
+}
+.resp-item:hover {
+  border-left-color: var(--cyan);
+  background: rgba(0,240,255,0.03);
+}
+.resp-time {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* ─── Acc-event-log / acc-history: терминал ─── */
+.acc-event-log, .acc-history {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 6px;
+}
+
+/* ─── Scrollbar: тонкий неон ─── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0a0d13; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--cyan), #006e76);
+  border-radius: 1px;
+  box-shadow: 0 0 6px rgba(0,240,255,0.5);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--cyan); box-shadow: var(--glow-cyan); }
+
+/* ─── Input fields: техно-стиль ─── */
+input, select, textarea, .apply-input {
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color .12s, box-shadow .12s;
+  border-radius: 2px;
+}
+input:focus, select:focus, textarea:focus, .apply-input:focus {
+  outline: none;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px var(--cyan), 0 0 8px rgba(0,240,255,0.35);
+}
+
+/* ─── Tables: techy ─── */
+table th {
+  background: linear-gradient(180deg, #11141a 0%, #0a0d13 100%);
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  text-shadow: 0 0 4px rgba(0,240,255,0.4);
+}
+table tr:hover td { background: rgba(0,240,255,0.025); }
+
+/* ─── badges общего вида (статус-чипы) ─── */
+.llm-sent-badge {
+  background: rgba(0,255,136,0.08);
+  border: 1px solid rgba(0,255,136,0.4);
+  color: var(--green);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 4px rgba(0,255,136,0.5);
+}
+.llm-draft-badge {
+  background: rgba(255,212,0,0.08);
+  border: 1px solid rgba(255,212,0,0.4);
+  color: var(--yellow);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 4px rgba(255,212,0,0.5);
+}
+
+/* ─── Cookies-expired badge — алярм ─── */
+.cookies-expired-badge {
+  background: rgba(255,56,80,0.08);
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 4px 8px;
+  border-radius: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 11px;
+  font-weight: 700;
+  text-shadow: 0 0 6px rgba(255,56,80,0.6);
+  box-shadow: 0 0 12px rgba(255,56,80,0.25);
+  animation: pulse-alert 1.6s ease-in-out infinite;
+}
+@keyframes pulse-alert {
+  0%, 100% { box-shadow: 0 0 8px rgba(255,56,80,0.2); }
+  50%      { box-shadow: 0 0 24px rgba(255,56,80,0.55); }
+}
+
+/* ─── Llm-toggle-btn состояния ─── */
+.llm-toggle-btn.llm-on  { color: var(--green); border-color: var(--green); text-shadow: var(--glow-green); }
+.llm-toggle-btn.llm-off { color: var(--dim); border-color: var(--dim); }
+.llm-toggle-btn.llm-on:hover  { box-shadow: 0 0 12px rgba(0,255,136,0.4); }
+
+/* ─── Touch toggle ─── */
+.touch-toggle.on  { color: var(--cyan); border-color: var(--cyan); text-shadow: var(--glow-cyan); }
+.touch-toggle.off { color: var(--dim); border-color: var(--dim); }
+
+/* ─── Hover на ссылки ─── */
+a {
+  color: var(--cyan);
+  text-decoration: none;
+  transition: text-shadow .12s, color .12s;
+}
+a:hover { text-shadow: var(--glow-cyan); }
+
+/* ─── Selection ─── */
+::selection {
+  background: rgba(0,240,255,0.35);
+  text-shadow: 0 0 6px rgba(0,240,255,0.7);
+  color: #fff;
+}
