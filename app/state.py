@@ -32,6 +32,9 @@ class AccountState:
         self.errors = 0
         self.already_applied = 0
         self.found_vacancies = 0
+        # ISO-строка datetime последнего успешного отклика (result=='sent').
+        # Используется в UI: «последний отклик: 14:23 (5 мин назад)»
+        self.last_apply_at: str = ""
 
         self.total_urls = len(acc_data["urls"])
 

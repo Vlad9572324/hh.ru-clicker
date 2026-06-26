@@ -2972,6 +2972,8 @@ function buildCardHTML(acc) {
       <span class="acc-resume-stat c-green">📬 <span id="acc-rs-inv-${acc.idx}">0</span> ${t('rs_inv')}</span>
       <span class="acc-touch-timer c-yellow" id="acc-touch-timer-${acc.idx}" style="display:none"></span>
     </div>
+    <div id="acc-last-apply-${acc.idx}" style="display:none;font-size:11px;color:var(--dim);padding:2px 0"></div>
+    <div id="acc-limit-eta-${acc.idx}" style="display:none;font-size:11px;padding:2px 0"></div>
     <div class="acc-history" id="acc-hist-${acc.idx}"></div>
     <div class="acc-event-log" id="acc-elog-${acc.idx}"></div>
     <div id="acc-errbadge-${acc.idx}" style="display:none;font-size:11px;padding:2px 0;margin-bottom:2px"></div>
@@ -3135,6 +3137,44 @@ function updateCard(card, acc) {
   const touchToggleEl = document.getElementById('acc-touch-toggle-' + acc.idx);
   const touchLabelEl  = document.getElementById('acc-touch-label-' + acc.idx);
   const touchBtn      = document.getElementById('acc-touch-btn-' + acc.idx);
+  // ── Last apply + limit ETA ──
+  const laEl = document.getElementById('acc-last-apply-' + acc.idx);
+  if (laEl) {
+    if (acc.last_apply_at) {
+      const ts = new Date(acc.last_apply_at);
+      const now = Date.now();
+      const diffSec = Math.max(0, Math.floor((now - ts.getTime()) / 1000));
+      let ago;
+      if (diffSec < 60) ago = `${diffSec}с`;
+      else if (diffSec < 3600) ago = `${Math.floor(diffSec/60)}м`;
+      else if (diffSec < 86400) ago = `${Math.floor(diffSec/3600)}ч ${Math.floor((diffSec%3600)/60)}м`;
+      else ago = `${Math.floor(diffSec/86400)}д`;
+      const tStr = ts.toLocaleTimeString('ru', {hour:'2-digit',minute:'2-digit'});
+      laEl.style.display = 'block';
+      laEl.innerHTML = `📤 последний отклик: <span style="color:var(--cyan)">${esc(tStr)}</span> · ${esc(ago)} назад`;
+    } else {
+      laEl.style.display = 'none';
+    }
+  }
+  const etaEl = document.getElementById('acc-limit-eta-' + acc.idx);
+  if (etaEl) {
+    const isLimited = acc.paused_reason === 'limit' || acc.hard_stopped || (acc.daily_limit > 0 && acc.daily_sent >= acc.daily_limit);
+    if (isLimited) {
+      // До 00:00 МСК (UTC+3)
+      const nowUtc = new Date();
+      // Construct next midnight MSK
+      const mskNow = new Date(nowUtc.getTime() + 3*3600*1000); // shift to MSK
+      const mskNextMidnight = new Date(Date.UTC(mskNow.getUTCFullYear(), mskNow.getUTCMonth(), mskNow.getUTCDate() + 1, 0, 0, 0));
+      const diffMs = mskNextMidnight.getTime() - mskNow.getTime();
+      const totalMin = Math.max(0, Math.floor(diffMs / 60000));
+      const h = Math.floor(totalMin / 60);
+      const min = totalMin % 60;
+      etaEl.style.display = 'block';
+      etaEl.innerHTML = `🛑 <span style="color:var(--red)">лимит HH</span> · сбросится через <b style="color:var(--yellow)">${h}ч ${min}м</b> (00:00 МСК)`;
+    } else {
+      etaEl.style.display = 'none';
+    }
+  }
   const autoOn = acc.resume_touch_enabled !== false;
   const m = acc.next_resume_touch ? acc.next_resume_touch.match(/\(([^)]+)\)/) : null;
   const countdown = m && m[1]; // "2ч30м"

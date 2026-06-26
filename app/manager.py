@@ -620,6 +620,8 @@ class BotManager:
                 "daily_sent": s.daily_sent,
                 "daily_limit": CONFIG.daily_apply_limit,
                 "hard_stopped": s.hard_stopped,
+                "last_apply_at": s.last_apply_at,
+                "paused_reason": s.paused_reason,
             })
 
         # Temp browser sessions — append after regular accounts
@@ -714,6 +716,8 @@ class BotManager:
                     "daily_sent": s.daily_sent,
                     "daily_limit": CONFIG.daily_apply_limit,
                     "hard_stopped": s.hard_stopped,
+                    "last_apply_at": s.last_apply_at,
+                    "paused_reason": s.paused_reason,
                 })
             else:
                 # Неактивная сессия — заглушка
@@ -1295,6 +1299,7 @@ class BotManager:
                         self._maybe_roll_daily_counter(state)
                         state.daily_sent += 1
                         state.consecutive_errors = 0  # сброс счётчика ошибок
+                        state.last_apply_at = datetime.now().isoformat(timespec="seconds")
                         # Дополняем info мета-данными из поиска если API не вернул title
                         if not info.get("title"):
                             meta_fb = state.vacancy_meta.get(vid, {})
