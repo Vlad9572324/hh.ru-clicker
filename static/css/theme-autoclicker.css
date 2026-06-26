@@ -157,28 +157,81 @@ button:active, .btn-sm:active { transform: translateY(1px); }
   50%      { box-shadow: 0 0 0 1px var(--red), 0 0 22px rgba(255,56,80,0.65); }
 }
 
-/* ─── Cards / account-cards: terminal-window vibe ─── */
+/* ─── Cards / account-cards: HUD terminal-window ─── */
 .card, .acc-card {
-  background: linear-gradient(180deg, var(--bg-card) 0%, #0e1219 100%);
+  background:
+    linear-gradient(180deg, var(--bg-card) 0%, #0a0d13 100%);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   position: relative;
   transition: border-color .15s, box-shadow .15s, transform .08s;
+  overflow: hidden;
 }
+/* Циан-полоса под верхним краем (как top-bar в game UI) */
 .card::before, .acc-card::before {
-  /* Угловые «уголки» как в game HUD */
   content: "";
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, var(--cyan) 50%, transparent 100%);
-  opacity: 0.4;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--cyan) 20%,
+    rgba(255,255,255,0.8) 50%,
+    var(--cyan) 80%,
+    transparent 100%);
+  opacity: 0.6;
   pointer-events: none;
+  z-index: 1;
+}
+/* Угловые «уголки» как в targeting reticle */
+.card::after, .acc-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    /* верх-лево */
+    linear-gradient(90deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) top left/14px 1px no-repeat,
+    linear-gradient(180deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) top left/1px 14px no-repeat,
+    /* верх-право */
+    linear-gradient(270deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) top right/14px 1px no-repeat,
+    linear-gradient(180deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) top right/1px 14px no-repeat,
+    /* низ-лево */
+    linear-gradient(90deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) bottom left/14px 1px no-repeat,
+    linear-gradient(0deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) bottom left/1px 14px no-repeat,
+    /* низ-право */
+    linear-gradient(270deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) bottom right/14px 1px no-repeat,
+    linear-gradient(0deg, var(--cyan) 0, var(--cyan) 14px, transparent 14px) bottom right/1px 14px no-repeat;
+  opacity: 0.55;
+  z-index: 1;
 }
 .card:hover, .acc-card:hover {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 1px rgba(0,240,255,0.25), 0 8px 24px rgba(0,0,0,0.55);
+  box-shadow:
+    0 0 0 1px rgba(0,240,255,0.4),
+    0 0 24px rgba(0,240,255,0.15),
+    0 12px 32px rgba(0,0,0,0.7);
+  transform: translateY(-1px);
 }
+.card:hover::after, .acc-card:hover::after { opacity: 1; }
+
+/* Цветные left-border'ы — теперь толще + glow */
+.acc-card.color-cyan    { border-left: 3px solid var(--cyan);    box-shadow: -3px 0 12px rgba(0,240,255,0.20); }
+.acc-card.color-magenta { border-left: 3px solid var(--magenta); box-shadow: -3px 0 12px rgba(255,76,255,0.20); }
+.acc-card.color-green   { border-left: 3px solid var(--green);   box-shadow: -3px 0 12px rgba(0,255,136,0.20); }
+.acc-card.color-yellow  { border-left: 3px solid var(--yellow);  box-shadow: -3px 0 12px rgba(255,212,0,0.20); }
+.acc-card.color-red     { border-left: 3px solid var(--red);     box-shadow: -3px 0 12px rgba(255,56,80,0.20); }
+.acc-card.color-blue    { border-left: 3px solid var(--blue);    box-shadow: -3px 0 12px rgba(76,195,255,0.20); }
+
+.acc-card.color-cyan:hover    { box-shadow: -3px 0 16px rgba(0,240,255,0.35),    0 0 0 1px rgba(0,240,255,0.4),    0 12px 32px rgba(0,0,0,0.7); }
+.acc-card.color-magenta:hover { box-shadow: -3px 0 16px rgba(255,76,255,0.35),   0 0 0 1px rgba(255,76,255,0.4),   0 12px 32px rgba(0,0,0,0.7); }
+.acc-card.color-green:hover   { box-shadow: -3px 0 16px rgba(0,255,136,0.35),    0 0 0 1px rgba(0,255,136,0.4),    0 12px 32px rgba(0,0,0,0.7); }
+.acc-card.color-yellow:hover  { box-shadow: -3px 0 16px rgba(255,212,0,0.35),    0 0 0 1px rgba(255,212,0,0.4),    0 12px 32px rgba(0,0,0,0.7); }
+.acc-card.color-red:hover     { box-shadow: -3px 0 16px rgba(255,56,80,0.35),    0 0 0 1px rgba(255,56,80,0.4),     0 12px 32px rgba(0,0,0,0.7); }
+.acc-card.color-blue:hover    { box-shadow: -3px 0 16px rgba(76,195,255,0.35),   0 0 0 1px rgba(76,195,255,0.4),   0 12px 32px rgba(0,0,0,0.7); }
+
+/* Контент карточек должен быть НАД .card::after */
+.card > *, .acc-card > * { position: relative; z-index: 2; }
 
 .card-title {
   text-transform: uppercase;
@@ -211,24 +264,58 @@ button:active, .btn-sm:active { transform: translateY(1px); }
   50%      { opacity: 1.0; }
 }
 
-/* ─── Stat-box: «дисплей счётчика» ─── */
+/* ─── Stat-box: «дисплей счётчика» (LED-style) ─── */
 .stat-box {
-  background: linear-gradient(180deg, #0a0d13 0%, #11141a 100%);
+  background:
+    linear-gradient(180deg, #0a0d13 0%, #11141a 100%),
+    repeating-linear-gradient(0deg, transparent 0, transparent 1px, rgba(0,240,255,0.04) 1px, rgba(0,240,255,0.04) 2px);
   border: 1px solid var(--border);
-  border-radius: 2px;
-  padding-block: 6px;
-  transition: border-color .15s, box-shadow .15s;
+  border-radius: 3px;
+  padding-block: 8px;
+  position: relative;
+  transition: border-color .15s, box-shadow .15s, transform .08s;
+}
+.stat-box::before {
+  /* Тонкая полоска сверху как на LCD дисплее */
+  content: "";
+  position: absolute;
+  top: 0; left: 4px; right: 4px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: 0.35;
 }
 .stat-box:hover {
   border-color: var(--cyan);
-  box-shadow: var(--glow-cyan);
+  box-shadow: 0 0 0 1px rgba(0,240,255,0.3), 0 0 16px rgba(0,240,255,0.2);
+  transform: translateY(-1px);
 }
 .stat-val {
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.03em;
-  text-shadow: 0 0 4px currentColor;
+  letter-spacing: 0.04em;
+  text-shadow:
+    0 0 4px currentColor,
+    0 0 10px rgba(0,240,255,0.3);
+  font-weight: 800 !important;
 }
-.stat-lbl { text-transform: uppercase; letter-spacing: 0.07em; }
+.stat-lbl { text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+
+/* ─── Sidebar cards (audit / лиды / контакты / OAuth / резюме) ─── */
+#sidebar .card {
+  background:
+    linear-gradient(180deg, var(--bg-card) 0%, #0a0d13 100%),
+    radial-gradient(ellipse at 0% 0%, rgba(0,240,255,0.06) 0%, transparent 60%);
+}
+.card-title {
+  position: relative;
+  padding-left: 4px;
+}
+.card-title::before {
+  /* ▸ маркер слева как в Cheat Engine */
+  content: "▸";
+  color: var(--cyan);
+  margin-right: 6px;
+  text-shadow: var(--glow-cyan);
+}
 
 /* ─── Цветные классы — все с glow ─── */
 .c-green   { color: var(--green);   text-shadow: var(--glow-green); }
