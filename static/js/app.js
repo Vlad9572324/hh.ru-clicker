@@ -186,6 +186,13 @@ const T = {
     hint_limit_check_interval: 'Как часто проверять сброс дневного лимита откликов',
     lbl_min_salary: 'Минимальная зарплата (₽)',
     hint_min_salary: 'Пропускать вакансии с зарплатой ниже указанной (0 = без фильтра)',
+    lbl_min_employer_rating: 'Мин. рейтинг работодателя',
+    hint_min_employer_rating: '⭐ Пропускать вакансии работодателей с рейтингом ниже (0 = без фильтра, 3.0–3.5 типично)',
+    lbl_min_recommendations_percent: 'Мин. % рекомендаций',
+    hint_min_recommendations_percent: '% бывших сотрудников рекомендующих работодателя (0 = без фильтра)',
+    smart_filter_skip_auto_resp: 'Без auto-feed',
+    smart_filter_quick_resp: 'Quick-response в начало',
+    smart_filter_it_only: 'Только IT-аккредитация',
     lbl_auto_pause_errors: 'Авто-пауза при ошибках',
     hint_auto_pause_errors: 'Авто-пауза аккаунта после N ошибок подряд (0 = выключено)',
     // Settings sections
@@ -446,6 +453,13 @@ const T = {
     hint_limit_check_interval: 'How often to check daily reply limit reset',
     lbl_min_salary: 'Minimum salary (₽)',
     hint_min_salary: 'Skip vacancies with salary below specified (0 = no filter)',
+    lbl_min_employer_rating: 'Min. employer rating',
+    hint_min_employer_rating: '⭐ Skip vacancies from employers below this rating (0 = off, 3.0–3.5 typical)',
+    lbl_min_recommendations_percent: 'Min. recommendations %',
+    hint_min_recommendations_percent: '% of ex-employees recommending the employer (0 = off)',
+    smart_filter_skip_auto_resp: 'No auto-feed',
+    smart_filter_quick_resp: 'Quick-response first',
+    smart_filter_it_only: 'IT-accredited only',
     lbl_auto_pause_errors: 'Auto-pause on errors',
     hint_auto_pause_errors: 'Auto-pause account after N consecutive errors (0 = disabled)',
     // Settings sections
@@ -628,6 +642,8 @@ const SETTINGS_DEF = [
   { key: 'batch_responses',      labelKey: 'lbl_batch_responses',      descKey: 'hint_batch_responses',      min: 1,  max: 10,  step: 1  },
   { key: 'limit_check_interval', labelKey: 'lbl_limit_check_interval', descKey: 'hint_limit_check_interval', min: 5,  max: 120, step: 5  },
   { key: 'min_salary',           labelKey: 'lbl_min_salary',           descKey: 'hint_min_salary',           min: 0,  max: 300000, step: 10000 },
+  { key: 'min_employer_rating',  labelKey: 'lbl_min_employer_rating',  descKey: 'hint_min_employer_rating',  min: 0,  max: 5,   step: 0.1, isFloat: true },
+  { key: 'min_recommendations_percent', labelKey: 'lbl_min_recommendations_percent', descKey: 'hint_min_recommendations_percent', min: 0, max: 100, step: 5 },
   { key: 'auto_pause_errors',    labelKey: 'lbl_auto_pause_errors',    descKey: 'hint_auto_pause_errors',    min: 0,  max: 20,  step: 1  },
 ];
 
@@ -3057,6 +3073,15 @@ function buildCardHTML(acc) {
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
             <input type="checkbox" class="smart-filter-cb" data-key="auto_apply_tests" style="accent-color:var(--magenta)"> 🧪 ${t('smart_filter_auto_tests')}
+          </label>
+          <label style="cursor:pointer;display:flex;align-items:center;gap:4px" title="auto_response=true: вакансии массовой раздачи откликов, обычно низкое качество">
+            <input type="checkbox" class="smart-filter-cb" data-key="skip_auto_response_vacancies" style="accent-color:var(--red)"> 🤖 ${t('smart_filter_skip_auto_resp')}
+          </label>
+          <label style="cursor:pointer;display:flex;align-items:center;gap:4px" title="quick_responses_allowed → в начало очереди">
+            <input type="checkbox" class="smart-filter-cb" data-key="prefer_quick_responses" style="accent-color:var(--green)"> ⚡ ${t('smart_filter_quick_resp')}
+          </label>
+          <label style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Только аккредитованные IT-работодатели">
+            <input type="checkbox" class="smart-filter-cb" data-key="accredited_it_only" style="accent-color:var(--cyan)"> 💻 ${t('smart_filter_it_only')}
           </label>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px">
