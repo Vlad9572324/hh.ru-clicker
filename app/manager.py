@@ -1506,17 +1506,26 @@ class BotManager:
                         break
 
                     elif result == "auth_error":
-                        if state.use_oauth or CONFIG.use_oauth_apply:
-                            # OAuth mode — web cookies expired but OAuth handles apply
-                            # Log once per cycle, don't count as error (OAuth is working)
+                        oauth_capable = (
+                            state.use_oauth
+                            or CONFIG.use_oauth_apply
+                            or (state.degraded_fallback_enabled and bool(acc.get("resume_hash")))
+                        )
+                        if oauth_capable:
+                            # Cookies истекли, но OAuth доступен — переходим на degraded
+                            # путь: выходим из батча, следующий цикл соберёт через
+                            # api.hh.ru и применит через _oauth_apply.
                             if not getattr(state, '_web_auth_warned', False):
                                 self._add_log(
                                     state.short, state.color,
-                                    "⚠️ Web cookies истекли (OAuth откликов продолжает работать)", "warning",
+                                    "⚠️ Web cookies истекли → переключаюсь на OAuth API", "warning",
                                 )
                                 state._web_auth_warned = True
-                            log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply")
+                            log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply → degraded")
                             state.cookies_expired = True
+                            # Прервать текущий батч cookie-applies, не пытаемся снова
+                            # тем же путём в этом цикле.
+                            break
                         else:
                             log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply")
                             state.cookies_expired = True
@@ -1541,6 +1550,10 @@ class BotManager:
                         self._check_auto_pause(state)
 
                 if state.limit_exceeded:
+                    break
+                # Cookies протухли в этом цикле — выходим из всего apply-цикла,
+                # на следующем тике воркер пойдёт OAuth-путём.
+                if state.cookies_expired:
                     break
 
                 i += batch_size
