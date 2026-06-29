@@ -3298,7 +3298,10 @@ function updateCard(card, acc) {
     const oa = acc.oauth_status || {};
     if (acc.cookies_expired && oa.has_token) {
       cookiesBadge.style.display = '';
-      cookiesBadge.innerHTML = `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
+      const skipNote = acc.degraded_skipped ? ` · пропущено ${acc.degraded_skipped} (опросники/тесты)` : '';
+      cookiesBadge.innerHTML = acc.degraded_mode
+        ? `⚠️ Degraded OAuth-режим (${oa.expires_hours}ч)${skipNote}`
+        : `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
       cookiesBadge.style.color = 'var(--yellow)';
     } else if (acc.cookies_expired && !oa.has_token) {
       cookiesBadge.style.display = '';

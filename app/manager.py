@@ -59,6 +59,7 @@ from app.storage import (
 from app.oauth import (
     _oauth_apply,
     get_oauth_status,
+    _obtain_oauth_token,
 )
 
 from app.hh_api import (
@@ -611,6 +612,8 @@ class BotManager:
                 "consecutive_errors": s.consecutive_errors,
                 "url_stats": dict(s.url_stats),
                 "cookies_expired": s.cookies_expired,
+                "degraded_mode": s.degraded_mode,
+                "degraded_skipped": s.degraded_skipped,
                 "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
@@ -711,6 +714,8 @@ class BotManager:
                     "consecutive_errors": s.consecutive_errors,
                     "url_stats": dict(s.url_stats),
                     "cookies_expired": s.cookies_expired,
+                    "degraded_mode": s.degraded_mode,
+                    "degraded_skipped": s.degraded_skipped,
                     "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
                     "use_oauth": s.use_oauth,
@@ -753,6 +758,8 @@ class BotManager:
                     "consecutive_errors": 0,
                     "url_stats": {},
                     "cookies_expired": False,
+                    "degraded_mode": False,
+                    "degraded_skipped": 0,
                     "llm_enabled": True,
                     "use_oauth": bool(ts.get("use_oauth", False)),
                     "daily_sent": 0,
@@ -997,8 +1004,24 @@ class BotManager:
                 "info",
             )
 
+            # Degraded mode: cookies протухли, но OAuth refresh_token живой.
+            # Используем api.hh.ru/vacancies вместо cookie-based scraping.
+            use_oauth_collect = state.cookies_expired and bool(acc.get("resume_hash"))
             try:
-                results_by_url, salary_map, schedule_map = asyncio.run(self._collect_all_urls_parallel(state))
+                if use_oauth_collect:
+                    results_by_url, salary_map, schedule_map = self._collect_via_oauth_api(state)
+                    state.degraded_mode = bool(any(v for v in results_by_url.values()))
+                    if state.degraded_mode:
+                        self._add_log(
+                            state.short, state.color,
+                            "⚠️ Cookies dead → degraded OAuth-режим (без опросников/тестов)",
+                            "warning",
+                        )
+                else:
+                    results_by_url, salary_map, schedule_map = asyncio.run(self._collect_all_urls_parallel(state))
+                    if not state.cookies_expired:
+                        # Снимаем degraded флаг если cookies снова валидны.
+                        state.degraded_mode = False
             except Exception as e:
                 log_exception(f"COLLECT CRASH [{state.short}]", e)
                 state.status = "error"
@@ -1028,12 +1051,14 @@ class BotManager:
             )
 
             if not unique_vacancies:
-                if state.cookies_expired:
+                if state.cookies_expired and not state.degraded_mode:
+                    # Cookies dead AND OAuth fallback тоже не вернул ничего —
+                    # тогда уже честная пауза до обновления кук.
                     state.paused = True
                     state.paused_reason = "auth"
                     self._add_log(
                         state.short, state.color,
-                        "⚠️ Куки протухли! Обновите куки и снимите паузу.", "error",
+                        "⚠️ Куки протухли и OAuth-fallback пуст. Обновите куки.", "error",
                     )
                     self._add_acc_event(state, "⚠️", "error", "Авторизация", "", "Обновите куки")
                     continue
@@ -1082,6 +1107,14 @@ class BotManager:
                 hh_labels = meta.get("hh_labels") or []
                 if "DISCARD" in hh_labels:
                     discard_skipped += 1
+                    continue
+                # Degraded mode: без cookies не заполнить опросник и тест —
+                # пропускаем вакансии где они требуются. Поле `has_test`
+                # отдаёт OAuth-сборщик; `response_letter_required` тоже.
+                if state.degraded_mode and (
+                    meta.get("has_test") or meta.get("response_letter_required")
+                ):
+                    state.degraded_skipped += 1
                     continue
                 if is_applied(acc["name"], vid):
                     already_count += 1
@@ -1258,8 +1291,9 @@ class BotManager:
                         "info",
                     )
 
-                # Choose apply method: OAuth API or Web (per-account or global)
-                if state.use_oauth or CONFIG.use_oauth_apply:
+                # Choose apply method: OAuth API or Web (per-account or global).
+                # Также форс-OAuth в degraded mode (cookies dead, токен живой).
+                if state.use_oauth or CONFIG.use_oauth_apply or state.degraded_mode:
                     # OAuth: synchronous, one by one (API doesn't support batch)
                     results = []
                     for vid in batch:
@@ -1524,6 +1558,85 @@ class BotManager:
                 )
                 if self._stop_event.wait(CONFIG.pause_between_cycles):
                     return
+
+    def _collect_via_oauth_api(self, state: AccountState) -> tuple:
+        """Degraded-mode collection via api.hh.ru/vacancies with Bearer token.
+        Used when cookies are dead but OAuth refresh_token still valid.
+
+        URL pool entries (hh.ru/search/vacancy?text=...) → api.hh.ru/vacancies?{same params}.
+        HH preserves identical query-string parameter names between the search UI and
+        the public OAuth API, so we can just swap host and forward the params.
+
+        Returns the same (results_by_url, salary_map, schedule_map) shape as the cookie
+        collector. Also writes has_test / response_letter_required into vacancy_meta so
+        the apply loop can skip vacancies we can't fulfil without cookies.
+        """
+        import urllib.parse as _up
+        acc = state.acc
+        token = _obtain_oauth_token(acc)
+        if not token:
+            return {}, {}, {}
+        headers = {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {token}"}
+        url_pages = _url_pages_map()
+        acc_url_pages = acc.get("url_pages", {})
+        effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
+        results_by_url = {url: [] for url in effective_urls}
+        salary_map: dict = {}
+        schedule_map: dict = {}
+        total_pages = 0
+        completed = 0
+        for url in effective_urls:
+            total_pages += acc_url_pages.get(url) or url_pages.get(url, CONFIG.pages_per_url)
+        # Translate one search URL → OAuth API request
+        for url in effective_urls:
+            pages = acc_url_pages.get(url) or url_pages.get(url, CONFIG.pages_per_url)
+            parsed = _up.urlparse(url)
+            base_params = _up.parse_qsl(parsed.query, keep_blank_values=False)
+            # remove cookie-search-only keys; keep the rest verbatim
+            base_params = [(k, v) for k, v in base_params if k not in ("items_on_page", "no_magic", "ored_clusters")]
+            ids_for_url: set = set()
+            for page in range(pages):
+                if state._deleted:
+                    break
+                page_params = list(base_params) + [("per_page", "50"), ("page", str(page))]
+                try:
+                    import requests as _rq
+                    r = _rq.get("https://api.hh.ru/vacancies", params=page_params,
+                                headers=headers, timeout=15)
+                    completed += 1
+                    state.status_detail = f"OAuth-сбор {completed}/{total_pages}"
+                    if r.status_code in (401, 403):
+                        log_debug(f"OAuth collect auth_error for {state.short}")
+                        return {}, {}, {}
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                except Exception as e:
+                    log_debug(f"OAuth collect error [{state.short}] page={page}: {e}")
+                    continue
+                items = data.get("items", []) or []
+                for it in items:
+                    vid = str(it.get("id") or "")
+                    if not vid:
+                        continue
+                    ids_for_url.add(vid)
+                    # Build meta entry — mirror parse_vacancy_meta shape
+                    meta_entry = state.vacancy_meta.setdefault(vid, {})
+                    meta_entry["title"] = it.get("name", "") or meta_entry.get("title", "")
+                    emp = it.get("employer") or {}
+                    meta_entry["company"] = emp.get("name", "") or meta_entry.get("company", "")
+                    meta_entry["has_test"] = bool(it.get("has_test"))
+                    meta_entry["response_letter_required"] = bool(it.get("response_letter_required"))
+                    sal = it.get("salary")
+                    if isinstance(sal, dict):
+                        salary_map[vid] = sal.get("from") or sal.get("to")
+                    sch = it.get("schedule")
+                    if isinstance(sch, dict) and sch.get("id"):
+                        schedule_map.setdefault(vid, set()).add(sch["id"])
+                if not items or data.get("pages", 0) and page + 1 >= data["pages"]:
+                    break
+            results_by_url[url] = ids_for_url
+        return results_by_url, salary_map, schedule_map
 
     async def _collect_all_urls_parallel(self, state: AccountState) -> tuple:
         """

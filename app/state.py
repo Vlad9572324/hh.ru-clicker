@@ -127,6 +127,13 @@ class AccountState:
         # stored in acc["url_pages"]
         # Cookie expiry flag — set when 401/403 or login redirect detected
         self.cookies_expired: bool = False
+        # Degraded mode: cookies dead, но OAuth token живой → продолжаем
+        # работать через api.hh.ru (поиск + отклик + чат). Опросники / тесты
+        # недоступны — такие вакансии отфильтровываются.
+        self.degraded_mode: bool = False
+        # Stats для UI: счётчик пропусков вакансий из-за has_test/letter_required
+        # в degraded mode (не можем заполнить опросник без cookies).
+        self.degraded_skipped: int = 0
 
         # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
         # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →
