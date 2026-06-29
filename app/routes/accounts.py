@@ -501,6 +501,34 @@ async def api_apply_tests(idx: int):
     return {"ok": False, "error": "Аккаунт не найден"}
 
 
+@router.post("/api/account/{idx}/degraded_fallback")
+async def api_degraded_fallback(idx: int):
+    """Переключить degraded_fallback_enabled — при cookies_expired
+    автоматически переходить на OAuth API (default ON)."""
+    base = len(bot.account_states)
+    if idx < base:
+        state = bot.account_states[idx]
+        state.degraded_fallback_enabled = not state.degraded_fallback_enabled
+        accounts_data[idx]["degraded_fallback_enabled"] = state.degraded_fallback_enabled
+        save_accounts()
+        return {"ok": True, "degraded_fallback_enabled": state.degraded_fallback_enabled}
+    ti = idx - base
+    state = bot.temp_states.get(ti)
+    if state:
+        state.degraded_fallback_enabled = not state.degraded_fallback_enabled
+        if 0 <= ti < len(bot.temp_sessions):
+            bot.temp_sessions[ti]["degraded_fallback_enabled"] = state.degraded_fallback_enabled
+            save_browser_sessions(bot.temp_sessions)
+        return {"ok": True, "degraded_fallback_enabled": state.degraded_fallback_enabled}
+    # temp session not yet activated — flip in temp_sessions list only
+    if 0 <= ti < len(bot.temp_sessions):
+        cur = bot.temp_sessions[ti].get("degraded_fallback_enabled", True)
+        bot.temp_sessions[ti]["degraded_fallback_enabled"] = not cur
+        save_browser_sessions(bot.temp_sessions)
+        return {"ok": True, "degraded_fallback_enabled": not cur}
+    return {"ok": False, "error": "Аккаунт не найден"}
+
+
 @router.get("/api/account/{idx}/resume_text")
 async def api_resume_text(idx: int):
     """Получить и вернуть текстовое представление резюме (для проверки)."""

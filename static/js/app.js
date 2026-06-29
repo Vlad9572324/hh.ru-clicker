@@ -2984,6 +2984,11 @@ function buildCardHTML(acc) {
         onchange="applyTestsToggle(${acc.idx}, this)">
       ${t('card_apply_tests')}
     </label>
+    <label class="acc-skip-tests${(acc.degraded_fallback_enabled !== false) ? ' active' : ''}" id="acc-degraded-label-${acc.idx}" title="При протухших cookies автоматически продолжать откликаться через OAuth API (без опросников/тестов)">
+      <input type="checkbox" id="acc-degraded-cb-${acc.idx}" ${(acc.degraded_fallback_enabled !== false) ? 'checked' : ''}
+        onchange="degradedFallbackToggle(${acc.idx}, this)">
+      🔑 OAuth-fallback при протухших cookies
+    </label>
     <div class="acc-actions">
       <button class="btn-sm" id="acc-pause-btn-${acc.idx}"
         onclick="sendCmd({type:'account_pause', idx:${acc.idx}})">${t('btn_acc_pause')}</button>
@@ -3404,6 +3409,21 @@ function updateCard(card, acc) {
   if (skipLabel) {
     if (acc.apply_tests) skipLabel.classList.add('active');
     else skipLabel.classList.remove('active');
+  }
+
+  // Degraded-fallback checkbox (default ON — if field missing, treat as enabled)
+  const degCb = document.getElementById('acc-degraded-cb-' + acc.idx);
+  const degLabel = document.getElementById('acc-degraded-label-' + acc.idx);
+  const degOn = acc.degraded_fallback_enabled !== false;
+  if (degCb) {
+    const localToggleAt = parseInt(degCb.dataset.localToggleAt || '0', 10);
+    if (Date.now() - localToggleAt > 2000 && degCb.checked !== degOn) {
+      degCb.checked = degOn;
+    }
+  }
+  if (degLabel) {
+    if (degOn) degLabel.classList.add('active');
+    else degLabel.classList.remove('active');
   }
 
   // Pause button — учитываем глобальную паузу
@@ -5212,6 +5232,22 @@ async function applyTestsToggle(idx, cb) {
     const label = document.getElementById('acc-apply-label-' + idx);
     if (label) {
       if (data.apply_tests) label.classList.add('active');
+      else label.classList.remove('active');
+    }
+  } catch(e) {
+    cb.checked = !cb.checked;
+  }
+}
+
+async function degradedFallbackToggle(idx, cb) {
+  cb.dataset.localToggleAt = String(Date.now());
+  try {
+    const res = await fetch(`/api/account/${idx}/degraded_fallback`, {method:'POST'});
+    const data = await res.json();
+    if (!data.ok) { cb.checked = !cb.checked; return; }
+    const label = document.getElementById('acc-degraded-label-' + idx);
+    if (label) {
+      if (data.degraded_fallback_enabled) label.classList.add('active');
       else label.classList.remove('active');
     }
   } catch(e) {

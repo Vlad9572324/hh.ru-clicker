@@ -614,6 +614,7 @@ class BotManager:
                 "cookies_expired": s.cookies_expired,
                 "degraded_mode": s.degraded_mode,
                 "degraded_skipped": s.degraded_skipped,
+                "degraded_fallback_enabled": s.degraded_fallback_enabled,
                 "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
@@ -716,6 +717,7 @@ class BotManager:
                     "cookies_expired": s.cookies_expired,
                     "degraded_mode": s.degraded_mode,
                     "degraded_skipped": s.degraded_skipped,
+                    "degraded_fallback_enabled": s.degraded_fallback_enabled,
                     "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
                     "use_oauth": s.use_oauth,
@@ -760,6 +762,7 @@ class BotManager:
                     "cookies_expired": False,
                     "degraded_mode": False,
                     "degraded_skipped": 0,
+                    "degraded_fallback_enabled": bool(ts.get("degraded_fallback_enabled", True)),
                     "llm_enabled": True,
                     "use_oauth": bool(ts.get("use_oauth", False)),
                     "daily_sent": 0,
@@ -1006,7 +1009,13 @@ class BotManager:
 
             # Degraded mode: cookies протухли, но OAuth refresh_token живой.
             # Используем api.hh.ru/vacancies вместо cookie-based scraping.
-            use_oauth_collect = state.cookies_expired and bool(acc.get("resume_hash"))
+            # Per-account тумблер degraded_fallback_enabled (default True) даёт
+            # юзеру отключить авто-fallback для конкретного аккаунта.
+            use_oauth_collect = (
+                state.cookies_expired
+                and bool(acc.get("resume_hash"))
+                and state.degraded_fallback_enabled
+            )
             try:
                 if use_oauth_collect:
                     results_by_url, salary_map, schedule_map = self._collect_via_oauth_api(state)

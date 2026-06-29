@@ -134,6 +134,11 @@ class AccountState:
         # Stats для UI: счётчик пропусков вакансий из-за has_test/letter_required
         # в degraded mode (не можем заполнить опросник без cookies).
         self.degraded_skipped: int = 0
+        # Per-account toggle. Default True: при cookies_expired автоматически
+        # уходим в OAuth-режим. False → классическая пауза до обновления кук.
+        self.degraded_fallback_enabled: bool = bool(
+            acc_data.get("degraded_fallback_enabled", True)
+        )
 
         # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
         # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →
