@@ -613,6 +613,60 @@ def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
     return info
 
 
+_vacancy_details_cache: dict = {}  # {vid: (expiry, dict)}
+_vacancy_details_lock = threading.Lock()
+
+
+def fetch_vacancy_details(acc: dict, vid: str) -> dict:
+    """GET /vacancies/{vid} via OAuth — full vacancy fields beyond search.
+    Returns {auto_response, quick_responses_allowed, accredited_it_employer,
+    key_skills:[name], work_format:[id], languages:[id]}. Cached 6h.
+    {} on transient error → retried next call."""
+    if not vid:
+        return {}
+    now = time.time()
+    with _vacancy_details_lock:
+        cached = _vacancy_details_cache.get(vid)
+        if cached and cached[0] > now:
+            return cached[1]
+    H = _oauth_headers(acc)
+    if not H:
+        return {}
+    try:
+        r = requests.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=10)
+        if r.status_code == 404:
+            with _vacancy_details_lock:
+                _vacancy_details_cache[vid] = (now + 3600, {"archived": True})
+            return {"archived": True}
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+        emp = d.get("employer") or {}
+        info = {
+            "auto_response": bool(d.get("auto_response")),
+            "quick_responses_allowed": bool(d.get("quick_responses_allowed")),
+            "accredited_it_employer": bool(emp.get("accredited_it_employer")),
+            "trusted_employer": bool(emp.get("trusted")),
+            "key_skills": [s.get("name", "") for s in (d.get("key_skills") or []) if isinstance(s, dict)],
+            "work_format": [
+                (w.get("id") if isinstance(w, dict) else str(w))
+                for w in (d.get("work_format") or [])
+            ],
+            "languages": [
+                (l.get("id") if isinstance(l, dict) else str(l))
+                for l in (d.get("languages") or [])
+            ],
+            "response_letter_required": bool(d.get("response_letter_required")),
+            "billing_type": (d.get("billing_type") or {}).get("id", ""),
+        }
+    except Exception as e:
+        log_debug(f"vacancy_details({vid}) error: {e}")
+        return {}
+    with _vacancy_details_lock:
+        _vacancy_details_cache[vid] = (now + 21600, info)  # 6h
+    return info
+
+
 def fetch_resume_status(acc: dict) -> dict:
     """Resume status: published/blocked, finished, progress.percentage, moderation_note.
     Cached 5 min."""
@@ -729,6 +783,79 @@ def _oauth_touch_resume(acc: dict) -> tuple:
             return False, f"HTTP {r.status_code}: {r.text[:100]}"
     except Exception as e:
         return False, f"Ошибка: {str(e)[:50]}"
+
+
+def fetch_negotiation_messages_oauth(acc: dict, neg_id, max_messages: int = 20) -> list:
+    """GET /negotiations/{neg_id}/messages — chat history через официальный
+    OAuth API (без cookies). Возвращает [{sender, text, msg_id, viewed_by_me,
+    author_type}] в хронологическом порядке (oldest first), последние
+    `max_messages` записей.
+
+    Заменяет reverse-engineered chatik.hh.ru-scraping когда:
+    - cookies протухли (degraded mode),
+    - либо включён CONFIG.chat_use_oauth.
+    """
+    if not neg_id:
+        return []
+    H = _oauth_headers(acc)
+    if not H:
+        return []
+    try:
+        r = requests.get(
+            f"https://api.hh.ru/negotiations/{neg_id}/messages",
+            headers=H, params={"per_page": max_messages, "order_by": "asc"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            log_debug(f"OAuth chat history neg={neg_id}: HTTP {r.status_code}")
+            return []
+        items = (r.json() or {}).get("items", []) or []
+        out: list = []
+        for m in items[-max_messages:]:
+            author = m.get("author") or {}
+            atype = (author.get("participant_type") or "").lower()  # 'applicant' | 'employer'
+            sender = "applicant" if atype == "applicant" else "employer"
+            out.append({
+                "sender": sender,
+                "text": (m.get("text") or "").strip(),
+                "msg_id": m.get("id"),
+                "viewed_by_me": bool(m.get("viewed_by_me")),
+                "author_type": atype,
+            })
+        return out
+    except Exception as e:
+        log_debug(f"OAuth chat history neg={neg_id} error: {e}")
+        return []
+
+
+def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
+    """POST /negotiations/{neg_id}/messages — альтернатива
+    `send_chat_message_oauth` (которая работает через /common/chats).
+    Бот выбирает этот путь когда у нас есть neg_id (а не chat_id) и/или
+    в degraded mode. Возвращает True/False."""
+    if not neg_id:
+        return False
+    H = _oauth_headers(acc)
+    if not H:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.hh.ru/negotiations/{neg_id}/messages",
+            headers={**H, "Content-Type": "application/json"},
+            json={"message": text}, timeout=15,
+        )
+        log_debug(f"OAuth /negotiations send neg={neg_id}: HTTP {r.status_code} | {r.text[:200]}")
+        if r.status_code in (200, 201, 204):
+            return True
+        if r.status_code == 403:
+            # Invalidate token — потом lazy-refresh подхватит
+            rh = acc.get("resume_hash", "")
+            if rh:
+                invalidate_oauth_token(rh, acc)
+        return False
+    except Exception as e:
+        log_debug(f"OAuth /negotiations send neg={neg_id} error: {e}")
+        return False
 
 
 def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = True):

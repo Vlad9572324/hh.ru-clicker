@@ -322,10 +322,21 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
     import uuid as _uuid
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    # OAuth-first path
+    # OAuth-first path. Degraded mode forces OAuth (cookies dead).
     try:
         from app.config import CONFIG as _CFG
-        if getattr(_CFG, "chat_use_oauth", False):
+        # Cookies-expired detect: если в acc нет hhtoken — chatik всё равно не пойдёт.
+        _cookies_dead = not (acc.get("cookies", {}) or {}).get("hhtoken")
+        if getattr(_CFG, "chat_use_oauth", False) or _cookies_dead:
+            # 1) /negotiations/{neg_id}/messages — cleanest endpoint, neg_id известен напрямую
+            try:
+                from app.oauth import send_negotiation_message_oauth as _oauth_neg_send
+                if _oauth_neg_send(acc, neg_id, text):
+                    return True
+                log_debug(f"OAuth /negotiations send neg={neg_id} → False, пробую /common/chats")
+            except Exception as _e:
+                log_debug(f"OAuth /negotiations send neg={neg_id} exception: {_e}")
+            # 2) /common/chats/{chat_id}/messages — fallback (предполагает chat_id == neg_id)
             try:
                 from app.oauth import send_chat_message_oauth as _oauth_send
                 _r = _oauth_send(acc, neg_id, text, is_automated=True)

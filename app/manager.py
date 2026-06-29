@@ -66,6 +66,9 @@ from app.oauth import (
     fetch_blacklisted_vacancies,
     fetch_resume_status,
     fetch_employer_rating,
+    fetch_vacancy_details,
+    fetch_negotiation_messages_oauth,
+    send_negotiation_message_oauth,
 )
 
 from app.hh_api import (
@@ -1190,6 +1193,29 @@ class BotManager:
                 ):
                     state.degraded_skipped += 1
                     continue
+                # Vacancy quality gates через GET /vacancies/{vid} — lazy: вызываем
+                # только если хотя бы один из флагов включён (иначе extra-fetch для
+                # каждой вакансии слишком дорог).
+                need_details = (
+                    CONFIG.skip_auto_response_vacancies
+                    or CONFIG.accredited_it_only
+                    or CONFIG.prefer_quick_responses
+                )
+                if need_details:
+                    det = fetch_vacancy_details(acc, vid)
+                    if det:
+                        meta["auto_response"] = det.get("auto_response")
+                        meta["quick_responses_allowed"] = det.get("quick_responses_allowed")
+                        meta["accredited_it_employer"] = det.get("accredited_it_employer")
+                        meta["key_skills"] = det.get("key_skills") or []
+                        if det.get("archived"):
+                            continue
+                        if CONFIG.skip_auto_response_vacancies and det.get("auto_response"):
+                            state.rating_skipped = getattr(state, "rating_skipped", 0) + 1
+                            continue
+                        if CONFIG.accredited_it_only and not det.get("accredited_it_employer"):
+                            state.rating_skipped = getattr(state, "rating_skipped", 0) + 1
+                            continue
                 # Employer rating gate: пропускаем низкорейтинговых работодателей.
                 # Только если у нас есть employer_id (OAuth-сбор всегда даёт,
                 # cookie-сбор — если SSR HTML содержит /employer/{id} ссылку).
@@ -1238,12 +1264,17 @@ class BotManager:
                 else:
                     filtered.append(vid)
 
-            # Приоритизация: favorited из HH идут в начало очереди.
+            # Приоритизация: favorited → quick_responses_allowed → остальные.
+            # Каждая ступень — отдельный bucket; внутри bucket'а порядок сохраняется.
             fav_set = getattr(state, "_favorited_ids", set()) or set()
-            if fav_set and filtered:
-                priority = [v for v in filtered if v in fav_set]
-                rest = [v for v in filtered if v not in fav_set]
-                filtered = priority + rest
+            if filtered:
+                def _bucket(v):
+                    if v in fav_set:
+                        return 0
+                    if CONFIG.prefer_quick_responses and (state.vacancy_meta.get(v, {}) or {}).get("quick_responses_allowed"):
+                        return 1
+                    return 2
+                filtered.sort(key=_bucket)
 
             sal_msg = f", \U0001f4b0 зарплата {salary_skipped}" if CONFIG.min_salary > 0 else ""
             sched_msg = f", \U0001f3e2 формат {schedule_skipped}" if CONFIG.allowed_schedules else ""
@@ -2141,7 +2172,15 @@ class BotManager:
                             f"\U0001f916 \U0001f4c4 Резюме не удалось загрузить — LLM работает без него", "warning", neg_id=neg_id)
                 else:
                     resume_text = ""
-                full_history = _fetch_chat_history(state.acc, neg_id, max_messages=20)
+                # OAuth-путь когда cookies dead или включён CONFIG.chat_use_oauth —
+                # GET /negotiations/{id}/messages не зависит от chatik-кук.
+                if state.cookies_expired or CONFIG.chat_use_oauth:
+                    full_history = fetch_negotiation_messages_oauth(state.acc, neg_id, max_messages=20)
+                    if not full_history:
+                        # Fallback на chatik если OAuth ничего не вернул (404 / 403 / token issue)
+                        full_history = _fetch_chat_history(state.acc, neg_id, max_messages=20)
+                else:
+                    full_history = _fetch_chat_history(state.acc, neg_id, max_messages=20)
                 conversation = full_history if full_history else thread["messages"]
 
                 _last_emp_raw = None

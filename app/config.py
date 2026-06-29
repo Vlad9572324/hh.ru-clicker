@@ -89,6 +89,11 @@ class Config:
     min_employer_rating: float = 0.0        # 0.0 = выкл; типичный порог 3.0/3.5
     min_employer_reviews: int = 3           # минимум отзывов для применения фильтра
     min_recommendations_percent: int = 0    # 0 = выкл; % "рекомендую этого работодателя"
+    # Vacancy quality gates (через OAuth /vacancies/{vid}). Lazy enrichment
+    # выполняется только когда хотя бы один из этих флагов включён.
+    skip_auto_response_vacancies: bool = False  # auto_response=true → массовые auto-feed вакансии, мусор
+    prefer_quick_responses: bool = False        # quick_responses_allowed=true идут в начало queue
+    accredited_it_only: bool = False            # только аккредитованные IT-работодатели
     llm_fill_questionnaire: bool = False  # Использовать LLM для заполнения опросников
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_ws_push_enabled: bool = True  # Подписаться на wss://websocket.hh.ru для мгновенных ответов
@@ -200,6 +205,7 @@ _CONFIG_KEYS = [
     "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
     "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
+    "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
     "llm_ws_push_enabled", "chat_use_oauth",
 ]
