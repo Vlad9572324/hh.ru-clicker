@@ -143,6 +143,8 @@ class AccountState:
         self.resume_status: dict = {}
         # Favorited vacancy ids — установлен collection-фазой для приоритизации
         self._favorited_ids: set = set()
+        # Сколько вакансий пропущено по employer rating-фильтру в этом цикле
+        self.rating_skipped: int = 0
 
         # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
         # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →

@@ -58,11 +58,16 @@ def parse_search_page(html: str) -> dict:
         vid = m.group(1)
         title = title_el.get_text(strip=True)
         company = ""
+        company_id = ""
         comp_el = item.find(attrs={"data-qa": re.compile(r"vacancy-serp__vacancy-employer")})
         if comp_el:
             company = comp_el.get_text(strip=True)
+            href = comp_el.get("href", "") or ""
+            cm = re.search(r"/employer/(\d+)", href)
+            if cm:
+                company_id = cm.group(1)
         if title:
-            meta[vid] = {"title": title, "company": company}
+            meta[vid] = {"title": title, "company": company, "employer_id": company_id}
 
     if not meta:
         for link in soup.find_all("a", href=re.compile(r"/vacancy/\d+")):

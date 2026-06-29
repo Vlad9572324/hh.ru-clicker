@@ -3583,6 +3583,11 @@ function renderRecentResponses(snap) {
     if (r.accept_auto === false) {
       chips.push('<span style="color:var(--yellow);font-size:10px" title="Требует cover letter или опросник">📝</span>');
     }
+    const er = r.employer_rating;
+    if (er && er.rating) {
+      const col = er.rating >= 4 ? 'var(--green)' : (er.rating >= 3 ? 'var(--yellow)' : 'var(--red)');
+      chips.push(`<span style="color:${col};font-size:10px" title="HH рейтинг: ${er.rating}/5 (${er.reviews_count} отз., ${er.recommendations_percent}% рек.)">⭐${er.rating.toFixed(1)}</span>`);
+    }
     const chipsHtml = chips.length ? ` ${chips.join(' ')}` : '';
     return `
       <div class="resp-item">

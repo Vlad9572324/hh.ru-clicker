@@ -562,6 +562,57 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
     return cached if isinstance(cached, set) else set(cached or [])
 
 
+_employer_rating_cache: dict = {}  # {eid: (expiry, {rating, reviews_count, recommendations_percent})}
+_employer_rating_lock = threading.Lock()
+
+
+def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
+    """Pull employer reviews summary via OAuth API (`/employers/{eid}/reviews`).
+    Returns {rating: float, reviews_count: int, recommendations_percent: int} or {}.
+    Cached 24h globally — same employer == same rating regardless of which
+    account asks. None on transport error (not cached → retried later).
+    Empty dict {} when employer has no reviews (cached briefly to avoid
+    re-asking)."""
+    if not employer_id:
+        return {}
+    now = time.time()
+    with _employer_rating_lock:
+        cached = _employer_rating_cache.get(employer_id)
+        if cached and cached[0] > now:
+            return cached[1]
+    H = _oauth_headers(acc)
+    if not H:
+        return {}
+    try:
+        r = requests.get(
+            f"https://api.hh.ru/employers/{employer_id}/reviews",
+            headers=H, timeout=10,
+        )
+        if r.status_code == 404:
+            with _employer_rating_lock:
+                _employer_rating_cache[employer_id] = (now + 3600, {})
+            return {}
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+        try:
+            rating = float(d.get("total_rating") or 0)
+        except (ValueError, TypeError):
+            rating = 0.0
+        info = {
+            "rating": rating,
+            "reviews_count": int(d.get("reviews_count") or 0),
+            "recommendations_percent": int(d.get("recommendations_percent") or 0),
+        }
+    except Exception as e:
+        log_debug(f"employer_rating({employer_id}) error: {e}")
+        return {}
+    # 24h cache — рейтинги меняются медленно
+    with _employer_rating_lock:
+        _employer_rating_cache[employer_id] = (now + 86400, info)
+    return info
+
+
 def fetch_resume_status(acc: dict) -> dict:
     """Resume status: published/blocked, finished, progress.percentage, moderation_note.
     Cached 5 min."""

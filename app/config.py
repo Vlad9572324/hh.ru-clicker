@@ -83,6 +83,12 @@ class Config:
     filter_agencies: bool = False  # Исключить кадровые агентства из поиска
     filter_low_competition: bool = False  # Только вакансии с <10 откликами
     search_period_days: int = 0  # 0 = все, 1-30 = последние N дней
+    # Employer rating gate (через OAuth /employers/{eid}/reviews). Применяется
+    # только при cookie- или OAuth-сборе если в meta есть employer_id.
+    # Работодатели без отзывов (0 reviews_count) НЕ блокируются.
+    min_employer_rating: float = 0.0        # 0.0 = выкл; типичный порог 3.0/3.5
+    min_employer_reviews: int = 3           # минимум отзывов для применения фильтра
+    min_recommendations_percent: int = 0    # 0 = выкл; % "рекомендую этого работодателя"
     llm_fill_questionnaire: bool = False  # Использовать LLM для заполнения опросников
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_ws_push_enabled: bool = True  # Подписаться на wss://websocket.hh.ru для мгновенных ответов
@@ -193,6 +199,7 @@ _CONFIG_KEYS = [
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
     "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
+    "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
     "llm_ws_push_enabled", "chat_use_oauth",
 ]

@@ -65,6 +65,7 @@ from app.oauth import (
     fetch_favorited_vacancies,
     fetch_blacklisted_vacancies,
     fetch_resume_status,
+    fetch_employer_rating,
 )
 
 from app.hh_api import (
@@ -528,6 +529,7 @@ class BotManager:
             "hr_online": _vm.get("hr_online", ""),
             "chat_write": _vm.get("chat_write_possibility", ""),
             "accept_auto": _vm.get("accept_auto_response"),
+            "employer_rating": _vm.get("employer_rating") or None,
         })
 
     def get_state_snapshot(self) -> dict:
@@ -1150,6 +1152,7 @@ class BotManager:
             salary_skipped = 0
             schedule_skipped = 0
             title_skipped = 0
+            state.rating_skipped = 0  # per-cycle counter, reset here
             apply_tests = state.apply_tests or CONFIG.auto_apply_tests
             title_include_keywords = [
                 str(k).strip().lower()
@@ -1187,6 +1190,25 @@ class BotManager:
                 ):
                     state.degraded_skipped += 1
                     continue
+                # Employer rating gate: пропускаем низкорейтинговых работодателей.
+                # Только если у нас есть employer_id (OAuth-сбор всегда даёт,
+                # cookie-сбор — если SSR HTML содержит /employer/{id} ссылку).
+                if (CONFIG.min_employer_rating > 0 or CONFIG.min_recommendations_percent > 0):
+                    eid = meta.get("employer_id", "")
+                    if eid:
+                        rating_info = fetch_employer_rating(acc, eid)
+                        if rating_info and rating_info.get("reviews_count", 0) >= CONFIG.min_employer_reviews:
+                            if (CONFIG.min_employer_rating > 0
+                                and rating_info.get("rating", 0) < CONFIG.min_employer_rating):
+                                state.rating_skipped = getattr(state, "rating_skipped", 0) + 1
+                                continue
+                            if (CONFIG.min_recommendations_percent > 0
+                                and rating_info.get("recommendations_percent", 0) < CONFIG.min_recommendations_percent):
+                                state.rating_skipped = getattr(state, "rating_skipped", 0) + 1
+                                continue
+                        # Cache hit для UI / Apply tab
+                        if rating_info:
+                            meta["employer_rating"] = rating_info
                 if is_applied(acc["name"], vid):
                     already_count += 1
                     state.already_applied += 1
@@ -1227,9 +1249,10 @@ class BotManager:
             sched_msg = f", \U0001f3e2 формат {schedule_skipped}" if CONFIG.allowed_schedules else ""
             title_msg = f", \U0001f3f7️ заголовок {title_skipped}" if title_skipped else ""
             discard_msg = f", \U0001f6ab отказали {discard_skipped}" if discard_skipped else ""
+            rating_msg = f", ⭐ рейтинг {state.rating_skipped}" if state.rating_skipped else ""
             self._add_log(
                 state.short, state.color,
-                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}{title_msg}{discard_msg}, \U0001f195 новые {len(filtered)}",
+                f"\U0001f50d Фильтрация: ✅ уже {already_count}, \U0001f9ea тест {test_count}{sal_msg}{sched_msg}{title_msg}{discard_msg}{rating_msg}, \U0001f195 новые {len(filtered)}",
                 "info",
             )
 
@@ -1738,6 +1761,7 @@ class BotManager:
                     meta_entry["title"] = it.get("name", "") or meta_entry.get("title", "")
                     emp = it.get("employer") or {}
                     meta_entry["company"] = emp.get("name", "") or meta_entry.get("company", "")
+                    meta_entry["employer_id"] = str(emp.get("id") or "") or meta_entry.get("employer_id", "")
                     meta_entry["has_test"] = bool(it.get("has_test"))
                     meta_entry["response_letter_required"] = bool(it.get("response_letter_required"))
                     sal = it.get("salary")
