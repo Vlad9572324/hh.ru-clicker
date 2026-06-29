@@ -488,7 +488,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         cid = int(str(chat_id).strip())
     except (ValueError, TypeError):
         return False
-    ua = "hh-clicker/1.0 (lexuskrefft@mail.com)"
+    ua = "hh-clicker/1.0 (admin@example.com)"
     payload = {
         "text": text,
         "idempotency_key": str(_uuid.uuid4()),

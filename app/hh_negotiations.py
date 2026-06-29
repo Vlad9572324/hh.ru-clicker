@@ -645,7 +645,7 @@ def fetch_similar_vacancies(vacancy_id, page: int = 0, per_page: int = 20) -> di
             f"https://api.hh.ru/vacancies/{vid}/similar_vacancies",
             params={"page": page, "per_page": per_page},
             headers={
-                "User-Agent": "hh-clicker/1.0 (lexuskrefft@mail.com)",
+                "User-Agent": "hh-clicker/1.0 (admin@example.com)",
                 "Accept": "application/json",
             },
             timeout=12,

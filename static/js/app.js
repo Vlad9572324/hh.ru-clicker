@@ -227,7 +227,7 @@ const T = {
     sess_mode_manual: 'Вручную',
     sess_curl_desc: 'Самый простой способ — Copy as cURL',
     sess_name_label: 'Имя (необязательно)',
-    sess_name_ph: 'Например: Мария',
+    sess_name_ph: 'Например: Иван',
     sess_letter_label: 'Сопроводительное письмо (необязательно)',
     btn_connect: '🔗 Подключить сессию',
     sess_active: '🟢 активна',
@@ -1737,7 +1737,7 @@ function llmInterviewsRender() {
   const accSel = document.getElementById('llm-log-acc-filter');
   if (accSel) {
     // Маппинг short→full name из snapshot, чтобы в выпадающем списке
-    // показывать полное имя ("мария мтс (🌐)") вместо обрезанного "🌐мария".
+    // показывать полное имя ("account (🌐)") вместо обрезанного "🌐account".
     const fullByShort = {};
     (State.lastSnapshot?.accounts || []).forEach(a => {
       if (a.short) fullByShort[a.short] = a.name || a.short;
