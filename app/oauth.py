@@ -436,6 +436,160 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
     return stats
 
 
+_extras_cache: dict = {}  # {(kind, resume_hash): (expiry_ts, value)}
+_extras_lock = threading.Lock()
+
+
+def _extras_get(kind: str, resume_hash: str, ttl: int, fetcher):
+    """TTL cache wrapper for OAuth extras fetchers.
+    Returns cached value if alive, else calls fetcher and caches result.
+    Fetcher returns None on error → not cached, retry next call."""
+    key = (kind, resume_hash)
+    now = time.time()
+    with _extras_lock:
+        expiry, val = _extras_cache.get(key, (0, None))
+    if expiry > now:
+        return val
+    try:
+        val = fetcher()
+    except Exception as e:
+        log_debug(f"OAuth extras {kind}({resume_hash[:8]}) error: {e}")
+        return None
+    if val is None:
+        return None
+    with _extras_lock:
+        _extras_cache[key] = (now + ttl, val)
+    return val
+
+
+def _oauth_headers(acc: dict) -> dict:
+    tok = _obtain_oauth_token(acc)
+    if not tok:
+        return {}
+    return {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {tok}"}
+
+
+def fetch_saved_vacancy_searches(acc: dict) -> list:
+    """Pull user's saved vacancy searches from hh.ru.
+    Returns list of {name, url, items_url} — items_url has the full search
+    params already encoded, can be fed straight into _collect_via_oauth_api.
+    Cached 1h."""
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return []
+    def _do():
+        H = _oauth_headers(acc)
+        if not H:
+            return None
+        out: list = []
+        page = 0
+        while page < 5:
+            r = requests.get("https://api.hh.ru/saved_searches/vacancies",
+                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+            if r.status_code != 200:
+                break
+            d = r.json()
+            for it in d.get("items", []):
+                out.append({
+                    "id": str(it.get("id", "")),
+                    "name": it.get("name", "") or "—",
+                    "items_url": it.get("items", {}).get("url", "") or it.get("url", ""),
+                    "new_count": int(it.get("new_items", {}).get("count", 0) or 0),
+                })
+            if page + 1 >= d.get("pages", 0):
+                break
+            page += 1
+        return out
+    return _extras_get("saved_searches", rh, 3600, _do) or []
+
+
+def fetch_favorited_vacancies(acc: dict) -> list:
+    """User's favorited vacancies. Returns list of vid strings (just the ids).
+    Cached 30 min."""
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return []
+    def _do():
+        H = _oauth_headers(acc)
+        if not H:
+            return None
+        ids: list = []
+        page = 0
+        while page < 5:
+            r = requests.get("https://api.hh.ru/vacancies/favorited",
+                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+            if r.status_code != 200:
+                break
+            d = r.json()
+            for it in d.get("items", []):
+                vid = str(it.get("id", "") or "")
+                if vid:
+                    ids.append(vid)
+            if page + 1 >= d.get("pages", 0):
+                break
+            page += 1
+        return ids
+    return _extras_get("favorited", rh, 1800, _do) or []
+
+
+def fetch_blacklisted_vacancies(acc: dict) -> set:
+    """User's blacklisted vacancies. Returns set of vid strings.
+    Cached 30 min."""
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return set()
+    def _do():
+        H = _oauth_headers(acc)
+        if not H:
+            return None
+        ids: set = set()
+        page = 0
+        while page < 5:
+            r = requests.get("https://api.hh.ru/vacancies/blacklisted",
+                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+            if r.status_code != 200:
+                break
+            d = r.json()
+            for it in d.get("items", []):
+                vid = str(it.get("id", "") or "")
+                if vid:
+                    ids.add(vid)
+            if page + 1 >= d.get("pages", 0):
+                break
+            page += 1
+        return ids
+    cached = _extras_get("blacklisted", rh, 1800, _do)
+    return cached if isinstance(cached, set) else set(cached or [])
+
+
+def fetch_resume_status(acc: dict) -> dict:
+    """Resume status: published/blocked, finished, progress.percentage, moderation_note.
+    Cached 5 min."""
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return {}
+    def _do():
+        H = _oauth_headers(acc)
+        if not H:
+            return None
+        r = requests.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=10)
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        return {
+            "status_id": (d.get("status") or {}).get("id", ""),
+            "status_name": (d.get("status") or {}).get("name", ""),
+            "blocked": bool(d.get("blocked")),
+            "finished": bool(d.get("finished")),
+            "progress": int((d.get("progress") or {}).get("percentage", 0) or 0),
+            "moderation_note": [
+                (n.get("name") if isinstance(n, dict) else str(n))
+                for n in (d.get("moderation_note") or [])
+            ],
+        }
+    return _extras_get("resume_status", rh, 300, _do) or {}
+
+
 def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
     """Apply to vacancy via OAuth API. Returns (result_str, info_dict)."""
     from app.llm import _randomize_text

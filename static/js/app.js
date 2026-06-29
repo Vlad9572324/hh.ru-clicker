@@ -3304,18 +3304,26 @@ function updateCard(card, acc) {
     if (acc.cookies_expired && oa.has_token) {
       cookiesBadge.style.display = '';
       const skipNote = acc.degraded_skipped ? ` · пропущено ${acc.degraded_skipped} (опросники/тесты)` : '';
+      const rs = acc.resume_status_oauth || {};
+      const rsNote = rs.blocked
+        ? ` · 🚨 резюме заблокировано HH`
+        : (rs.progress && rs.progress < 80 ? ` · 📝 резюме ${rs.progress}%` : '');
       cookiesBadge.innerHTML = acc.degraded_mode
-        ? `⚠️ Degraded OAuth-режим (${oa.expires_hours}ч)${skipNote}`
-        : `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
-      cookiesBadge.style.color = 'var(--yellow)';
+        ? `⚠️ Degraded OAuth-режим (${oa.expires_hours}ч)${skipNote}${rsNote}`
+        : `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)${rsNote}`;
+      cookiesBadge.style.color = rs.blocked ? 'var(--red)' : 'var(--yellow)';
     } else if (acc.cookies_expired && !oa.has_token) {
       cookiesBadge.style.display = '';
       cookiesBadge.innerHTML = `⚠️ Куки протухли | 🔑 OAuth: ❌ нет токена — обновите куки!`;
       cookiesBadge.style.color = 'var(--red)';
     } else if (!acc.cookies_expired && oa.has_token) {
       cookiesBadge.style.display = '';
-      cookiesBadge.innerHTML = `🍪 Куки ✅ | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)`;
-      cookiesBadge.style.color = 'var(--green)';
+      const rs2 = acc.resume_status_oauth || {};
+      const rsNote2 = rs2.blocked
+        ? ` · 🚨 резюме заблокировано`
+        : (rs2.progress && rs2.progress < 80 ? ` · 📝 резюме ${rs2.progress}%` : '');
+      cookiesBadge.innerHTML = `🍪 Куки ✅ | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)${rsNote2}`;
+      cookiesBadge.style.color = rs2.blocked ? 'var(--red)' : 'var(--green)';
     } else {
       cookiesBadge.style.display = '';
       cookiesBadge.innerHTML = `🍪 Куки ✅ | 🔑 OAuth: ⏳ будет получен при отклике`;

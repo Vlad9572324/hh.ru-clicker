@@ -139,6 +139,10 @@ class AccountState:
         self.degraded_fallback_enabled: bool = bool(
             acc_data.get("degraded_fallback_enabled", True)
         )
+        # Resume status via OAuth API — обновляется stats worker'ом
+        self.resume_status: dict = {}
+        # Favorited vacancy ids — установлен collection-фазой для приоритизации
+        self._favorited_ids: set = set()
 
         # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
         # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →

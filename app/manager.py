@@ -61,6 +61,10 @@ from app.oauth import (
     get_oauth_status,
     _obtain_oauth_token,
     refresh_oauth_tokens_proactive,
+    fetch_saved_vacancy_searches,
+    fetch_favorited_vacancies,
+    fetch_blacklisted_vacancies,
+    fetch_resume_status,
 )
 
 from app.hh_api import (
@@ -624,6 +628,7 @@ class BotManager:
                 "degraded_mode": s.degraded_mode,
                 "degraded_skipped": s.degraded_skipped,
                 "degraded_fallback_enabled": s.degraded_fallback_enabled,
+                "resume_status_oauth": dict(s.resume_status or {}),
                 "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
@@ -727,6 +732,7 @@ class BotManager:
                     "degraded_mode": s.degraded_mode,
                     "degraded_skipped": s.degraded_skipped,
                     "degraded_fallback_enabled": s.degraded_fallback_enabled,
+                    "resume_status_oauth": dict(s.resume_status or {}),
                     "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
                     "use_oauth": s.use_oauth,
@@ -772,6 +778,7 @@ class BotManager:
                     "degraded_mode": False,
                     "degraded_skipped": 0,
                     "degraded_fallback_enabled": bool(ts.get("degraded_fallback_enabled", True)),
+                    "resume_status_oauth": {},
                     "llm_enabled": True,
                     "use_oauth": bool(ts.get("use_oauth", False)),
                     "daily_sent": 0,
@@ -1002,7 +1009,20 @@ class BotManager:
 
             # === СБОР ВАКАНСИЙ (ПАРАЛЛЕЛЬНО) ===
             # Если у аккаунта нет своих URL — используем глобальный пул
-            effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
+            effective_urls = list(acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool])
+            # Auto-merge сохранённых поисков юзера с hh.ru (cached 1h) — добавляются
+            # к существующему пулу. items_url у HH возвращается в api.hh.ru-домене;
+            # cookie-collector использует hh.ru/search/vacancy, поэтому конвертируем.
+            try:
+                for ss in fetch_saved_vacancy_searches(acc):
+                    iu = ss.get("items_url", "") or ""
+                    if not iu:
+                        continue
+                    web_url = iu.replace("api.hh.ru/vacancies", "hh.ru/search/vacancy")
+                    if web_url not in effective_urls:
+                        effective_urls.append(web_url)
+            except Exception as e:
+                log_debug(f"saved_searches merge error [{state.short}]: {e}")
             state.total_urls = len(effective_urls)
 
             state.status = "collecting"
@@ -1060,6 +1080,39 @@ class BotManager:
             state.url_stats = dict(state.vacancies_by_url)
 
             unique_vacancies = set(all_vacancies)
+            # Favorited из HH — приоритетные кандидаты юзера. Подмешиваем в общий
+            # пул (фильтры применятся как обычно — has_test и т.д.). Хранятся
+            # отдельно чтобы apply phase могла отсортировать их вперёд.
+            favorited_ids: set = set()
+            try:
+                fav = fetch_favorited_vacancies(acc)
+                if fav:
+                    favorited_ids = set(fav)
+                    new_count = len(favorited_ids - unique_vacancies)
+                    unique_vacancies |= favorited_ids
+                    if new_count:
+                        self._add_log(
+                            state.short, state.color,
+                            f"⭐ Избранное: +{new_count} вакансий из HH",
+                            "info",
+                        )
+            except Exception as e:
+                log_debug(f"favorited merge error [{state.short}]: {e}")
+            # Blacklisted из HH — фильтруем сразу
+            try:
+                bl = fetch_blacklisted_vacancies(acc)
+                if bl:
+                    blocked_count = len(unique_vacancies & bl)
+                    unique_vacancies -= bl
+                    if blocked_count:
+                        self._add_log(
+                            state.short, state.color,
+                            f"🚫 HH-blacklist: -{blocked_count} вакансий",
+                            "info",
+                        )
+            except Exception as e:
+                log_debug(f"blacklist filter error [{state.short}]: {e}")
+            state._favorited_ids = favorited_ids  # для приоритизации в apply
             total_collected = len(unique_vacancies)
 
             self._add_log(
@@ -1162,6 +1215,13 @@ class BotManager:
                         filtered.append(vid)
                 else:
                     filtered.append(vid)
+
+            # Приоритизация: favorited из HH идут в начало очереди.
+            fav_set = getattr(state, "_favorited_ids", set()) or set()
+            if fav_set and filtered:
+                priority = [v for v in filtered if v in fav_set]
+                rest = [v for v in filtered if v not in fav_set]
+                filtered = priority + rest
 
             sal_msg = f", \U0001f4b0 зарплата {salary_skipped}" if CONFIG.min_salary > 0 else ""
             sched_msg = f", \U0001f3e2 формат {schedule_skipped}" if CONFIG.allowed_schedules else ""
@@ -2336,6 +2396,13 @@ class BotManager:
                 break
 
             state.hh_stats_loading = True
+            # Parallel — resume status через OAuth (5-min cache, дешёвый запрос)
+            try:
+                rs = fetch_resume_status(state.acc)
+                if rs:
+                    state.resume_status = rs
+            except Exception as e:
+                log_debug(f"resume_status fetch error [{state.short}]: {e}")
             try:
                 stats = fetch_hh_negotiations_stats(state.acc)
                 if stats.get("auth_error"):
