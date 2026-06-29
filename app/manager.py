@@ -60,6 +60,7 @@ from app.oauth import (
     _oauth_apply,
     get_oauth_status,
     _obtain_oauth_token,
+    refresh_oauth_tokens_proactive,
 )
 
 from app.hh_api import (
@@ -303,6 +304,14 @@ class BotManager:
                 self._start_ws_push(state)
             except Exception as e:
                 log_debug(f"_start_ws_push({state.short}): {e}")
+        # Proactive OAuth refresh — раз в 6 часов обновляет токены,
+        # у которых TTL < 48ч, чтобы refresh_token не успел истечь когда
+        # аккаунт долго на паузе (лимит HH, ручная пауза).
+        threading.Thread(
+            target=self._oauth_refresh_worker, daemon=True,
+            name="oauth_refresh",
+        ).start()
+
         # Авто-активация браузерных сессий, которые были запущены до перезапуска
         log_debug(f"start(): {len(self.temp_sessions)} temp sessions to check")
         for i, ts in enumerate(self.temp_sessions):
@@ -1580,6 +1589,28 @@ class BotManager:
                 )
                 if self._stop_event.wait(CONFIG.pause_between_cycles):
                     return
+
+    def _oauth_refresh_worker(self):
+        """Proactive OAuth refresh: каждые 6ч пробегает все сохранённые токены и
+        обновляет те, у которых < 48ч до истечения. Идея — не дать
+        refresh_token (TTL ~14 дней) самому истечь когда аккаунт не активен."""
+        # Первый запуск через 60с после старта — даём lazy-refresh успеть
+        # отработать после restart'а перед нашим вмешательством.
+        if self._stop_event.wait(60):
+            return
+        while not self._stop_event.is_set():
+            try:
+                stats = refresh_oauth_tokens_proactive(min_ttl_hours=48)
+                if stats["refreshed"] or stats["failed"]:
+                    log_debug(
+                        f"OAuth refresh worker: checked={stats['checked']} "
+                        f"refreshed={stats['refreshed']} failed={stats['failed']}"
+                    )
+            except Exception as e:
+                log_debug(f"OAuth refresh worker error: {e}")
+            # 6 hours между запусками
+            if self._stop_event.wait(6 * 3600):
+                return
 
     def _collect_via_oauth_api(self, state: AccountState) -> tuple:
         """Degraded-mode collection via api.hh.ru/vacancies with Bearer token.

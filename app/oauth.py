@@ -378,6 +378,64 @@ def _obtain_oauth_token(acc: dict) -> str:
         return ""
 
 
+def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
+    """Profilakticheski refresh: пробежать все сохранённые токены и обновить
+    те, у которых до истечения меньше `min_ttl_hours` часов. Защищает
+    от случая, когда аккаунт долго не используется (пауза, лимит HH) и
+    refresh_token успевает истечь раньше следующего apply.
+
+    Returns: {'checked': N, 'refreshed': K, 'failed': F}
+    """
+    threshold = time.time() + min_ttl_hours * 3600
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    with _oauth_lock:
+        snapshot = list(_oauth_tokens.items())
+    seen_refresh: set = set()
+    stats = {"checked": 0, "refreshed": 0, "failed": 0}
+    for key, cached in snapshot:
+        stats["checked"] += 1
+        if not isinstance(cached, dict):
+            continue
+        if cached.get("expires_at", 0) >= threshold:
+            continue
+        refresh = cached.get("refresh_token", "")
+        if not refresh or refresh in seen_refresh:
+            continue
+        seen_refresh.add(refresh)
+        resume_hash = key.split("::", 1)[0]
+        # Per-resume_hash lock — синхронизируется с lazy refresh из
+        # `_obtain_oauth_token`, чтобы не делать двух parallel-refresh с
+        # одним и тем же refresh_token (HH ротирует → второй получает invalid_grant).
+        lock = _get_refresh_lock(resume_hash)
+        with lock:
+            with _oauth_lock:
+                latest = _oauth_tokens.get(key, {}) or {}
+            if latest.get("expires_at", 0) >= threshold:
+                continue  # обновили пока ждали лок
+            latest_refresh = latest.get("refresh_token", "") or refresh
+            token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, ua, resume_hash)
+            if token_data is None and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
+                token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
+            if not token_data:
+                stats["failed"] += 1
+                log_debug(f"OAuth proactive: refresh failed for {resume_hash[:12]}")
+                continue
+            new_full = {
+                "access_token": token_data["access_token"],
+                "refresh_token": token_data["refresh_token"],
+                "expires_at": time.time() + token_data["expires_in"],
+                "_expires_monotonic": time.monotonic() + token_data["expires_in"],
+            }
+            with _oauth_lock:
+                _oauth_tokens[key] = new_full
+                # backward-compat plain key
+                _oauth_tokens[resume_hash] = {k: v for k, v in new_full.items() if not k.startswith("_")}
+            _save_oauth_tokens()
+            stats["refreshed"] += 1
+            log_debug(f"OAuth proactive: refreshed {resume_hash[:12]} (+{token_data['expires_in']}s)")
+    return stats
+
+
 def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
     """Apply to vacancy via OAuth API. Returns (result_str, info_dict)."""
     from app.llm import _randomize_text
