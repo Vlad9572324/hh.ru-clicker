@@ -485,7 +485,7 @@ def fetch_saved_vacancy_searches(acc: dict) -> list:
         page = 0
         while page < 5:
             r = requests.get("https://api.hh.ru/saved_searches/vacancies",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -517,7 +517,7 @@ def fetch_favorited_vacancies(acc: dict) -> list:
         page = 0
         while page < 5:
             r = requests.get("https://api.hh.ru/vacancies/favorited",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -546,7 +546,7 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
         page = 0
         while page < 5:
             r = requests.get("https://api.hh.ru/vacancies/blacklisted",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=10)
+                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -586,7 +586,7 @@ def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
     try:
         r = requests.get(
             f"https://api.hh.ru/employers/{employer_id}/reviews",
-            headers=H, timeout=10,
+            headers=H, timeout=5,
         )
         if r.status_code == 404:
             with _employer_rating_lock:
@@ -606,6 +606,8 @@ def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
         }
     except Exception as e:
         log_debug(f"employer_rating({employer_id}) error: {e}")
+        with _employer_rating_lock:
+            _employer_rating_cache[employer_id] = (now + 60, {})
         return {}
     # 24h cache — рейтинги меняются медленно
     with _employer_rating_lock:
@@ -633,12 +635,16 @@ def fetch_vacancy_details(acc: dict, vid: str) -> dict:
     if not H:
         return {}
     try:
-        r = requests.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=10)
+        r = requests.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=5)
         if r.status_code == 404:
             with _vacancy_details_lock:
                 _vacancy_details_cache[vid] = (now + 3600, {"archived": True})
             return {"archived": True}
         if r.status_code != 200:
+            # Negative cache 60s — без этого упавший HH провоцирует retry-шторм
+            # на каждой вакансии в filter loop.
+            with _vacancy_details_lock:
+                _vacancy_details_cache[vid] = (now + 60, {})
             return {}
         d = r.json()
         emp = d.get("employer") or {}
@@ -661,6 +667,8 @@ def fetch_vacancy_details(acc: dict, vid: str) -> dict:
         }
     except Exception as e:
         log_debug(f"vacancy_details({vid}) error: {e}")
+        with _vacancy_details_lock:
+            _vacancy_details_cache[vid] = (now + 60, {})
         return {}
     with _vacancy_details_lock:
         _vacancy_details_cache[vid] = (now + 21600, info)  # 6h
@@ -677,7 +685,7 @@ def fetch_resume_status(acc: dict) -> dict:
         H = _oauth_headers(acc)
         if not H:
             return None
-        r = requests.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=10)
+        r = requests.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=5)
         if r.status_code != 200:
             return None
         d = r.json()
@@ -804,7 +812,7 @@ def fetch_negotiation_messages_oauth(acc: dict, neg_id, max_messages: int = 20) 
         r = requests.get(
             f"https://api.hh.ru/negotiations/{neg_id}/messages",
             headers=H, params={"per_page": max_messages, "order_by": "asc"},
-            timeout=10,
+            timeout=5,
         )
         if r.status_code != 200:
             log_debug(f"OAuth chat history neg={neg_id}: HTTP {r.status_code}")
