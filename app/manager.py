@@ -224,6 +224,29 @@ class BotManager:
         self._add_log(state.short, "yellow", f"\U0001f310 Сессия {ts['name']} запущена как бот", "success")
         return True
 
+    def deactivate_session(self, temp_idx: int) -> bool:
+        """Остановить браузерную сессию: сигналим воркерам выйти, удаляем state,
+        сохраняем сессию на диск с bot_active=False. Кнопка «Стоп» в карточке.
+        Сами cookies / resume / letter не трогаем — юзер может позже жмёт «▶ Запустить».
+        """
+        with self._activate_lock:
+            if temp_idx < 0 or temp_idx >= len(self.temp_sessions):
+                return False
+            ts = self.temp_sessions[temp_idx]
+            state = self.temp_states.pop(temp_idx, None)
+            if state is not None:
+                # Сигналим воркерам: проверки `state._deleted` в каждом цикле
+                # и в pause-loop приведут к graceful exit потоков.
+                state._deleted = True
+                state.paused = True
+            ts["bot_active"] = False
+            ts["paused"] = True
+        save_browser_sessions(self.temp_sessions)
+        log_debug(f"deactivate_session({temp_idx}): bot_active=False")
+        if state is not None:
+            self._add_log(state.short, "yellow", f"🛑 Сессия {ts.get('name','?')} остановлена", "warning")
+        return True
+
     def _get_apply_acc(self, idx: int) -> dict | None:
         """Вернуть acc dict для apply-эндпоинтов (обычный или временный аккаунт)"""
         if 0 <= idx < len(self.account_states):

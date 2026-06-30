@@ -3022,6 +3022,7 @@ function buildCardHTML(acc) {
       <button class="btn-sm" style="font-size:9px;padding:1px 5px;color:var(--green);border-color:var(--green)"
         onclick="llmRunNow(this)" title="Проверить чаты и ответить прямо сейчас">🔄 Сейчас</button>
       ${acc.temp && !acc.bot_active ? `<button class="btn-sm" style="color:var(--green);border-color:var(--green)" onclick="sessionActivate(${acc.idx})">${t('btn_launch')}</button>` : ''}
+      ${acc.temp && acc.bot_active ? `<button class="btn-sm" style="color:var(--orange);border-color:var(--orange)" onclick="sessionDeactivate(${acc.idx},this)" title="Остановить бот для этого аккаунта (сессия сохранится — можно запустить снова)">🛑 Стоп</button>` : ''}
       ${acc.temp ? `<button class="btn-sm" style="color:var(--red);border-color:var(--red)" onclick="sessionRemove(${acc.idx})">${t('btn_delete')}</button>` : ''}
     </div>
     <details class="acc-letter-wrap" id="acc-letter-wrap-${acc.idx}">
@@ -4355,6 +4356,22 @@ async function sessionActivate(idx) {
   const data = await res.json();
   if (data.status !== 'ok') {
     alert('Ошибка: ' + data.message);
+  }
+}
+
+async function sessionDeactivate(idx, btn) {
+  if (!confirm('Остановить бот для этой сессии? Cookies и письмо сохранятся, можно запустить снова.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Стоп…'; }
+  try {
+    const res = await fetch('/api/session/' + idx + '/deactivate', {method: 'POST'});
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      alert('Ошибка: ' + data.message);
+      if (btn) { btn.disabled = false; btn.textContent = '🛑 Стоп'; }
+    }
+  } catch (e) {
+    alert('Сетевая ошибка: ' + e);
+    if (btn) { btn.disabled = false; btn.textContent = '🛑 Стоп'; }
   }
 }
 

@@ -244,6 +244,20 @@ async def api_session_activate(idx: int):
     return {"status": "error", "message": "Не удалось запустить"}
 
 
+@router.post("/api/session/{idx}/deactivate")
+async def api_session_deactivate(idx: int):
+    """Остановить браузерную сессию (kill воркеры, bot_active=False).
+    Сессия + cookies + letter сохраняются — можно потом снова запустить."""
+    temp_idx = idx - len(bot.account_states)
+    if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
+        return {"status": "error", "message": "Не найдено"}
+    ts = bot.temp_sessions[temp_idx]
+    ok = bot.deactivate_session(temp_idx)
+    if ok:
+        return {"status": "ok", "message": f"Сессия {ts.get('name','')} остановлена"}
+    return {"status": "error", "message": "Не удалось остановить"}
+
+
 @router.post("/api/session/{idx}/refresh")
 async def api_session_refresh(idx: int):
     """Перепрофилировать сессию: обновить имя и resume_hash из HH."""
