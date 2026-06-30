@@ -56,7 +56,14 @@ class AccountState:
         self.use_oauth = bool(acc_data.get("use_oauth", False))  # per-account OAuth toggle
         self.oauth_status = ""  # "active", "no_token", "error"
 
-        self.daily_date = datetime.now().strftime("%Y-%m-%d")  # дата сброса счётчика
+        # daily_date — дата сброса счётчика. Использует MSK (как и
+        # _maybe_roll_daily_counter), иначе после restart в Docker (UTC) поля
+        # рассинхронизированы и rollover не срабатывает в полночь по Москве.
+        try:
+            from zoneinfo import ZoneInfo
+            self.daily_date = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d")
+        except Exception:
+            self.daily_date = datetime.now().strftime("%Y-%m-%d")
         # Count today's applies from persisted cache
         self.daily_sent = 0
         try:
