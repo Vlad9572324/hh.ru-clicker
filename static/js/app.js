@@ -2945,9 +2945,9 @@ function buildCardHTML(acc) {
     </div>
     <div class="acc-progress"><div class="acc-progress-fill" id="acc-prog-${acc.idx}"></div></div>
     <div class="acc-stats">
-      <div class="stat-box" title="Сессия / Всего за всё время">
+      <div class="stat-box" title="Сессия / Всего за всё время / Реально из HH сегодня">
         <div class="stat-val c-green" id="acc-sent-${acc.idx}">0</div>
-        <div class="stat-lbl">${t('stat_replies')} <span style="color:var(--dim);font-size:10px">/ <span id="acc-total-${acc.idx}">0</span></span></div>
+        <div class="stat-lbl">${t('stat_replies')} <span style="color:var(--dim);font-size:10px">/ <span id="acc-total-${acc.idx}">0</span> · <span id="acc-hh-today-${acc.idx}" title="HH сегодня / лимит">—</span></span></div>
       </div>
       <div class="stat-box">
         <div class="stat-val c-magenta" id="acc-tests-${acc.idx}">0</div>
@@ -3118,7 +3118,13 @@ function updateCard(card, acc) {
       badge.textContent = t('status_all_paused');
       badge.title = '';
     } else if (accPaused) {
-      if (acc.hard_stopped && acc.daily_limit > 0 && acc.daily_sent >= acc.daily_limit) {
+      const hhUsed = acc.hh_today_applies || 0;
+      const hhLimit = acc.hh_daily_limit || 200;
+      if (acc.hard_stopped && hhUsed >= hhLimit) {
+        badge.className = 'acc-status-badge status-limit';
+        badge.textContent = `🛑 HH-лимит ${hhUsed}/${hhLimit}`;
+        badge.title = `Реальный счётчик из HH (обновлено ${acc.hh_today_applies_updated || '—'}). Авто-сброс при count < ${hhLimit-5}`;
+      } else if (acc.hard_stopped && acc.daily_limit > 0 && acc.daily_sent >= acc.daily_limit) {
         badge.className = 'acc-status-badge status-limit';
         badge.textContent = `🛑 ${t('status_daily_limit')} ${acc.daily_sent}/${acc.daily_limit}`;
         badge.title = t('status_daily_limit_hint');
@@ -3249,6 +3255,19 @@ function updateCard(card, acc) {
   const dailyInfo = acc.daily_limit > 0 ? ` (${acc.daily_sent || 0}/${acc.daily_limit} сегодня)` : (acc.daily_sent ? ` (${acc.daily_sent} сегодня)` : '');
   setText('acc-sent-' + acc.idx, acc.sent);
   setText('acc-total-' + acc.idx, (acc.total_applied ?? '') + dailyInfo);
+  // Real HH count today (из OAuth-tracker, обновляется раз в 30 мин)
+  const hhUsed = acc.hh_today_applies || 0;
+  const hhLim = acc.hh_daily_limit || 200;
+  const hhCell = document.getElementById('acc-hh-today-' + acc.idx);
+  if (hhCell) {
+    if (acc.hh_today_applies_updated) {
+      hhCell.textContent = `HH ${hhUsed}/${hhLim}`;
+      hhCell.style.color = hhUsed >= hhLim ? 'var(--red)' : (hhUsed >= hhLim - 10 ? 'var(--yellow)' : 'var(--dim)');
+    } else {
+      hhCell.textContent = 'HH —';
+      hhCell.style.color = 'var(--dim)';
+    }
+  }
   setText('acc-tests-' + acc.idx, acc.tests);
   setText('acc-already-' + acc.idx, acc.already_applied);
   setText('acc-err-' + acc.idx, acc.errors);
