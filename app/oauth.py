@@ -675,6 +675,82 @@ def fetch_vacancy_details(acc: dict, vid: str) -> dict:
     return info
 
 
+_negotiations_count_cache: dict = {}  # {resume_hash: (expiry, {today, today_msk_date})}
+_negotiations_count_lock = threading.Lock()
+
+
+def fetch_negotiations_today_count(acc: dict) -> dict:
+    """Реальное число сегодняшних откликов (по MSK) — источник истины для
+    HH daily-limit'а. Используется чтобы перестать угадывать
+    `hard_stopped` и автоматом снимать stop когда лимит реально сброшен.
+
+    Returns {'today': N, 'msk_date': 'YYYY-MM-DD', 'total_found': M} or {} on error.
+    Cached 5 min.
+    """
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return {}
+    now = time.time()
+    with _negotiations_count_lock:
+        cached = _negotiations_count_cache.get(rh)
+        if cached and cached[0] > now:
+            return cached[1]
+    H = _oauth_headers(acc)
+    if not H:
+        return {}
+    try:
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo
+            MSK = ZoneInfo("Europe/Moscow")
+        except Exception:
+            MSK = None
+        today_msk = datetime.now(MSK).date() if MSK else datetime.now().date()
+        midnight = datetime.combine(today_msk, datetime.min.time(), tzinfo=MSK) if MSK else None
+        n_today = 0
+        total_found = 0
+        oldest_dt = None
+        for page in range(5):
+            r = requests.get(
+                "https://api.hh.ru/negotiations",
+                headers=H, params={"per_page": 100, "page": page}, timeout=5,
+            )
+            if r.status_code != 200:
+                break
+            d = r.json()
+            if page == 0:
+                total_found = int(d.get("found", 0) or 0)
+            items = d.get("items", [])
+            if not items:
+                break
+            for it in items:
+                try:
+                    dt = datetime.fromisoformat(it.get("created_at", ""))
+                except Exception:
+                    continue
+                msk_dt = dt.astimezone(MSK) if MSK else dt
+                if midnight is None or msk_dt >= midnight:
+                    n_today += 1
+                oldest_dt = dt
+            # Лента отсортирована по новейшим первая. Как только дошли до
+            # вакансии раньше midnight — дальше тоже только старые, можно стоп.
+            if oldest_dt:
+                msk_oldest = oldest_dt.astimezone(MSK) if MSK else oldest_dt
+                if midnight and msk_oldest < midnight:
+                    break
+        info = {
+            "today": n_today,
+            "msk_date": str(today_msk),
+            "total_found": total_found,
+        }
+    except Exception as e:
+        log_debug(f"negotiations_count error: {e}")
+        return {}
+    with _negotiations_count_lock:
+        _negotiations_count_cache[rh] = (now + 300, info)
+    return info
+
+
 def fetch_resume_status(acc: dict) -> dict:
     """Resume status: published/blocked, finished, progress.percentage, moderation_note.
     Cached 5 min."""

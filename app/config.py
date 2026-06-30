@@ -94,6 +94,9 @@ class Config:
     skip_auto_response_vacancies: bool = False  # auto_response=true → массовые auto-feed вакансии, мусор
     prefer_quick_responses: bool = False        # quick_responses_allowed=true идут в начало queue
     accredited_it_only: bool = False            # только аккредитованные IT-работодатели
+    # HH daily limit (откликов на резюме в день; HH = 200). Используется как порог
+    # для proactive limit-tracker. 0 = выкл (старое поведение по daily_apply_limit).
+    hh_daily_limit: int = 200
     llm_fill_questionnaire: bool = False  # Использовать LLM для заполнения опросников
     llm_check_interval: int = 5  # Интервал проверки чатов LLM (в минутах, мин 2)
     llm_ws_push_enabled: bool = True  # Подписаться на wss://websocket.hh.ru для мгновенных ответов
@@ -206,6 +209,7 @@ _CONFIG_KEYS = [
     "filter_agencies", "filter_low_competition", "search_period_days",
     "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
     "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
+    "hh_daily_limit",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
     "llm_ws_push_enabled", "chat_use_oauth",
 ]

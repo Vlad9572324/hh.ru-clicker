@@ -69,6 +69,7 @@ from app.oauth import (
     fetch_vacancy_details,
     fetch_negotiation_messages_oauth,
     send_negotiation_message_oauth,
+    fetch_negotiations_today_count,
 )
 
 from app.hh_api import (
@@ -318,6 +319,13 @@ class BotManager:
         threading.Thread(
             target=self._oauth_refresh_worker, daemon=True,
             name="oauth_refresh",
+        ).start()
+        # Real HH-limit tracker — каждые 30 мин синхронизирует daily_sent с
+        # фактическим числом откликов из HH и снимает hard_stopped если лимит
+        # реально не достигнут (например HH сам сбросил счётчик).
+        threading.Thread(
+            target=self._hh_limit_tracker_worker, daemon=True,
+            name="hh_limit_tracker",
         ).start()
 
         # Авто-активация браузерных сессий, которые были запущены до перезапуска
@@ -634,6 +642,9 @@ class BotManager:
                 "degraded_skipped": s.degraded_skipped,
                 "degraded_fallback_enabled": s.degraded_fallback_enabled,
                 "resume_status_oauth": dict(s.resume_status or {}),
+                "hh_today_applies": s.hh_today_applies,
+                "hh_today_applies_updated": s.hh_today_applies_updated,
+                "hh_daily_limit": CONFIG.hh_daily_limit or 200,
                 "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
@@ -738,6 +749,9 @@ class BotManager:
                     "degraded_skipped": s.degraded_skipped,
                     "degraded_fallback_enabled": s.degraded_fallback_enabled,
                     "resume_status_oauth": dict(s.resume_status or {}),
+                    "hh_today_applies": s.hh_today_applies,
+                    "hh_today_applies_updated": s.hh_today_applies_updated,
+                    "hh_daily_limit": CONFIG.hh_daily_limit or 200,
                     "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
                     "use_oauth": s.use_oauth,
@@ -784,6 +798,9 @@ class BotManager:
                     "degraded_skipped": 0,
                     "degraded_fallback_enabled": bool(ts.get("degraded_fallback_enabled", True)),
                     "resume_status_oauth": {},
+                    "hh_today_applies": 0,
+                    "hh_today_applies_updated": "",
+                    "hh_daily_limit": CONFIG.hh_daily_limit or 200,
                     "llm_enabled": True,
                     "use_oauth": bool(ts.get("use_oauth", False)),
                     "daily_sent": 0,
@@ -1381,6 +1398,19 @@ class BotManager:
                     self._add_log(state.short, state.color,
                         f"\U0001f6d1 Дневной лимит {CONFIG.daily_apply_limit} откликов. Пауза до завтра 00:00.", "error")
                     break
+                # Pre-flight HH-лимит: если фактический счётчик от HH достиг порога —
+                # не сжигаем «холостой» отклик чтобы узнать. Дождёмся либо tracker
+                # сброса либо ручного toggle.
+                _hh_limit = CONFIG.hh_daily_limit or 200
+                if state.hh_today_applies and state.hh_today_applies >= _hh_limit:
+                    state.hard_stopped = True
+                    state.paused = True
+                    state.paused_reason = "limit"
+                    state.status = "limit"
+                    state.status_detail = f"HH-лимит: {state.hh_today_applies}/{_hh_limit}. Сброс в 00:00 МСК"
+                    self._add_log(state.short, state.color,
+                        f"\U0001f6d1 HH daily-limit {_hh_limit} достигнут ({state.hh_today_applies} откликов). Пауза.", "error")
+                    break
 
                 # Pre-check: skip inconsistent vacancies if enabled
                 if CONFIG.skip_inconsistent:
@@ -1703,6 +1733,56 @@ class BotManager:
                 )
                 if self._stop_event.wait(CONFIG.pause_between_cycles):
                     return
+
+    def _hh_limit_tracker_worker(self):
+        """Каждые 30 мин дёргает GET /negotiations через OAuth, считает реальное
+        число сегодняшних откликов для каждого активного аккаунта.
+
+        - Синхронизирует state.hh_today_applies = truth count из HH
+        - Если бот был hard_stopped, но фактический count < CONFIG.hh_daily_limit —
+          снимает hard_stopped/paused (auto-recovery, не ждём midnight).
+        - На rollover в полночь MSK HH сам обнулит count → автоматически снимется.
+        """
+        # Warmup 30s (даём воркерам стартануть)
+        if self._stop_event.wait(30):
+            return
+        while not self._stop_event.is_set():
+            try:
+                from datetime import datetime
+                # Все активные state'ы (regular + temp)
+                states = list(self.account_states) + list(self.temp_states.values())
+                for state in states:
+                    if not state.acc.get("resume_hash"):
+                        continue
+                    info = fetch_negotiations_today_count(state.acc)
+                    if not info:
+                        continue
+                    count = info.get("today", 0)
+                    with state._state_lock:
+                        state.hh_today_applies = count
+                        state.hh_today_applies_updated = datetime.now().isoformat(timespec="seconds")
+                    # Auto-recovery: если стоим в лимит-stop, а реально count < лимит
+                    limit = CONFIG.hh_daily_limit or 200
+                    if (state.hard_stopped or state.paused_reason == "limit") and count < limit - 5:
+                        # 5-вакансиевый запас на гонку с in-flight откликами
+                        with state._state_lock:
+                            state.hard_stopped = False
+                            state.limit_exceeded = False
+                            state.limit_reset_time = None
+                            if state.paused and state.paused_reason == "limit":
+                                state.paused = False
+                                state.paused_reason = ""
+                            state.daily_sent = count  # sync to truth
+                        self._add_log(
+                            state.short, state.color,
+                            f"✅ HH-лимит снят: фактически {count}/{limit} откликов сегодня (auto-recovery)",
+                            "success",
+                        )
+            except Exception as e:
+                log_debug(f"HH limit tracker error: {e}")
+            # 30 мин
+            if self._stop_event.wait(1800):
+                return
 
     def _oauth_refresh_worker(self):
         """Proactive OAuth refresh: каждые 6ч пробегает все сохранённые токены и

@@ -152,6 +152,11 @@ class AccountState:
         self._favorited_ids: set = set()
         # Сколько вакансий пропущено по employer rating-фильтру в этом цикле
         self.rating_skipped: int = 0
+        # Реальное число сегодняшних откликов из HH (через OAuth-counter).
+        # 0 пока счётчик не вернул значение. Используется как источник истины
+        # для лимит-логики вместо локального daily_sent.
+        self.hh_today_applies: int = 0
+        self.hh_today_applies_updated: str = ""  # ISO timestamp последнего refresh
 
         # LLM auto-reply tracking — dict (not set) для insertion-order eviction:
         # set.list() возвращал произвольный порядок, [-2000:] вырезал случайные ключи →
