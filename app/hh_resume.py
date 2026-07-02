@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
+from app.hh_http import HH
 
 _resume_cache: dict = {}   # {resume_hash: (text, timestamp)}
 # RLock — reentrant: fetch_resume_text держит лок, потом вызывает _cleanup_resume_cache,
@@ -229,7 +230,7 @@ def fetch_resume_text(acc: dict) -> str:
     _cleanup_resume_cache(now)
 
     try:
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/resume/{resume_hash}",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -275,7 +276,7 @@ def fetch_resume_stats(acc: dict) -> dict:
         "global_invitations": 0, "new_invitations_total": 0,
     }
     try:
-        r = requests.get(
+        r = HH.get(
             hh_base() + "/applicant/resumes",
             headers=headers, cookies=acc["cookies"], timeout=15
         )
@@ -326,7 +327,7 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
     }
     result = []
     try:
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/applicant/resumeview/history?resumeHash={resume_hash}",
             headers=headers, cookies=acc["cookies"], timeout=15
         )
@@ -406,7 +407,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
 
     try:
         # 1. Fetch resume page SSR
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/resume/{resume_hash}",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=cookies, timeout=15,
@@ -436,7 +437,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             return ""
 
         # 2. Fetch stats from resumes page
-        r2 = requests.get(
+        r2 = HH.get(
             hh_base() + "/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=cookies, timeout=15,
@@ -534,7 +535,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             search_term = (roles[0] if roles else title.split(",")[0].strip()) if title else ""
             encoded_title = urllib.parse.quote(search_term)
             # Fetch resume clusters (competitor counts)
-            r_clusters = requests.get(
+            r_clusters = HH.get(
                 f"{hh_base()}/shards/search/resume/clusters?text={encoded_title}&area=1",
                 headers={"User-Agent": ua, "Accept": "application/json"},
                 cookies=cookies, timeout=10,
@@ -571,7 +572,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
 
             vacancy_count = 0
             try:
-                r_vac = requests.get(
+                r_vac = HH.get(
                     f"{hh_base()}/search/vacancy?text={encoded_title}&area=1",
                     headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
                     cookies=cookies, timeout=10,
@@ -669,7 +670,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
             for term in list(terms)[:10]:
                 try:
                     enc = urllib.parse.quote(term)
-                    r_vc = requests.get(
+                    r_vc = HH.get(
                         f"{hh_base()}/search/vacancy?text={enc}&area=1",
                         headers={"User-Agent": ua, "Accept": "text/html"},
                         cookies=cookies, timeout=10,
@@ -698,7 +699,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
         # 7. HR activity analysis
         hr_activity = {"active_count": 0, "slow_count": 0, "dead_count": 0}
         try:
-            r_neg = requests.get(
+            r_neg = HH.get(
                 hh_base() + "/applicant/negotiations",
                 headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
                 cookies=cookies, timeout=15,
@@ -825,7 +826,7 @@ def set_job_search_status(acc: dict, status: str) -> dict:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
     try:
-        r = requests.put(
+        r = HH.put(
             f"{hh_base()}/shards/user_statuses/job_search_status",
             params={"status": status},
             cookies=acc.get("cookies") or {},
@@ -854,7 +855,7 @@ def fetch_account_diagnostics(acc: dict) -> dict:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     out = {"status": None, "status_label": None, "red_flags": [], "stats": {}, "resumes": []}
     try:
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/applicant/resumes",
             cookies=acc.get("cookies") or {},
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": f"{hh_base()}/"},
@@ -946,7 +947,7 @@ def fetch_resume_views_aggregate(acc: dict) -> dict:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     out = {"total_all_time": 0, "total_new": 0, "graph_30d": []}
     try:
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/applicant/resumeview/history",
             params={"resumeHash": resume_hash},
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": f"{hh_base()}/applicant/resumes"},

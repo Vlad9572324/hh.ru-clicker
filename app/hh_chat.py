@@ -5,6 +5,7 @@ HH.ru chat functions: fetch chat list, build threads, send messages, mark read.
 import os
 import requests
 from app.config import hh_base
+from app.hh_http import HH
 
 from app.logging_utils import log_debug, _is_login_page
 
@@ -57,7 +58,7 @@ def _ensure_chatik_cookies(acc: dict) -> None:
 def _do_fetch_chatik_cookies(acc: dict) -> None:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
-        r = requests.get(
+        r = HH.get(
             hh_base() + "/",
             cookies=acc["cookies"],
             headers={"User-Agent": ua},
@@ -101,7 +102,7 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
         else:
             url = f"{_CHATIK_BASE}/chatik/api/chats?page={page_num}"
         try:
-            resp = requests.get(url, cookies=acc["cookies"], headers=headers, timeout=15)
+            resp = HH.get(url, cookies=acc["cookies"], headers=headers, timeout=15)
             if resp.status_code in (401, 403) or _is_login_page(resp.text):
                 break
             if resp.status_code != 200:
@@ -251,7 +252,7 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     xsrf = acc["cookies"].get("_xsrf", "")
     try:
-        r = requests.get(
+        r = HH.get(
             f"{_CHATIK_BASE}/chatik/api/chat_data",
             params={"chatId": int(chat_id)},
             cookies=acc["cookies"],
@@ -358,7 +359,7 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
     xsrf = acc["cookies"].get("_xsrf", "")
 
     try:
-        resp = requests.post(
+        resp = HH.post(
             f"{_CHATIK_BASE}/chatik/api/send",
             cookies=acc["cookies"],
             headers={
@@ -440,7 +441,7 @@ def fetch_chatik_ws_url(acc: dict) -> str | None:
     """Получить персональный wss-URL для аккаунта. Возвращает None при ошибке."""
     _ensure_chatik_cookies(acc)
     try:
-        r = requests.get(
+        r = HH.get(
             f"{_WS_BASE}/connection/data",
             params={"connectionMode": "direct", "appVersion": _WS_APP_VERSION},
             cookies=acc.get("cookies") or {},
@@ -584,7 +585,7 @@ def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
     _ensure_chatik_cookies(acc)
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
-        requests.post(
+        HH.post(
             f"{_CHATIK_BASE}/chatik/api/mark_read",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                      "Accept": "application/json", "Content-Type": "application/json",

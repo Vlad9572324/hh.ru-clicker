@@ -15,6 +15,7 @@ import requests
 
 from app.logging_utils import log_debug
 from app.config import CONFIG
+from app.hh_http import HH
 
 # Эти креды извлечены из публичного APK HH Android и широко известны.
 # Не секрет: но желательно вынести в env для возможности замены.
@@ -161,7 +162,7 @@ def get_oauth_status(resume_hash: str) -> dict:
 def _do_refresh(refresh: str, client_id: str, client_secret: str, ua: str, resume_hash: str = ""):
     """Refresh token. Returns token dict on success, None if invalid_client (fallback needed), {} on other failure."""
     try:
-        r = requests.post("https://hh.ru/oauth/token", data={
+        r = HH.post("https://hh.ru/oauth/token", data={
             "grant_type": "refresh_token",
             "client_id": client_id,
             "client_secret": client_secret,
@@ -197,7 +198,7 @@ def _do_refresh(refresh: str, client_id: str, client_secret: str, ua: str, resum
 def _do_token_exchange(code: str, client_id: str, client_secret: str, redirect_uri: str, ua: str, resume_hash: str = ""):
     """Exchange code for token. Returns token dict on success, None if invalid_client (fallback needed), {} on other failure."""
     try:
-        r = requests.post("https://hh.ru/oauth/token", data={
+        r = HH.post("https://hh.ru/oauth/token", data={
             "grant_type": "authorization_code",
             "client_id": client_id,
             "client_secret": client_secret,
@@ -323,7 +324,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                 return code_m.group(1) if code_m else ""
 
             # Step 1: GET authorize
-            r1 = requests.get("https://hh.ru/oauth/authorize", params={
+            r1 = HH.get("https://hh.ru/oauth/authorize", params={
                 "response_type": "code",
                 "client_id": _HH_OAUTH_CLIENT_ID,
                 "redirect_uri": _HH_OAUTH_REDIRECT,
@@ -335,7 +336,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                 "разрешить" in r1.text.lower() or "approve" in r1.text.lower() or "grant" in r1.text.lower()
             ):
                 # Submit approve form
-                r2 = requests.post("https://hh.ru/oauth/authorize", data={
+                r2 = HH.post("https://hh.ru/oauth/authorize", data={
                     "response_type": "code",
                     "client_id": _HH_OAUTH_CLIENT_ID,
                     "redirect_uri": _HH_OAUTH_REDIRECT,
@@ -484,7 +485,7 @@ def fetch_saved_vacancy_searches(acc: dict) -> list:
         out: list = []
         page = 0
         while page < 5:
-            r = requests.get("https://api.hh.ru/saved_searches/vacancies",
+            r = HH.get("https://api.hh.ru/saved_searches/vacancies",
                              headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
@@ -516,7 +517,7 @@ def fetch_favorited_vacancies(acc: dict) -> list:
         ids: list = []
         page = 0
         while page < 5:
-            r = requests.get("https://api.hh.ru/vacancies/favorited",
+            r = HH.get("https://api.hh.ru/vacancies/favorited",
                              headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
@@ -545,7 +546,7 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
         ids: set = set()
         page = 0
         while page < 5:
-            r = requests.get("https://api.hh.ru/vacancies/blacklisted",
+            r = HH.get("https://api.hh.ru/vacancies/blacklisted",
                              headers=H, params={"per_page": 50, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
@@ -584,7 +585,7 @@ def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
     if not H:
         return {}
     try:
-        r = requests.get(
+        r = HH.get(
             f"https://api.hh.ru/employers/{employer_id}/reviews",
             headers=H, timeout=5,
         )
@@ -635,7 +636,7 @@ def fetch_vacancy_details(acc: dict, vid: str) -> dict:
     if not H:
         return {}
     try:
-        r = requests.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=5)
+        r = HH.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=5)
         if r.status_code == 404:
             with _vacancy_details_lock:
                 _vacancy_details_cache[vid] = (now + 3600, {"archived": True})
@@ -711,7 +712,7 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
         total_found = 0
         oldest_dt = None
         for page in range(5):
-            r = requests.get(
+            r = HH.get(
                 "https://api.hh.ru/negotiations",
                 headers=H, params={"per_page": 100, "page": page}, timeout=5,
             )
@@ -761,7 +762,7 @@ def fetch_resume_status(acc: dict) -> dict:
         H = _oauth_headers(acc)
         if not H:
             return None
-        r = requests.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=5)
+        r = HH.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=5)
         if r.status_code != 200:
             return None
         d = r.json()
@@ -792,7 +793,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
         data = {"vacancy_id": vid, "resume_id": resume_hash_quoted}
         if message:
             data["message"] = message
-        r = requests.post(
+        r = HH.post(
             "https://api.hh.ru/negotiations",
             headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}",
                      "Content-Type": "application/x-www-form-urlencoded"},
@@ -854,7 +855,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
     resume_hash = acc.get("resume_hash", "")
     try:
         resume_hash_quoted = urllib.parse.quote(resume_hash, safe="")
-        r = requests.post(
+        r = HH.post(
             f"https://api.hh.ru/resumes/{resume_hash_quoted}/publish",
             headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}"},
             timeout=15,
@@ -885,7 +886,7 @@ def fetch_negotiation_messages_oauth(acc: dict, neg_id, max_messages: int = 20) 
     if not H:
         return []
     try:
-        r = requests.get(
+        r = HH.get(
             f"https://api.hh.ru/negotiations/{neg_id}/messages",
             headers=H, params={"per_page": max_messages, "order_by": "asc"},
             timeout=5,
@@ -923,7 +924,7 @@ def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
     if not H:
         return False
     try:
-        r = requests.post(
+        r = HH.post(
             f"https://api.hh.ru/negotiations/{neg_id}/messages",
             headers={**H, "Content-Type": "application/json"},
             json={"message": text}, timeout=15,
@@ -969,8 +970,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         "is_automated": bool(is_automated),
     }
     try:
-        import requests as _rq
-        r = _rq.post(
+        r = HH.post(
             f"https://api.hh.ru/common/chats/{cid}/messages",
             json=payload,
             headers={

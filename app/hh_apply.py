@@ -12,6 +12,7 @@ from glom import glom
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
+from app.hh_http import HH
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
@@ -392,7 +393,7 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     try:
         r = _with_retry(
-            lambda: requests.get(
+            lambda: HH.get(
                 f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
                 headers={"User-Agent": ua, "Accept": "application/json, */*",
                          "Referer": f"{hh_base()}/vacancy/{vid}"},
@@ -469,7 +470,7 @@ def check_limit(acc: dict) -> bool:
         return True
     try:
         r_search = _with_retry(
-            lambda: requests.get(
+            lambda: HH.get(
                 hh_base() + "/search/vacancy?text=&area=1&page=0",
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                          "Accept": "text/html"},
@@ -483,7 +484,7 @@ def check_limit(acc: dict) -> bool:
         vid = vids[0]
         # Use GET popup — safe, no side effects
         r = _with_retry(
-            lambda: requests.get(
+            lambda: HH.get(
                 f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                          "Accept": "application/json", "X-Xsrftoken": xsrf},
@@ -523,7 +524,7 @@ def touch_resume(acc: dict) -> tuple:
 
     try:
         response = _with_retry(
-            lambda: requests.post(
+            lambda: HH.post(
                 hh_base() + "/applicant/resumes/touch",
                 headers=headers,
                 cookies=acc["cookies"],

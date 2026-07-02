@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 import threading
 import requests
+from app.hh_http import HH
 try:
     from zoneinfo import ZoneInfo
     _MSK = ZoneInfo("Europe/Moscow")
@@ -1342,7 +1343,7 @@ class BotManager:
 
             # Hot leads priority: fetch possible_job_offers and put matching vacancies first
             try:
-                r_offers = requests.get(
+                r_offers = HH.get(
                     hh_base() + "/shards/applicant/negotiations/possible_job_offers",
                     headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -1870,9 +1871,8 @@ class BotManager:
                     break
                 page_params = list(base_params) + [("per_page", "50"), ("page", str(page))]
                 try:
-                    import requests as _rq
-                    r = _rq.get("https://api.hh.ru/vacancies", params=page_params,
-                                headers=headers, timeout=15)
+                    r = HH.get("https://api.hh.ru/vacancies", params=page_params,
+                               headers=headers, timeout=15)
                     completed += 1
                     state.status_detail = f"OAuth-сбор {completed}/{total_pages}"
                     if r.status_code in (401, 403):

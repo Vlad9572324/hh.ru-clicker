@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from app.logging_utils import log_debug, _is_login_page
 from app.hh_resume import parse_hh_lux_ssr
 from app.config import hh_base
+from app.hh_http import HH
 
 
 def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
@@ -38,7 +39,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     # ── Шаг 1: точный счёт интервью через state=INTERVIEW фильтр ──────────────
     for page in range(max_pages):
         try:
-            resp = requests.get(
+            resp = HH.get(
                 f"{hh_base()}/applicant/negotiations?filter=all&state=INTERVIEW&page={page}",
                 cookies=cookies,
                 headers=headers,
@@ -134,7 +135,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     seen_general_keys: set = set()
     for page in range(max_pages):
         try:
-            resp = requests.get(
+            resp = HH.get(
                 f"{hh_base()}/applicant/negotiations?page={page}",
                 cookies=cookies,
                 headers=headers,
@@ -232,7 +233,7 @@ def fetch_hh_possible_offers(acc: dict) -> list:
         "Referer": hh_base() + "/applicant/negotiations",
     }
     try:
-        resp = requests.get(
+        resp = HH.get(
             hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             cookies=cookies,
             headers=headers,
@@ -270,7 +271,7 @@ def auto_decline_discards(acc: dict) -> int:
         # Собираем topic_id дискардов (первые 5 страниц)
         topic_ids = []
         for page in range(5):
-            r = requests.get(
+            r = HH.get(
                 f"{hh_base()}/applicant/negotiations?state=DISCARD&page={page}",
                 headers=headers, cookies=acc["cookies"], timeout=15
             )
@@ -291,7 +292,7 @@ def auto_decline_discards(acc: dict) -> int:
         for tid in topic_ids[:50]:  # не более 50 за раз
             try:
                 # requests сам сделает URL-encoding (важно: _xsrf может содержать `+`, `=`, `&`)
-                r2 = requests.post(
+                r2 = HH.post(
                     hh_base() + "/applicant/negotiations/decline",
                     headers=headers,
                     cookies=acc["cookies"],
@@ -347,8 +348,7 @@ def fetch_employer_rating(acc: dict, employer_id) -> dict | None:
 
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     try:
-        import requests as _rq
-        r = _rq.get(
+        r = HH.get(
             f"{hh_base()}/employer_reviews/proxy_components/small_widget",
             params={"employerId": eid},
             cookies=acc.get("cookies") or {},
@@ -439,8 +439,7 @@ def fetch_employer_id_for_vacancy(acc: dict, vacancy_id) -> int | None:
 
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     try:
-        import requests as _rq
-        r = _rq.get(
+        r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
             cookies=acc.get("cookies") or {},
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
@@ -513,8 +512,7 @@ def fetch_negotiations_metadata(acc: dict) -> dict:
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
     out = {"politeness": {}, "activity": {}, "topics_by_vid": {}}
     try:
-        import requests as _rq
-        r = _rq.get(
+        r = HH.get(
             f"{hh_base()}/applicant/negotiations",
             cookies=cookies,
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
@@ -588,8 +586,7 @@ def fetch_vacancy_owner_hr_hhid(acc: dict, vacancy_id) -> int | None:
             return hit[1]
     ua = "Mozilla/5.0 Chrome/120"
     try:
-        import requests as _rq
-        r = _rq.get(
+        r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
             cookies=acc.get("cookies") or {},
             headers={"User-Agent": ua, "Accept": "text/html"},
@@ -640,8 +637,7 @@ def fetch_similar_vacancies(vacancy_id, page: int = 0, per_page: int = 20) -> di
         if hit and now - hit[0] < _SIMILAR_TTL:
             return hit[1]
     try:
-        import requests as _rq
-        r = _rq.get(
+        r = HH.get(
             f"https://api.hh.ru/vacancies/{vid}/similar_vacancies",
             params={"page": page, "per_page": per_page},
             headers={
