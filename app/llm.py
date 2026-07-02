@@ -42,6 +42,11 @@ _llm_usage_lock = threading.Lock()
 _llm_last_status: dict[str, dict[str, dict[str, str]]] = {}
 _llm_last_status_lock = threading.Lock()
 
+_OPENCLAW_PROMPT_MAX_CHARS = 12000
+_OPENCLAW_SYSTEM_MAX_CHARS = 2400
+_OPENCLAW_MESSAGE_MAX_CHARS = 900
+_OPENCLAW_CONVERSATION_MESSAGES = 4
+
 
 def _get_today_str() -> str:
     try:
@@ -150,6 +155,61 @@ def _randomize_text(template: str) -> str:
         options = [o.strip() for o in m.group(1).split('|')]
         return random.choice(options)
     return re.sub(r'\{([^}]+\|[^}]+)\}', pick, template)
+
+
+def _clip_text(text: str, limit: int, keep_tail: bool = False) -> str:
+    if limit <= 0:
+        return ""
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    marker = "\n...[truncated]...\n"
+    if limit <= len(marker):
+        return value[:limit]
+    room = limit - len(marker)
+    if keep_tail:
+        head = max(0, room // 3)
+        tail = max(0, room - head)
+        return value[:head] + marker + value[-tail:]
+    return value[:room] + marker
+
+
+def _build_openclaw_prompt(messages: list, intro: str, log_label: str) -> str:
+    system_text = ""
+    convo_items = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            system_text = _clip_text(content, _OPENCLAW_SYSTEM_MAX_CHARS, keep_tail=True)
+        else:
+            clipped = _clip_text(content, _OPENCLAW_MESSAGE_MAX_CHARS, keep_tail=(role == "user"))
+            convo_items.append((role, clipped))
+
+    convo_tail = convo_items[-_OPENCLAW_CONVERSATION_MESSAGES:]
+    last_employer_text = ""
+    for role, content in reversed(convo_tail):
+        if role == "user":
+            last_employer_text = content
+            break
+    if not last_employer_text and convo_tail:
+        last_employer_text = convo_tail[-1][1]
+
+    conversation_block = "\n\n---\n\n".join(f"[{role}]\n{content}" for role, content in convo_tail)
+    prompt = (
+        f"{intro}\n\n"
+        f"Сообщение работодателя:\n{last_employer_text}\n\n"
+        f"[instructions]\n{system_text}\n\n[conversation]\n{conversation_block}"
+    )
+    compacted = _clip_text(prompt, _OPENCLAW_PROMPT_MAX_CHARS, keep_tail=True)
+    if len(compacted) < len(prompt):
+        log_debug(
+            f"{log_label}: compacted OpenClaw prompt "
+            f"{len(prompt)}→{len(compacted)} chars to fit Windows command line"
+        )
+    return compacted
 
 
 def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "") -> str:
@@ -412,26 +472,11 @@ def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
     This is intentionally a fallback for installations where Codex auth lives in
     OpenClaw rather than an OpenAI-compatible HTTP endpoint.
     """
-    system_text = ""
-    chat_lines = []
-    last_employer_text = ""
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = (msg.get("content") or "").strip()
-        if not content:
-            continue
-        if role == "system":
-            system_text = content[:5000]
-        else:
-            chat_lines.append(f"[{role}]\n{content[:1600]}")
-            if role == "user":
-                last_employer_text = content[:1600]
-    prompt = (
+    prompt = _build_openclaw_prompt(
+        messages,
         "Нужно ответить работодателю на hh.ru. Верни только готовый текст ответа от имени соискателя, "
-        "без Markdown, без пояснений, без префиксов вроде 'Ответ:'.\n\n"
-        f"Сообщение работодателя:\n{last_employer_text}\n\n"
-        f"[instructions]\n{system_text}\n\n[conversation]\n"
-        + "\n\n---\n\n".join(chat_lines[-6:])
+        "без Markdown, без пояснений, без префиксов вроде 'Ответ:'.",
+        "generate_llm_reply",
     )
     text = _run_openclaw_prompt(prompt, account_key, "reply")
     if text:
@@ -606,9 +651,17 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
         for q in rich_questions:
             lines.append(f'  "{q["field"]}": "...",')
         lines.append("}")
-        prompt = "\n".join(lines)
+        questionnaire_user = "\n".join(lines)
         if resume_text:
-            prompt += f"\n\nРезюме кандидата (контекст, не выводить):\n{resume_text[:2000]}"
+            questionnaire_user += f"\n\nРезюме кандидата (контекст, не выводить):\n{resume_text[:2000]}"
+        prompt = _build_openclaw_prompt(
+            [
+                {"role": "system", "content": "Нужно заполнить анкету работодателя на hh.ru. Верни только валидный JSON без пояснений."},
+                {"role": "user", "content": questionnaire_user},
+            ],
+            "Нужно заполнить анкету работодателя на hh.ru. Верни только валидный JSON без пояснений.",
+            "generate_llm_questionnaire_answers",
+        )
         raw = _run_openclaw_prompt(prompt, account_key, "questionnaire")
         if not raw:
             return {}
