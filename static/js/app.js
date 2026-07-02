@@ -1976,6 +1976,55 @@ async function letterSave(idx, btn) {
   }
 }
 
+async function resumeSelectSave(idx, btn) {
+  const sel = document.getElementById('acc-resume-sel-' + idx);
+  const st  = document.getElementById('acc-resume-st-' + idx);
+  const cur = document.getElementById('acc-resume-current-' + idx);
+  const newHash = sel?.value || '';
+  if (!newHash) return;
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ переключаю…'; st.style.color = 'var(--dim)'; }
+  try {
+    const r = await fetch(`/api/session/${idx}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ resume_hash: newHash })
+    });
+    const d = await r.json();
+    if (d.status === 'ok' || d.ok) {
+      if (st) { st.textContent = '✅ Резюме переключено'; st.style.color = 'var(--green)'; }
+      const opt = sel.options[sel.selectedIndex];
+      if (cur && opt) cur.textContent = opt.textContent.split(' · ')[0];
+    } else {
+      if (st) { st.textContent = '❌ ' + (d.message || d.error || 'Ошибка'); st.style.color = 'var(--red)'; }
+    }
+  } catch (e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) btn.disabled = false;
+    if (st) setTimeout(() => { st.textContent = ''; }, 4000);
+  }
+}
+
+async function sessRefresh(idx, btn) {
+  const st = document.getElementById('acc-resume-st-' + idx);
+  if (btn) btn.disabled = true;
+  if (st) { st.textContent = '⏳ читаю резюме из HH…'; st.style.color = 'var(--dim)'; }
+  try {
+    const r = await fetch(`/api/session/${idx}/refresh`, {method: 'POST'});
+    const d = await r.json();
+    if (d.status === 'ok') {
+      if (st) { st.textContent = '✅ Обновлено, перезагрузи страницу'; st.style.color = 'var(--green)'; }
+    } else {
+      if (st) { st.textContent = '❌ ' + (d.message || 'Ошибка'); st.style.color = 'var(--red)'; }
+    }
+  } catch (e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Search URLs section ───────────────────────────────────────
 const HH_AREAS = {
   '1':'Москва','2':'Санкт-Петербург','3':'Екатеринбург','4':'Новосибирск',
@@ -3041,6 +3090,24 @@ function buildCardHTML(acc) {
         </div>
       </div>
     </details>
+    ${acc.temp ? `<details class="acc-letter-wrap" id="acc-resume-wrap-${acc.idx}">
+      <summary>📄 Резюме <span id="acc-resume-current-${acc.idx}" style="font-size:10px;color:var(--dim)">${esc((acc.all_resumes||[]).find(r=>r.hash===acc.resume_hash)?.title || (acc.resume_hash ? acc.resume_hash.slice(0,8)+'…' : '—'))}</span></summary>
+      <div class="acc-letter-body">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px">
+          С каким резюме бот откликается. У аккаунта: <b>${(acc.all_resumes||[]).length}</b> шт.
+        </div>
+        <select id="acc-resume-sel-${acc.idx}" class="apply-input" style="font-size:11px;padding:3px 6px;margin-bottom:6px;width:100%">
+          ${(acc.all_resumes||[]).map(r =>
+            `<option value="${esc(r.hash)}" ${r.hash===acc.resume_hash?'selected':''}>${esc(r.title||'—')} · ${esc(r.hash.slice(0,10))}…</option>`
+          ).join('') || '<option value="">— пусто, обнови сессию —</option>'}
+        </select>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <button class="btn-sm" onclick="resumeSelectSave(${acc.idx},this)">💾 Применить</button>
+          <button class="btn-sm" onclick="sessRefresh(${acc.idx},this)" title="Заново прочитать список резюме из HH">🔄 Обновить</button>
+          <span id="acc-resume-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>
+        </div>
+      </div>
+    </details>` : ''}
     <details class="acc-letter-wrap" id="acc-url-wrap-${acc.idx}">
       <summary>${t('url_section')}</summary>
       <div class="acc-letter-body">
