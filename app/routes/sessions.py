@@ -11,6 +11,7 @@ from app.config import accounts_data, hh_base
 from app.storage import save_browser_sessions
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
+from app.hh_http import HH, is_impersonating
 
 from app.routes.accounts import _parse_cookies_str, _AUTH_COOKIE_KEYS
 
@@ -35,26 +36,37 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
         "Upgrade-Insecure-Requests": "1",
         "Cookie": raw_cookie_line,
     }
+    # HH client (curl_cffi impersonate Chrome) вместо голого requests: без этого
+    # HH через DDoS-Guard палит JA3-fingerprint python'a и режет 403/404 ещё до
+    # чтения cookie. С impersonate — walk-through как обычный Chrome.
     try:
-        with requests.Session() as s:
-            # Warm-up: получить DDoS-Guard/anti-bot куки для последующего запроса.
-            try:
-                s.get(hh_base() + "/", headers=base_headers, timeout=10, allow_redirects=True)
-            except Exception:
-                pass  # warm-up best-effort, если упадёт — попробуем основной запрос всё равно
-            r = s.get(
-                hh_base() + "/applicant/resumes",
-                headers={**base_headers, "Referer": hh_base() + "/"},
-                timeout=15,
-                allow_redirects=True,
-            )
+        # Warm-up для получения DDoS-Guard cookies (best-effort).
+        try:
+            HH.get(hh_base() + "/", headers=base_headers, timeout=10,
+                   allow_redirects=True, _diag_tag="sess_warmup")
+        except Exception:
+            pass
+        r = HH.get(
+            hh_base() + "/applicant/resumes",
+            headers={**base_headers, "Referer": hh_base() + "/"},
+            timeout=15, allow_redirects=True,
+            _diag_tag="sess_validate",
+        )
     except Exception as e:
         return {"ok": False, "error": f"Ошибка сети: {e}"}
 
     if r.status_code != 200:
         hint = ""
-        if r.status_code in (401, 403):
+        if r.status_code == 404:
+            hint = " — HH вернул 404, обычно это DDoS-Guard soft-ban по IP+fingerprint."
+            if not is_impersonating():
+                hint += " Установите пакет curl_cffi (рестарт бота) — маскирует TLS под Chrome."
+            else:
+                hint += " Попробуйте сменить IP (VPN/прокси) или подождать 30-60 мин."
+        elif r.status_code in (401, 403):
             hint = " — DDoS-Guard или сессия устарела. Попробуйте обновить cookie из браузера (свежая cURL)."
+            if r.status_code == 403 and not is_impersonating():
+                hint += " Также помогает curl_cffi для TLS-fingerprint mask."
         return {"ok": False, "error": f"Сессия невалидна: HTTP {r.status_code}{hint}", "http_status": r.status_code}
 
     ssr = parse_hh_lux_ssr(r.text)
