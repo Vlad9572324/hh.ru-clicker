@@ -16,15 +16,8 @@ from app.hh_http import HH
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
-from app.llm import _randomize_text, generate_llm_questionnaire_answers
+from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm_last_status
 from app.hh_resume import fetch_resume_text
-
-try:
-    import openai as _openai_mod
-    _openai_available = True
-except ImportError:
-    _openai_available = False
-
 
 _HH_DEFAULT_TIMEOUT = 15
 
@@ -256,7 +249,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 return "test", {}
 
             # LLM-заполнение опросника (если включено)
-            if CONFIG.llm_fill_questionnaire and CONFIG.llm_enabled and _openai_available and questions:
+            if CONFIG.llm_fill_questionnaire and CONFIG.llm_enabled and questions:
                 rich_qs = _parse_questionnaire_rich(html)
                 resume_text = ""
                 if CONFIG.llm_use_resume:
@@ -269,7 +262,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 llm_ans = await _aio2.get_event_loop().run_in_executor(
                     None,
                     lambda: generate_llm_questionnaire_answers(
-                        rich_qs, vacancy_title, company, resume_text=resume_text
+                        rich_qs, vacancy_title, company, resume_text=resume_text, account_key=f"questionnaire:{vid}"
                     ),
                 )
                 if llm_ans:
@@ -324,7 +317,16 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                         field_answers[f] = validated_ans[f]
                     log_debug(f"Questionnaire {vid}: LLM заполнил {len(overridden)}/{len(field_answers)} полей: {overridden}")
                 else:
-                    log_debug(f"Questionnaire {vid}: LLM вернул пустой ответ, используем шаблоны")
+                    llm_status = get_llm_last_status(f"questionnaire:{vid}", "questionnaire")
+                    provider = llm_status.get("provider") or "unknown"
+                    status = llm_status.get("status") or "empty"
+                    if provider == "openclaw" and status == "timeout":
+                        log_debug(f"Questionnaire {vid}: OpenClaw timeout, используем шаблоны")
+                    else:
+                        log_debug(
+                            f"Questionnaire {vid}: LLM не дал валидный ответ "
+                            f"(provider={provider}, status={status}), используем шаблоны"
+                        )
 
             log_debug(f"Questionnaire {vid}: {len(field_answers)} fields, {len(questions)} questions")
             for name, val in field_answers.items():

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from app.logging_utils import log_debug
 from app.config import CONFIG, save_config
 from app.instances import bot
+from app.llm import _openclaw_command
 
 
 router = APIRouter()
@@ -169,9 +170,9 @@ async def api_llm_run_now():
         return {"started": False, "error": "LLM глобально выключен — включи большой тумблер на этой вкладке"}
     _has_llm = (CONFIG.llm_api_key or "").strip() or any(
         p.get("api_key") for p in (CONFIG.llm_profiles or []) if p.get("enabled", True)
-    )
+    ) or (getattr(CONFIG, "llm_openclaw_enabled", False) and bool(_openclaw_command()))
     if not _has_llm:
-        return {"started": False, "error": "Нет ни одного API-ключа в LLM-профилях"}
+        return {"started": False, "error": "Не настроен ни один LLM-провайдер: API-профили или OpenClaw"}
     now = _time.time()
     if now - _llm_run_now_last < _LLM_RUN_NOW_COOLDOWN:
         wait = int(_LLM_RUN_NOW_COOLDOWN - (now - _llm_run_now_last))
