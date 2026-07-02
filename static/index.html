@@ -504,6 +504,23 @@
       </div>
     </details>
 
+    <!-- Diagnostics dump -->
+    <details class="q-section prio-medium">
+      <summary class="q-section-title">🩺 Диагностика (для support / issue)</summary>
+      <div class="q-section-body">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px">
+          Собирает версию бота, статус TLS-impersonate, последние 20&nbsp;KB debug.log и diag.log.
+          В bundle нет куков, токенов или содержимого писем — только метаданные и HTTP-ошибки.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <button class="btn-sm" onclick="diagCopy(this)">📋 Скопировать</button>
+          <button class="btn-sm" onclick="diagDownload(this)">💾 Скачать .txt</button>
+          <span id="diag-status" style="font-size:11px;color:var(--dim)"></span>
+        </div>
+        <textarea id="diag-textarea" readonly style="width:100%;height:220px;font-family:monospace;font-size:10px;background:var(--bg-card2);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:6px" placeholder="Нажми «Скопировать» или «Скачать»…"></textarea>
+      </div>
+    </details>
+
     <!-- Work schedule filter + auto-tests -->
     <details class="q-section prio-medium">
       <summary class="q-section-title">🏢 Фильтры и автоматизация</summary>

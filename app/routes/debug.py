@@ -13,9 +13,53 @@ from fastapi import APIRouter
 from app.hh_chat import fetch_negotiation_thread
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
+from app.hh_http import is_impersonating, impersonate_version
+from fastapi.responses import PlainTextResponse
+from pathlib import Path
 
 
 router = APIRouter()
+
+
+def _tail(path: Path, n_bytes: int = 20000) -> str:
+    """Read last ~n_bytes of a file as UTF-8 text."""
+    try:
+        if not path.exists():
+            return f"(файл {path} не существует)"
+        size = path.stat().st_size
+        if size <= n_bytes:
+            return path.read_text(encoding="utf-8", errors="replace")
+        with open(path, "rb") as f:
+            f.seek(-n_bytes, 2)
+            return "…(truncated)\n" + f.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        return f"(ошибка чтения: {e})"
+
+
+@router.get("/api/diagnostic_bundle", response_class=PlainTextResponse)
+async def api_diagnostic_bundle():
+    """Собрать текстовый bundle для отправки в support / issue:
+    - версия / TLS-impersonate статус
+    - счётчик сессий / activated bots
+    - последние 20 KB debug.log
+    - последние 20 KB diag.log (только suspect responses)
+
+    Возвращает text/plain — юзер копирует одним Ctrl+A / жмёт «Скачать».
+    Никаких куков, токенов и текстов писем — только метаданные и HTTP-ошибки.
+    """
+    import platform, sys
+    lines = []
+    lines.append("=== HH.BOT DIAGNOSTIC BUNDLE ===")
+    lines.append(f"python: {sys.version.split()[0]}  platform: {platform.platform()}")
+    lines.append(f"impersonating: {is_impersonating()}  as: {impersonate_version()}")
+    lines.append(f"temp_sessions: {len(bot.temp_sessions)}  active_bots: {len(bot.temp_states)}  regular_accounts: {len(bot.account_states)}")
+    lines.append("")
+    lines.append("=== data/diag.log (последние ~20 KB) ===")
+    lines.append(_tail(Path("data/diag.log")))
+    lines.append("")
+    lines.append("=== data/debug.log (последние ~20 KB) ===")
+    lines.append(_tail(Path("data/debug.log")))
+    return "\n".join(lines)
 
 
 @router.get("/api/debug/session/{idx}")

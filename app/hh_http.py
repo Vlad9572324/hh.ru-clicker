@@ -139,8 +139,12 @@ class HHClient:
         diag_tag = kwargs.pop("_diag_tag", "")
         skip_diag = kwargs.pop("_skip_diag", False)
 
+        # curl_cffi не поддерживает `files=` в POST → forced fallback на requests
+        # (обычно touch_resume / multipart uploads — редкие, не критично для fingerprint).
+        force_requests = kwargs.pop("_force_requests", False) or "files" in kwargs
+
         # curl_cffi понимает большинство requests-опций 1:1 + `impersonate`
-        if self._session_cffi is not None and not kwargs.pop("_force_requests", False):
+        if self._session_cffi is not None and not force_requests:
             try:
                 r = self._session_cffi.request(
                     method, url, impersonate=_IMPERSONATE, **kwargs,

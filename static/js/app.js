@@ -4159,6 +4159,42 @@ function syncSettingsSliders(snap) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+async function diagFetch() {
+  const st = document.getElementById('diag-status');
+  const ta = document.getElementById('diag-textarea');
+  if (st) st.textContent = '⏳ читаю…';
+  const r = await fetch('/api/diagnostic_bundle');
+  const txt = await r.text();
+  if (ta) ta.value = txt;
+  if (st) st.textContent = `${(txt.length/1024).toFixed(1)} KB готово`;
+  return txt;
+}
+
+async function diagCopy(btn) {
+  try {
+    const txt = await diagFetch();
+    await navigator.clipboard.writeText(txt);
+    const st = document.getElementById('diag-status');
+    if (st) st.textContent = '✅ скопировано в буфер';
+    if (btn) { const old = btn.textContent; btn.textContent = '✅ Скопировано'; setTimeout(()=>btn.textContent=old, 2000); }
+  } catch (e) {
+    const st = document.getElementById('diag-status');
+    if (st) st.textContent = '⚠️ буфер недоступен — выдели текст ниже и Ctrl+C';
+  }
+}
+
+async function diagDownload(btn) {
+  const txt = await diagFetch();
+  const blob = new Blob([txt], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  a.href = url;
+  a.download = `hh-bot-diag-${stamp}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function esc(s) {
   if (s === null || s === undefined) return '';
   return String(s)
