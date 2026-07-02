@@ -3090,15 +3090,26 @@ function buildCardHTML(acc) {
         </div>
       </div>
     </details>
-    ${acc.temp ? `<details class="acc-letter-wrap" id="acc-resume-wrap-${acc.idx}">
-      <summary>📄 Резюме <span id="acc-resume-current-${acc.idx}" style="font-size:10px;color:var(--dim)">${esc((acc.all_resumes||[]).find(r=>r.hash===acc.resume_hash)?.title || (acc.resume_hash ? acc.resume_hash.slice(0,8)+'…' : '—'))}</span></summary>
+    ${acc.temp ? (() => {
+      // HH SSR отдаёт title как list of {string: "..."} — нормализуем
+      const normTitle = (t) => {
+        if (!t) return '—';
+        if (typeof t === 'string') return t;
+        if (Array.isArray(t)) return t.map(x => (x && x.string) || x).filter(Boolean).join(' ');
+        if (typeof t === 'object' && t.string) return t.string;
+        return '—';
+      };
+      const cur = (acc.all_resumes||[]).find(r=>r.hash===acc.resume_hash);
+      const curTitle = cur ? normTitle(cur.title) : (acc.resume_hash ? acc.resume_hash.slice(0,8)+'…' : '—');
+      return `<details class="acc-letter-wrap" id="acc-resume-wrap-${acc.idx}">
+      <summary>📄 Резюме <span id="acc-resume-current-${acc.idx}" style="font-size:10px;color:var(--dim)">${esc(curTitle)}</span></summary>
       <div class="acc-letter-body">
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">
           С каким резюме бот откликается. У аккаунта: <b>${(acc.all_resumes||[]).length}</b> шт.
         </div>
         <select id="acc-resume-sel-${acc.idx}" class="apply-input" style="font-size:11px;padding:3px 6px;margin-bottom:6px;width:100%">
           ${(acc.all_resumes||[]).map(r =>
-            `<option value="${esc(r.hash)}" ${r.hash===acc.resume_hash?'selected':''}>${esc(r.title||'—')} · ${esc(r.hash.slice(0,10))}…</option>`
+            `<option value="${esc(r.hash)}" ${r.hash===acc.resume_hash?'selected':''}>${esc(normTitle(r.title))} · ${esc((r.hash||'').slice(0,10))}…</option>`
           ).join('') || '<option value="">— пусто, обнови сессию —</option>'}
         </select>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -3107,7 +3118,8 @@ function buildCardHTML(acc) {
           <span id="acc-resume-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>
         </div>
       </div>
-    </details>` : ''}
+    </details>`;
+    })() : ''}
     <details class="acc-letter-wrap" id="acc-url-wrap-${acc.idx}">
       <summary>${t('url_section')}</summary>
       <div class="acc-letter-body">

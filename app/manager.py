@@ -722,6 +722,7 @@ class BotManager:
                     "temp": True,
                     "bot_active": True,
                     "resume_hash": s.acc.get("resume_hash", ""),
+                    "all_resumes": ts.get("all_resumes", []),
                     "letter": s.acc.get("letter", ""),
                     "urls": s.acc.get("urls", []),
                     "url_pages": s.acc.get("url_pages", {}),
