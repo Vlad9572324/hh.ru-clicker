@@ -270,9 +270,57 @@ async def api_session_deactivate(idx: int):
     return {"status": "error", "message": "Не удалось остановить"}
 
 
+def _refresh_via_oauth(acc: dict) -> dict:
+    """OAuth-fallback: тянем список резюме через GET /resumes/mine
+    (Bearer-only, cookies не нужны). Работает даже когда куки протухли.
+    """
+    from app.oauth import _obtain_oauth_token
+    from app.hh_http import HH
+    token = _obtain_oauth_token(acc)
+    if not token:
+        return {"ok": False, "error": "OAuth токен не получен — куки нужны для первичной авторизации"}
+    try:
+        r = HH.get("https://api.hh.ru/resumes/mine", headers={
+            "User-Agent": "hh-clicker/refresh",
+            "Authorization": f"Bearer {token}",
+        }, params={"per_page": 30}, timeout=10, _diag_tag="sess_refresh_oauth")
+    except Exception as e:
+        return {"ok": False, "error": f"OAuth ошибка: {e}"}
+    if r.status_code != 200:
+        return {"ok": False, "error": f"OAuth /resumes/mine HTTP {r.status_code}"}
+    try:
+        data = r.json()
+    except Exception:
+        return {"ok": False, "error": "OAuth ответ не JSON"}
+    all_resumes = []
+    name = ""
+    for it in data.get("items", []) or []:
+        h = it.get("id") or it.get("hash") or ""
+        if not h:
+            continue
+        all_resumes.append({"hash": h, "title": it.get("title") or "Резюме"})
+        if not name:
+            fn = it.get("first_name") or ""
+            ln = it.get("last_name") or ""
+            full = (fn + " " + ln).strip()
+            if full:
+                name = full
+    rh = acc.get("resume_hash", "")
+    if not rh and all_resumes:
+        rh = all_resumes[0]["hash"]
+    return {"ok": True, "name": name or "Браузер", "resume_hash": rh,
+            "all_resumes": all_resumes, "_source": "oauth"}
+
+
 @router.post("/api/session/{idx}/refresh")
 async def api_session_refresh(idx: int):
-    """Перепрофилировать сессию: обновить имя и resume_hash из HH."""
+    """Перепрофилировать сессию: обновить имя и resume_hash из HH.
+
+    Пытаемся 2 пути:
+    1. Cookie-based /applicant/resumes (правильные названия резюме, работает
+       если куки живые)
+    2. OAuth-based /resumes/mine (fallback когда куки dead — degraded mode)
+    """
     temp_idx = idx - len(bot.account_states)
     if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
         return {"status": "error", "message": "Не найдено"}
@@ -281,7 +329,17 @@ async def api_session_refresh(idx: int):
     loop = asyncio.get_event_loop()
     profile = await loop.run_in_executor(None, _validate_and_profile, raw_line)
     if not profile["ok"]:
-        return {"status": "error", "message": profile.get("error", "Ошибка")}
+        # Cookie-путь упал (обычно 403 DDoS-Guard или auth). Пробуем OAuth-fallback:
+        # /resumes/mine работает без кук пока refresh_token живой.
+        oauth_profile = await loop.run_in_executor(None, _refresh_via_oauth, ts)
+        if oauth_profile.get("ok"):
+            profile = oauth_profile
+        else:
+            # Оба пути не сработали — вернём подробную причину.
+            cookie_err = profile.get("error", "Ошибка")
+            oauth_err = oauth_profile.get("error", "Нет OAuth токена")
+            return {"status": "error",
+                    "message": f"{cookie_err}\n\nOAuth-fallback тоже не помог: {oauth_err}"}
     resume_changed = False
     if profile["resume_hash"]:
         if bot.temp_sessions[temp_idx].get("resume_hash") != profile["resume_hash"]:
