@@ -39,6 +39,8 @@ _questionnaire_lock = threading.Lock()
 
 _llm_usage_counters: dict[str, dict[str, int]] = {}
 _llm_usage_lock = threading.Lock()
+_llm_last_status: dict[str, dict[str, dict[str, str]]] = {}
+_llm_last_status_lock = threading.Lock()
 
 
 def _get_today_str() -> str:
@@ -99,6 +101,47 @@ def _track_usage(account_key: str, kind: str) -> None:
 def get_llm_usage() -> dict:
     with _llm_usage_lock:
         return {k: dict(v) for k, v in _llm_usage_counters.items()}
+
+
+def _set_llm_last_status(account_key: str, kind: str, provider: str, status: str, detail: str = "") -> None:
+    key = account_key or "__global__"
+    with _llm_last_status_lock:
+        _llm_last_status.setdefault(key, {})
+        _llm_last_status[key][kind] = {
+            "provider": str(provider or ""),
+            "status": str(status or ""),
+            "detail": str(detail or "")[:400],
+        }
+
+
+def get_llm_last_status(account_key: str = "", kind: str = "reply") -> dict:
+    key = account_key or "__global__"
+    with _llm_last_status_lock:
+        return dict((_llm_last_status.get(key, {}) or {}).get(kind, {}))
+
+
+def get_llm_status_summary() -> dict:
+    summary = {
+        "configured_provider": "",
+        "reply": {},
+        "questionnaire": {},
+    }
+    profiles = [p for p in (CONFIG.llm_profiles or []) if p.get("enabled", True) and p.get("api_key")]
+    if profiles or (CONFIG.llm_api_key or "").strip():
+        summary["configured_provider"] = "api"
+    elif getattr(CONFIG, "llm_openclaw_enabled", False) and _openclaw_command():
+        summary["configured_provider"] = "openclaw"
+
+    with _llm_last_status_lock:
+        for key in sorted(_llm_last_status.keys(), reverse=True):
+            entry = _llm_last_status.get(key) or {}
+            if not summary["reply"] and entry.get("reply"):
+                summary["reply"] = dict(entry["reply"])
+            if not summary["questionnaire"] and entry.get("questionnaire"):
+                summary["questionnaire"] = dict(entry["questionnaire"])
+            if summary["reply"] and summary["questionnaire"]:
+                break
+    return summary
 
 
 def _randomize_text(template: str) -> str:
@@ -194,9 +237,11 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
             tokens_out = getattr(usage, "completion_tokens", "?") if usage else "?"
             log_debug(f"generate_llm_reply: {pname} → {len(result)} симв., tokens in/out={tokens_in}/{tokens_out}")
             _track_usage(account_key, "reply")
+            _set_llm_last_status(account_key, "reply", "api", "ok", f"{pname}: {len(result)} chars")
             return result
         except Exception as e:
             log_debug(f"generate_llm_reply roundrobin {pname} error: {e}")
+            _set_llm_last_status(account_key, "reply", "api", "error", str(e)[:300])
             return ""
     else:
         # Fallback mode: try each profile in order, return first successful result
@@ -219,11 +264,14 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                 result = (resp.choices[0].message.content or "").strip()
                 log_debug(f"generate_llm_reply: {pname} → {len(result)} симв.")
                 _track_usage(account_key, "reply")
+                _set_llm_last_status(account_key, "reply", "api", "ok", f"{pname}: {len(result)} chars")
                 return result
             except Exception as e:
                 log_debug(f"generate_llm_reply fallback {pname} error: {e}")
+                _set_llm_last_status(account_key, "reply", "api", "error", str(e)[:300])
                 continue
         log_debug("generate_llm_reply: все профили вернули ошибку")
+        _set_llm_last_status(account_key, "reply", "api", "failed_all", "all profiles failed")
         return ""
 
 
@@ -364,10 +412,6 @@ def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
     This is intentionally a fallback for installations where Codex auth lives in
     OpenClaw rather than an OpenAI-compatible HTTP endpoint.
     """
-    agent = (getattr(CONFIG, "llm_openclaw_agent", "") or "hh-clicker").strip()
-    model = (getattr(CONFIG, "llm_openclaw_model", "") or "").strip()
-    timeout = max(30, int(getattr(CONFIG, "llm_openclaw_timeout", 120) or 120))
-    session_key = f"agent:{agent}:hh-reply-{account_key or 'global'}-{uuid.uuid4().hex[:8]}"
     system_text = ""
     chat_lines = []
     last_employer_text = ""
@@ -389,46 +433,10 @@ def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
         f"[instructions]\n{system_text}\n\n[conversation]\n"
         + "\n\n---\n\n".join(chat_lines[-6:])
     )
-    openclaw_cmd = _openclaw_command()
-    if not openclaw_cmd:
-        log_debug("generate_llm_reply openclaw error: openclaw command not found")
-        return ""
-    cmd = openclaw_cmd + ["agent", "--agent", agent, "--session-key", session_key, "--message", prompt, "--timeout", str(timeout), "--json"]
-    if model:
-        cmd.extend(["--model", model])
-    try:
-        log_debug(f"generate_llm_reply: openclaw → agent={agent}, model={model or 'default'}")
-        proc = subprocess.run(
-            cmd,
-            cwd=".",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout + 20,
-        )
-        raw = (proc.stdout or "").strip()
-        if proc.returncode != 0:
-            log_debug(f"generate_llm_reply openclaw error rc={proc.returncode}: {(proc.stderr or raw)[:500]}")
-            return ""
-        data = _parse_openclaw_json(raw)
-        # Current OpenClaw JSON can be either {payloads:[...]} or {result:{payloads:[...]}}.
-        payloads = data.get("payloads") or (data.get("result") or {}).get("payloads") or []
-        text = ""
-        if payloads:
-            text = str(payloads[0].get("text") or "").strip()
-        if not text:
-            text = str((data.get("result") or {}).get("finalAssistantVisibleText") or data.get("finalAssistantVisibleText") or "").strip()
-        if not text and raw and not raw.lstrip().startswith("{"):
-            text = raw.strip()
-        if text:
-            _track_usage(account_key, "reply")
-        else:
-            log_debug(f"generate_llm_reply openclaw empty text; stdout_head={raw[:300]}")
-        return text
-    except Exception as e:
-        log_debug(f"generate_llm_reply openclaw exception: {e}")
-        return ""
+    text = _run_openclaw_prompt(prompt, account_key, "reply")
+    if text:
+        _track_usage(account_key, "reply")
+    return text
 
 
 def _openclaw_command() -> list[str]:
@@ -455,6 +463,69 @@ def _parse_openclaw_json(raw: str) -> dict:
     if start >= 0 and end > start:
         return json.loads(raw[start:end + 1])
     return {}
+
+
+def _extract_openclaw_text(raw: str) -> str:
+    data = _parse_openclaw_json(raw)
+    payloads = data.get("payloads") or (data.get("result") or {}).get("payloads") or []
+    text = ""
+    if payloads:
+        text = str(payloads[0].get("text") or "").strip()
+    if not text:
+        text = str((data.get("result") or {}).get("finalAssistantVisibleText") or data.get("finalAssistantVisibleText") or "").strip()
+    if not text and raw and not raw.lstrip().startswith("{"):
+        text = raw.strip()
+    return text
+
+
+def _run_openclaw_prompt(prompt: str, account_key: str, kind: str) -> str:
+    agent = (getattr(CONFIG, "llm_openclaw_agent", "") or "hh-clicker").strip()
+    model = (getattr(CONFIG, "llm_openclaw_model", "") or "").strip()
+    base_timeout = max(20, int(getattr(CONFIG, "llm_openclaw_timeout", 120) or 120))
+    timeout = min(base_timeout, 60 if kind == "reply" else 45)
+    session_key = f"agent:{agent}:hh-{kind}-{account_key or 'global'}-{uuid.uuid4().hex[:8]}"
+    openclaw_cmd = _openclaw_command()
+    if not openclaw_cmd:
+        log_debug(f"{kind} openclaw error: openclaw command not found")
+        _set_llm_last_status(account_key, kind, "openclaw", "command_not_found", "openclaw command not found")
+        return ""
+    cmd = openclaw_cmd + ["agent", "--agent", agent, "--session-key", session_key, "--message", prompt, "--timeout", str(timeout), "--json"]
+    if model:
+        cmd.extend(["--model", model])
+    try:
+        log_debug(f"{kind}: openclaw → agent={agent}, model={model or 'default'}")
+        proc = subprocess.run(
+            cmd,
+            cwd=".",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout + 10,
+        )
+        raw = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            detail = (proc.stderr or raw)[:500]
+            log_debug(f"{kind} openclaw error rc={proc.returncode}: {detail}")
+            _set_llm_last_status(account_key, kind, "openclaw", "error", detail)
+            return ""
+        text = _extract_openclaw_text(raw)
+        if text:
+            _set_llm_last_status(account_key, kind, "openclaw", "ok", f"{len(text)} chars")
+        else:
+            log_debug(f"{kind} openclaw empty text; stdout_head={raw[:300]}")
+            _set_llm_last_status(account_key, kind, "openclaw", "empty", raw[:300])
+        return text
+    except subprocess.TimeoutExpired:
+        detail = f"timed out after {timeout}s"
+        log_debug(f"{kind} openclaw timeout: {detail}")
+        _set_llm_last_status(account_key, kind, "openclaw", "timeout", detail)
+        return ""
+    except Exception as e:
+        detail = str(e)[:500]
+        log_debug(f"{kind} openclaw exception: {detail}")
+        _set_llm_last_status(account_key, kind, "openclaw", "exception", detail)
+        return ""
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -491,7 +562,7 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
     resume_text — опционально текст резюме для контекста.
     Возвращает {field: value} или {} при ошибке.
     """
-    if not _openai_available or not rich_questions:
+    if not rich_questions:
         return {}
 
     # Check daily quota
@@ -500,10 +571,67 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
         return {}
 
     profiles = [p for p in (CONFIG.llm_profiles or []) if p.get("enabled", True) and p.get("api_key")]
-    if not profiles:
-        if not CONFIG.llm_api_key:
-            return {}
+    if not profiles and CONFIG.llm_api_key:
         profiles = [{"api_key": CONFIG.llm_api_key, "base_url": CONFIG.llm_base_url, "model": CONFIG.llm_model}]
+
+    if not profiles and getattr(CONFIG, "llm_openclaw_enabled", False):
+        lines = ["Заполни анкету работодателя для отклика на вакансию."]
+        if vacancy_title:
+            lines.append(f"Вакансия: {vacancy_title}")
+        if company:
+            lines.append(f"Компания: {company}")
+        lines += ["", "Вопросы:"]
+        for i, q in enumerate(rich_questions, 1):
+            qtext = q.get("text", "")
+            qtype = q.get("type", "textarea")
+            if qtype == "textarea":
+                lines.append(f'{i}. [текст] {qtext}')
+            elif qtype == "radio":
+                opts = " / ".join(f'"{o["label"]}" (value={o["value"]})' for o in q.get("options", []))
+                lines.append(f'{i}. [выбор одного: {opts}] {qtext}')
+            elif qtype == "checkbox":
+                opts = " / ".join(f'"{o["label"]}" (value={o["value"]})' for o in q.get("options", []))
+                lines.append(f'{i}. [чекбокс: {opts}] {qtext}')
+            elif qtype == "select":
+                opts = " / ".join(f'"{o["label"]}" (value={o["value"]})' for o in q.get("options", []))
+                lines.append(f'{i}. [выпадающий список: {opts}] {qtext}')
+        lines += [
+            "",
+            "Заполни анкету от первого лица. Отвечай кратко и профессионально.",
+            "Для текста — 1–3 предложения.",
+            "Для radio/checkbox/select — верни точное value из скобок (цифру или код).",
+            "Верни ТОЛЬКО JSON без пояснений.",
+            "{"
+        ]
+        for q in rich_questions:
+            lines.append(f'  "{q["field"]}": "...",')
+        lines.append("}")
+        prompt = "\n".join(lines)
+        if resume_text:
+            prompt += f"\n\nРезюме кандидата (контекст, не выводить):\n{resume_text[:2000]}"
+        raw = _run_openclaw_prompt(prompt, account_key, "questionnaire")
+        if not raw:
+            return {}
+        answers = _extract_json(raw)
+        if answers is None:
+            _set_llm_last_status(account_key, "questionnaire", "openclaw", "invalid_json", raw[:300])
+            return {}
+        _increment_questionnaire_quota(account_key)
+        _track_usage(account_key, "questionnaire")
+        out = {}
+        for k, v in answers.items():
+            if v is None:
+                continue
+            if isinstance(v, list):
+                out[k] = [str(item) for item in v if item is not None]
+            else:
+                out[k] = str(v)
+        if out:
+            _set_llm_last_status(account_key, "questionnaire", "openclaw", "ok", f"{len(out)} fields")
+        return out
+
+    if not profiles or not _openai_available:
+        return {}
 
     lines = ["Заполни анкету работодателя для отклика на вакансию."]
     if vacancy_title:
@@ -581,9 +709,14 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
                         out[k] = [str(item) for item in v if item is not None]
                     else:
                         out[k] = str(v)
+                _set_llm_last_status(account_key, "questionnaire", "api", "ok", f"{len(out)} fields")
                 return out
+            _set_llm_last_status(account_key, "questionnaire", "api", "invalid_json", raw[:300])
         except Exception as e:
             log_debug(f"generate_llm_questionnaire_answers {pname} error: {e}")
+            _set_llm_last_status(account_key, "questionnaire", "api", "error", str(e)[:300])
             if i < len(profiles) - 1:
                 continue
+    if profiles:
+        _set_llm_last_status(account_key, "questionnaire", "api", "failed_all", "all profiles failed")
     return {}

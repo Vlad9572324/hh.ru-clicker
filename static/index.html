@@ -356,6 +356,8 @@
     <span id="llm-st-interval" style="color:var(--dim)">—</span>
     <span id="llm-st-chats" style="color:var(--cyan)">—</span>
     <span id="llm-st-replied" style="color:var(--green)">—</span>
+    <span id="llm-st-provider" style="color:var(--yellow)">—</span>
+    <span id="llm-st-last" style="color:var(--dim)">—</span>
   </div>
 
   <!-- Per-account LLM toggles -->
@@ -501,6 +503,11 @@
         <div class="settings-grid" id="settings-grid"></div>
         <button id="settings-apply" onclick="applySettings()" data-i18n="btn_apply_settings">✅ Применить</button>
         <div id="settings-status"></div>
+        <div style="margin-top:10px;padding:10px 12px;background:var(--bg-card2);border:1px solid var(--border);border-radius:6px;font-size:12px;display:grid;gap:4px">
+          <div><b>LLM provider:</b> <span id="llm-diag-provider">—</span></div>
+          <div><b>Reply:</b> <span id="llm-diag-reply">—</span></div>
+          <div><b>Questionnaire:</b> <span id="llm-diag-questionnaire">—</span></div>
+        </div>
       </div>
     </details>
 

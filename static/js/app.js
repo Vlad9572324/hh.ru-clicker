@@ -1147,6 +1147,38 @@ function syncLlmSettings(snap) {
     sel.innerHTML = snap.accounts.map(a =>
       `<option value="${a.idx}">${esc(a.name || a.short)}</option>`).join('');
   }
+  renderLlmDiagnostics(snap);
+}
+
+function _fmtLlmStatusLine(label, data) {
+  if (!data || !Object.keys(data).length) return `${label}: —`;
+  const provider = data.provider || 'unknown';
+  const status = data.status || 'unknown';
+  const detail = data.detail ? ` (${data.detail})` : '';
+  return `${label}: ${provider}/${status}${detail}`;
+}
+
+function renderLlmDiagnostics(snap) {
+  const summary = snap?.config?.llm_status_summary || {};
+  const providerEl = document.getElementById('llm-diag-provider');
+  const replyEl = document.getElementById('llm-diag-reply');
+  const questionnaireEl = document.getElementById('llm-diag-questionnaire');
+  const providerBarEl = document.getElementById('llm-st-provider');
+  const lastBarEl = document.getElementById('llm-st-last');
+
+  let providerText = 'LLM провайдер не настроен';
+  if (summary.configured_provider === 'openclaw') providerText = 'OpenClaw готов';
+  else if (summary.configured_provider === 'api') providerText = 'API профили готовы';
+
+  const replyText = _fmtLlmStatusLine('Reply', summary.reply);
+  const questionnaireText = _fmtLlmStatusLine('Questionnaire', summary.questionnaire);
+  const lastText = summary.reply?.status ? replyText : (summary.questionnaire?.status ? questionnaireText : 'Последний статус: —');
+
+  if (providerEl) providerEl.textContent = providerText;
+  if (replyEl) replyEl.textContent = replyText;
+  if (questionnaireEl) questionnaireEl.textContent = questionnaireText;
+  if (providerBarEl) providerBarEl.textContent = providerText;
+  if (lastBarEl) lastBarEl.textContent = lastText;
 }
 
 // ── Schedule filter & auto-tests sync ────────────────────────
@@ -1456,7 +1488,8 @@ function updateLlmStatusBar(snap) {
   const interval = Math.max(cfg.llm_check_interval || 5, 2);
   const anyAccOn = accs.some(a => a.llm_enabled !== false);
   const paused = snap?.paused || accs.every(a => a.paused);
-  const hasKey = (cfg.llm_api_key_set || (cfg.llm_profiles || []).some(p => p.key_set));
+  const hasKey = (cfg.llm_api_key_set || (cfg.llm_profiles || []).some(p => p.key_set) ||
+    (cfg.llm_status_summary && cfg.llm_status_summary.configured_provider === 'openclaw'));
 
   // State — actionable hint в одной фразе.
   let stateText, stateColor;
@@ -1501,6 +1534,10 @@ function updateLlmStatusBar(snap) {
   const draftCount = llmLog.filter(l => !l.sent).length;
   const draftHint = draftCount && !autoSend ? ' ← ждут «Автоотправку»' : '';
   stReplied.textContent = `✅ ${sentCount} отправлено · 📝 ${draftCount} черновиков${draftHint}`;
+  const stProvider = document.getElementById('llm-st-provider');
+  const stLast = document.getElementById('llm-st-last');
+  if (stProvider && !stProvider.textContent.trim()) stProvider.textContent = '—';
+  if (stLast && !stLast.textContent.trim()) stLast.textContent = 'Последний статус: —';
 }
 
 function oauthToggleAccount(idx, btn) {

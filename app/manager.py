@@ -78,7 +78,7 @@ from app.hh_api import (
     parse_work_schedules, extract_search_query, parse_apply_strategy_meta,
 )
 
-from app.llm import generate_llm_reply
+from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, get_llm_status_summary
 
 from app.hh_apply import (
     send_response_async, fill_and_submit_questionnaire,
@@ -886,6 +886,7 @@ class BotManager:
                 "llm_use_resume": CONFIG.llm_use_resume,
                 "llm_model": CONFIG.llm_model,
                 "llm_base_url": CONFIG.llm_base_url,
+                "llm_status_summary": get_llm_status_summary(),
                 # Системный промпт нужен в снимке: после релоада фронт инитит
                 # textarea дефолтом, а потом любая правка ругого поля LLM
                 # autosave'ила бы этот дефолт обратно на диск. Снимок служит
@@ -2381,9 +2382,19 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
                     self._add_log(state.short, state.color,
                         f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
-                    reply_text = generate_llm_reply(conversation, thread.get("employer_name", ""), cover_letter, resume_text)
+                    reply_text = generate_llm_reply(
+                        conversation,
+                        thread.get("employer_name", ""),
+                        cover_letter,
+                        resume_text,
+                        account_key=f"{state.short}:{neg_id}",
+                    )
                     if not reply_text:
-                        self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] LLM вернул пустой ответ, повтор через 30м", "warning", neg_id=neg_id)
+                        llm_status = get_llm_last_status(f"{state.short}:{neg_id}", "reply")
+                        if llm_status.get("provider") == "openclaw" and llm_status.get("status") == "timeout":
+                            self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] OpenClaw timeout, повтор через 30м", "warning", neg_id=neg_id)
+                        else:
+                            self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] LLM не дал ответ, повтор через 30м", "warning", neg_id=neg_id)
                         log_debug(f"LLM [{state.short}] {neg_id}: пустой ответ от LLM, ставим temp_skip 30м")
                         state._llm_temp_skip[key] = time.time() + 1800
                         continue
@@ -2644,14 +2655,14 @@ class BotManager:
                         return
                     continue
 
-                _has_llm = CONFIG.llm_api_key or any(
+                _has_llm = (CONFIG.llm_api_key or "").strip() or any(
                     p.get("api_key") for p in (CONFIG.llm_profiles or []) if p.get("enabled", True)
-                )
+                ) or (getattr(CONFIG, "llm_openclaw_enabled", False) and bool(_openclaw_command()))
                 _neg_count = len(state.hh_interview_neg_ids)
                 if not CONFIG.llm_enabled:
                     log_debug(f"LLM [{state.short}]: пропуск — глобально выключено")
                 elif not _has_llm:
-                    self._add_log(state.short, state.color, "\U0001f916 LLM: нет API ключа ни в одном профиле", "warning")
+                    self._add_log(state.short, state.color, "\U0001f916 LLM: не настроен ни API, ни OpenClaw", "warning")
                 elif not state.llm_enabled:
                     log_debug(f"LLM [{state.short}]: пропуск — выключено для аккаунта")
                 else:
