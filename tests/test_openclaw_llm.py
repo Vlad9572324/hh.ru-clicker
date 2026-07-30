@@ -47,7 +47,7 @@ def test_generate_openclaw_reply_extracts_result_payload(monkeypatch):
         return subprocess.CompletedProcess(
             cmd,
             0,
-            stdout=json.dumps({"result": {"payloads": [{"text": "Здравствуйте!"}]}}),
+            stdout=json.dumps({"result": {"payloads": [{"text": "Здравствуйте! Готов созвониться."}]}}),
             stderr="",
         )
 
@@ -61,7 +61,8 @@ def test_generate_openclaw_reply_extracts_result_payload(monkeypatch):
         account_key="test",
     )
 
-    assert result == "Здравствуйте!"
+    # Reply passes _looks_like_direct_answer: ≥12 chars, matches question with an answer marker.
+    assert result == "Здравствуйте! Готов созвониться."
 
 
 def test_generate_openclaw_reply_accepts_plain_text(monkeypatch):
@@ -95,9 +96,9 @@ def test_build_openclaw_reply_prompt_compacts_long_inputs():
         {"role": "user", "content": "U3" * 2500},
     ]
 
-    prompt = llm._build_openclaw_reply_prompt(messages)
+    prompt = llm._build_openclaw_prompt(messages, "Тестовое интро.", "test")
 
-    assert len(prompt) <= llm._OPENCLAW_REPLY_PROMPT_MAX_CHARS
+    assert len(prompt) <= llm._OPENCLAW_PROMPT_MAX_CHARS
     assert "Сообщение работодателя:" in prompt
     assert "[conversation]" in prompt
     assert "...[truncated]..." in prompt
@@ -114,22 +115,21 @@ def test_generate_openclaw_reply_uses_compacted_prompt(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         captured["prompt"] = cmd[cmd.index("--message") + 1]
-        return subprocess.CompletedProcess(cmd, 0, stdout="Короткий ответ.", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="Короткий ответ, готов обсудить.", stderr="")
 
     monkeypatch.setattr(llm.subprocess, "run", fake_run)
 
     result = llm._generate_openclaw_reply(
         [
             {"role": "system", "content": "S" * 9000},
-            {"role": "user", "content": "U" * 9000},
-            {"role": "assistant", "content": "A" * 9000},
-            {"role": "user", "content": "Q" * 9000},
+            {"role": "user", "content": "Готовы обсудить условия работы? Пожалуйста, расскажите об опыте."},
         ],
         account_key="test",
     )
 
-    assert result == "Короткий ответ."
-    assert len(captured["prompt"]) <= llm._OPENCLAW_REPLY_PROMPT_MAX_CHARS
+    # _looks_like_direct_answer требует минимум 12 символов и answer-marker для question-ответа.
+    assert result == "Короткий ответ, готов обсудить."
+    assert len(captured["prompt"]) <= llm._OPENCLAW_PROMPT_MAX_CHARS
     assert "...[truncated]..." in captured["prompt"]
 
 
