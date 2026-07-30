@@ -82,6 +82,57 @@ def test_generate_openclaw_reply_accepts_plain_text(monkeypatch):
     )
 
     assert result == "Готов обсудить детали."
+
+
+def test_build_openclaw_reply_prompt_compacts_long_inputs():
+    messages = [
+        {"role": "system", "content": "S" * 8000},
+        {"role": "assistant", "content": "A" * 3000},
+        {"role": "user", "content": "U1" * 2500},
+        {"role": "assistant", "content": "B" * 3000},
+        {"role": "user", "content": "U2" * 2500},
+        {"role": "assistant", "content": "C" * 3000},
+        {"role": "user", "content": "U3" * 2500},
+    ]
+
+    prompt = llm._build_openclaw_reply_prompt(messages)
+
+    assert len(prompt) <= llm._OPENCLAW_REPLY_PROMPT_MAX_CHARS
+    assert "Сообщение работодателя:" in prompt
+    assert "[conversation]" in prompt
+    assert "...[truncated]..." in prompt
+
+
+def test_generate_openclaw_reply_uses_compacted_prompt(monkeypatch):
+    monkeypatch.setattr(CONFIG, "llm_openclaw_agent", "main")
+    monkeypatch.setattr(CONFIG, "llm_openclaw_model", "")
+    monkeypatch.setattr(CONFIG, "llm_openclaw_timeout", 30)
+    monkeypatch.setattr(llm, "_openclaw_command", lambda: ["openclaw"])
+    monkeypatch.setattr(llm, "_track_usage", lambda account_key, kind: None)
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["prompt"] = cmd[cmd.index("--message") + 1]
+        return subprocess.CompletedProcess(cmd, 0, stdout="Короткий ответ.", stderr="")
+
+    monkeypatch.setattr(llm.subprocess, "run", fake_run)
+
+    result = llm._generate_openclaw_reply(
+        [
+            {"role": "system", "content": "S" * 9000},
+            {"role": "user", "content": "U" * 9000},
+            {"role": "assistant", "content": "A" * 9000},
+            {"role": "user", "content": "Q" * 9000},
+        ],
+        account_key="test",
+    )
+
+    assert result == "Короткий ответ."
+    assert len(captured["prompt"]) <= llm._OPENCLAW_REPLY_PROMPT_MAX_CHARS
+    assert "...[truncated]..." in captured["prompt"]
+
+
 def test_applicant_gender_forms_default_female(monkeypatch):
     monkeypatch.setattr(CONFIG, "llm_applicant_gender", "female")
     forms = applicant_gender_forms()

@@ -42,6 +42,64 @@ _llm_usage_lock = threading.Lock()
 _llm_last_status: dict[str, dict[str, dict[str, str]]] = {}
 _llm_last_status_lock = threading.Lock()
 
+_OPENCLAW_NOISE_PREFIXES = (
+    "|",
+    "[agents/",
+    "[agent/",
+    "Doctor warnings",
+)
+
+_INVALID_REPLY_PATTERNS = (
+    r"пришлите\s+(текст|сообщени|данные|скрин)",
+    r"i\s+can\s+draft",
+    r"send\s+me\s+the\s+message",
+    r"готов\s+подготовить\s+ответ",
+    r"я\s+сразу\s+(подготовлю|составлю|верну)\s+готовый\s+ответ",
+    r"от\s+вашего\s+имени",
+    r"от\s+имени\s+соискателя",
+)
+
+_QUESTION_MARKERS = (
+    "?",
+    "когда",
+    "котор",
+    "как",
+    "какой",
+    "какая",
+    "какие",
+    "почему",
+    "where",
+    "when",
+    "what",
+    "which",
+    "why",
+    "how",
+)
+
+_ANSWER_MARKERS = (
+    "спасибо",
+    "готов",
+    "готова",
+    "интерес",
+    "удобно",
+    "смогу",
+    "нахожусь",
+    "опыт",
+    "thank",
+    "ready",
+    "available",
+    "interested",
+    "experience",
+    "can ",
+    "i am",
+    "i have",
+)
+
+_OPENCLAW_PROMPT_MAX_CHARS = 12000
+_OPENCLAW_SYSTEM_MAX_CHARS = 2400
+_OPENCLAW_MESSAGE_MAX_CHARS = 900
+_OPENCLAW_CONVERSATION_MESSAGES = 4
+
 
 def _get_today_str() -> str:
     try:
@@ -152,6 +210,110 @@ def _randomize_text(template: str) -> str:
     return re.sub(r'\{([^}]+\|[^}]+)\}', pick, template)
 
 
+def _clip_text(text: str, limit: int, keep_tail: bool = False) -> str:
+    if limit <= 0:
+        return ""
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    marker = "\n...[truncated]...\n"
+    if limit <= len(marker):
+        return value[:limit]
+    room = limit - len(marker)
+    if keep_tail:
+        head = max(0, room // 3)
+        tail = max(0, room - head)
+        return value[:head] + marker + value[-tail:]
+    return value[:room] + marker
+
+
+def _build_openclaw_prompt(messages: list, intro: str, log_label: str) -> str:
+    system_text = ""
+    convo_items = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            system_text = _clip_text(content, _OPENCLAW_SYSTEM_MAX_CHARS, keep_tail=True)
+        else:
+            clipped = _clip_text(content, _OPENCLAW_MESSAGE_MAX_CHARS, keep_tail=(role == "user"))
+            convo_items.append((role, clipped))
+
+    convo_tail = convo_items[-_OPENCLAW_CONVERSATION_MESSAGES:]
+    last_employer_text = ""
+    for role, content in reversed(convo_tail):
+        if role == "user":
+            last_employer_text = content
+            break
+    if not last_employer_text and convo_tail:
+        last_employer_text = convo_tail[-1][1]
+
+    conversation_block = "\n\n---\n\n".join(f"[{role}]\n{content}" for role, content in convo_tail)
+    prompt = (
+        f"{intro}\n\n"
+        f"Сообщение работодателя:\n{last_employer_text}\n\n"
+        f"[instructions]\n{system_text}\n\n[conversation]\n{conversation_block}"
+    )
+    compacted = _clip_text(prompt, _OPENCLAW_PROMPT_MAX_CHARS, keep_tail=True)
+    if len(compacted) < len(prompt):
+        log_debug(
+            f"{log_label}: compacted OpenClaw prompt "
+            f"{len(prompt)}→{len(compacted)} chars to fit Windows command line"
+        )
+    return compacted
+
+
+def _clean_openclaw_text(raw: str) -> str:
+    lines = []
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_OPENCLAW_NOISE_PREFIXES):
+            continue
+        if "tool policy removed" in stripped.lower():
+            continue
+        if "one-shot cleanup retired shared client" in stripped.lower():
+            continue
+        lines.append(stripped)
+    return "\n".join(lines).strip()
+
+
+def _looks_like_invalid_reply(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not normalized:
+        return True
+    for pattern in _INVALID_REPLY_PATTERNS:
+        if re.search(pattern, normalized):
+            return True
+    return False
+
+
+def _looks_like_direct_answer(conversation: list, text: str) -> bool:
+    reply = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if len(reply) < 12:
+        return False
+    last_employer = ""
+    for msg in reversed(conversation or []):
+        if msg.get("sender") == "employer":
+            last_employer = re.sub(r"\s+", " ", (msg.get("text") or "").strip().lower())
+            break
+    if not last_employer:
+        return True
+    asks_question = any(marker in last_employer for marker in _QUESTION_MARKERS)
+    if asks_question and not any(marker in reply for marker in _ANSWER_MARKERS):
+        return False
+    if "резюме" in reply and "резюме" not in last_employer:
+        return False
+    if "сообщени" in reply and "сообщени" not in last_employer:
+        return False
+    if reply == last_employer:
+        return False
+    return True
+
+
 def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "") -> str:
     """Generate a reply to employer using configured LLM (OpenAI-compatible API)."""
     global _llm_rr_index
@@ -231,6 +393,10 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                 log_debug(f"generate_llm_reply: empty choices from provider")
                 return ""
             result = (resp.choices[0].message.content or "").strip()
+            if not _looks_like_direct_answer(conversation, result):
+                log_debug(f"generate_llm_reply: non-answer reply rejected from {pname}")
+                _set_llm_last_status(account_key, "reply", "api", "non_answer", result[:200])
+                return ""
             # Логируем token usage для аудита cost (swarm-16 #5)
             usage = getattr(resp, "usage", None)
             tokens_in = getattr(usage, "prompt_tokens", "?") if usage else "?"
@@ -262,6 +428,10 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
                     log_debug(f"generate_llm_reply: empty choices from {pname}")
                     continue
                 result = (resp.choices[0].message.content or "").strip()
+                if not _looks_like_direct_answer(conversation, result):
+                    log_debug(f"generate_llm_reply: non-answer reply rejected from {pname}")
+                    _set_llm_last_status(account_key, "reply", "api", "non_answer", result[:200])
+                    continue
                 log_debug(f"generate_llm_reply: {pname} → {len(result)} симв.")
                 _track_usage(account_key, "reply")
                 _set_llm_last_status(account_key, "reply", "api", "ok", f"{pname}: {len(result)} chars")
@@ -412,30 +582,32 @@ def _generate_openclaw_reply(messages: list, account_key: str = "") -> str:
     This is intentionally a fallback for installations where Codex auth lives in
     OpenClaw rather than an OpenAI-compatible HTTP endpoint.
     """
-    system_text = ""
-    chat_lines = []
-    last_employer_text = ""
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = (msg.get("content") or "").strip()
-        if not content:
-            continue
-        if role == "system":
-            system_text = content[:5000]
-        else:
-            chat_lines.append(f"[{role}]\n{content[:1600]}")
-            if role == "user":
-                last_employer_text = content[:1600]
-    prompt = (
+    prompt = _build_openclaw_prompt(
+        messages,
         "Нужно ответить работодателю на hh.ru. Верни только готовый текст ответа от имени соискателя, "
-        "без Markdown, без пояснений, без префиксов вроде 'Ответ:'.\n\n"
-        f"Сообщение работодателя:\n{last_employer_text}\n\n"
-        f"[instructions]\n{system_text}\n\n[conversation]\n"
-        + "\n\n---\n\n".join(chat_lines[-6:])
+        "без Markdown, без пояснений, без префиксов вроде 'Ответ:'.",
+        "generate_llm_reply",
     )
     text = _run_openclaw_prompt(prompt, account_key, "reply")
+    conversation = [
+        {"sender": "employer" if msg.get("role") == "user" else "applicant", "text": msg.get("content", "")}
+        for msg in messages
+        if msg.get("role") != "system"
+    ]
+    if text:
+        cleaned = _clean_openclaw_text(text)
+        if _looks_like_invalid_reply(cleaned):
+            log_debug(f"generate_llm_reply: invalid/fallback reply rejected: {cleaned[:300]}")
+            _set_llm_last_status(account_key, "reply", "openclaw", "invalid_reply", cleaned[:200])
+            return ""
+        if not _looks_like_direct_answer(conversation, cleaned):
+            log_debug(f"generate_llm_reply: non-answer reply rejected: {cleaned[:300]}")
+            _set_llm_last_status(account_key, "reply", "openclaw", "non_answer", cleaned[:200])
+            return ""
+        text = cleaned
     if text:
         _track_usage(account_key, "reply")
+        _set_llm_last_status(account_key, "reply", "openclaw", "ok", f"{len(text)} chars")
     return text
 
 
@@ -606,9 +778,17 @@ def generate_llm_questionnaire_answers(rich_questions: list, vacancy_title: str 
         for q in rich_questions:
             lines.append(f'  "{q["field"]}": "...",')
         lines.append("}")
-        prompt = "\n".join(lines)
+        questionnaire_user = "\n".join(lines)
         if resume_text:
-            prompt += f"\n\nРезюме кандидата (контекст, не выводить):\n{resume_text[:2000]}"
+            questionnaire_user += f"\n\nРезюме кандидата (контекст, не выводить):\n{resume_text[:2000]}"
+        prompt = _build_openclaw_prompt(
+            [
+                {"role": "system", "content": "Нужно заполнить анкету работодателя на hh.ru. Верни только валидный JSON без пояснений."},
+                {"role": "user", "content": questionnaire_user},
+            ],
+            "Нужно заполнить анкету работодателя на hh.ru. Верни только валидный JSON без пояснений.",
+            "generate_llm_questionnaire_answers",
+        )
         raw = _run_openclaw_prompt(prompt, account_key, "questionnaire")
         if not raw:
             return {}
