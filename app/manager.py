@@ -91,6 +91,7 @@ from app.hh_chat import (
     send_negotiation_message,
     ChatikWSClient,
     fetch_quick_replies,
+    send_participant_action, mark_chat_read,
 )
 
 from app.hh_resume import (
@@ -904,6 +905,7 @@ class BotManager:
                 "llm_use_resume": CONFIG.llm_use_resume,
                 "llm_use_quick_replies": getattr(CONFIG, "llm_use_quick_replies", True),
                 "hh_ai_letter_first_try": getattr(CONFIG, "hh_ai_letter_first_try", True),
+                "related_vacancies_enabled": getattr(CONFIG, "related_vacancies_enabled", True),
                 "llm_model": CONFIG.llm_model,
                 "llm_base_url": CONFIG.llm_base_url,
                 "llm_status_summary": get_llm_status_summary(),
@@ -2496,8 +2498,21 @@ class BotManager:
                         self._llm_sent_by_neg_id.setdefault(neg_id, set()).add(global_key)
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] отправляю: «{reply_text[:60]}»", "info", neg_id=neg_id)
+                    # Читаем HR-сообщение (галочка «прочитано» в UI HH) + typing indicator
+                    # 2-4 сек — HR получает push «печатает…», ответ выглядит человечнее.
+                    try:
+                        mark_chat_read(state.acc, neg_id, last_msg_id)
+                        send_participant_action(state.acc, neg_id, "TYPING")
+                    except Exception:
+                        pass
+                    _delay = min(4.0, max(2.0, len(reply_text) * 0.03))
+                    time.sleep(_delay)
                     log_debug(f"LLM [{state.short}] {neg_id}: отправляю сообщение в chatik")
                     ok = send_negotiation_message(state.acc, neg_id, reply_text, topic_id=thread.get("topic_id", ""))
+                    try:
+                        send_participant_action(state.acc, neg_id, "NONE")
+                    except Exception:
+                        pass
                     if ok == "chat_not_found":
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)

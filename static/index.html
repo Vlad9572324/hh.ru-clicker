@@ -804,6 +804,11 @@
                  onchange="sendCmd({type:'set_config',key:'hh_ai_letter_first_try',value:this.checked})">
           ✍️ HH-AI-письмо перед шаблоном (1 бесплатное на пару)
         </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="Раз в цикл сбора дёргаем HH-рекомендательный фид: /shards/vacancy/related_vacancies под последнюю applied. Обычно ML-матчер HH выдаёт релевантнее чем текстовый поиск.">
+          <input type="checkbox" id="related-vacancies-enabled" style="accent-color:var(--cyan,#22d3ee)" checked
+                 onchange="sendCmd({type:'set_config',key:'related_vacancies_enabled',value:this.checked})">
+          🔗 Расширять пул через related_vacancies HH
+        </label>
       </div>
       <div style="margin-bottom:12px">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">

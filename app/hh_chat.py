@@ -354,6 +354,66 @@ def fetch_quick_replies(acc: dict, chat_id: str, msg_id: str) -> list:
         return []
 
 
+def send_participant_action(acc: dict, chat_id: str, action_type: str = "TYPING") -> bool:
+    """`POST /chatik/api/participant_action {chatId, actionType}` — эмуляция
+    typing indicator. `TYPING` показывает HR что мы печатаем; `NONE` снимает.
+    """
+    if not chat_id:
+        return False
+    _ensure_chatik_cookies(acc)
+    xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    try:
+        r = HH.post(
+            f"{_CHATIK_BASE}/chatik/api/participant_action",
+            cookies=acc.get("cookies", {}),
+            headers={
+                "User-Agent": ua, "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": _CHATIK_BASE, "Referer": f"{_CHATIK_BASE}/",
+                "X-XSRFToken": xsrf,
+            },
+            json={"chatId": int(chat_id) if str(chat_id).isdigit() else chat_id,
+                  "actionType": action_type},
+            timeout=8,
+        )
+        return r.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+def mark_chat_read(acc: dict, chat_id: str, message_id: str) -> bool:
+    """`POST /chatik/api/mark_read` — помечает сообщение прочитанным.
+    HR видит галочку — часто триггер для follow-up с их стороны.
+    """
+    if not chat_id or not message_id:
+        return False
+    _ensure_chatik_cookies(acc)
+    xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    try:
+        r = HH.post(
+            f"{_CHATIK_BASE}/chatik/api/mark_read",
+            cookies=acc.get("cookies", {}),
+            headers={
+                "User-Agent": ua, "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": _CHATIK_BASE, "Referer": f"{_CHATIK_BASE}/",
+                "X-XSRFToken": xsrf,
+            },
+            json={
+                "chatId": int(chat_id) if str(chat_id).isdigit() else chat_id,
+                "messageId": str(message_id),
+                "hasUnreadDiscardMessage": False,
+                "hasUnseenLocationInconsistencyBotMessage": False,
+            },
+            timeout=8,
+        )
+        return r.status_code in (200, 204)
+    except Exception:
+        return False
+
+
 def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = "") -> bool:
     """Send a message in an HH negotiation thread.
 
