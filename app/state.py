@@ -169,6 +169,7 @@ class AccountState:
         self._llm_temp_skip: dict = {}       # {(neg_id, last_msg_id): expiry_ts} — transient failure, retry after TTL
         self._llm_no_chat: set = set()       # {neg_id} chats that returned 409 (permanently closed/locked)
         self._llm_drafts: dict = {}          # {(neg_id, last_msg_id): reply_text} — кэш сгенерированных черновиков
+        self._llm_drafts_lock = threading.Lock()  # WS-поток edit-invalidate vs LLM-поток write — гоняются
                                               # на сессию воркера. Если auto_send позже включится — отправляем
                                               # сохранённый текст без повторного LLM-вызова. Сбрасывается
                                               # вместе с llm_replied_msgs через "🔄 Сбросить историю".

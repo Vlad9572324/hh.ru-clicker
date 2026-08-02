@@ -377,16 +377,27 @@ def send_participant_action(acc: dict, chat_id: str, action_type: str = "TYPING"
                   "actionType": action_type},
             timeout=8,
         )
+        if r.status_code == 409:
+            # Ожидаемо: HH возвращает 409 если для этого чата typing неприменим
+            # (нет unread от собеседника / последнее сообщение наше). Не warn'аем.
+            return False
+        if r.status_code not in (200, 204):
+            log_debug(f"send_participant_action chat={chat_id} action={action_type}: HTTP {r.status_code}")
         return r.status_code in (200, 204)
-    except Exception:
+    except Exception as e:
+        log_debug(f"send_participant_action chat={chat_id}: {e}")
         return False
 
 
 def mark_chat_read(acc: dict, chat_id: str, message_id: str) -> bool:
     """`POST /chatik/api/mark_read` — помечает сообщение прочитанным.
     HR видит галочку — часто триггер для follow-up с их стороны.
+    Пропускаем если messageId не число — это hash-fallback из _build_thread_from_chat_item
+    для сообщений без реального id (HH такой messageId вернёт 400/422).
     """
     if not chat_id or not message_id:
+        return False
+    if not str(message_id).lstrip("-").isdigit():
         return False
     _ensure_chatik_cookies(acc)
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
@@ -409,8 +420,11 @@ def mark_chat_read(acc: dict, chat_id: str, message_id: str) -> bool:
             },
             timeout=8,
         )
+        if r.status_code not in (200, 204):
+            log_debug(f"mark_chat_read chat={chat_id} msg={message_id}: HTTP {r.status_code}")
         return r.status_code in (200, 204)
-    except Exception:
+    except Exception as e:
+        log_debug(f"mark_chat_read chat={chat_id}: {e}")
         return False
 
 

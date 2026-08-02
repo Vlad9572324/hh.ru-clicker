@@ -168,18 +168,25 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
     return "error", {"raw": txt[:200], **info}
 
 
-def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s: int = 6) -> str:
+async def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s: int = 6) -> str:
     """`POST /shards/hhpro_ai_letter {resumeHash, vacancyId}` — HH-Pro фича,
     но сервер даёт по одной бесплатной попытке на пару (resumeHash, vacancyId)
     независимо от подписки. Async: poll `/shards/hhpro_ai_check_status`.
     Возвращает текст письма или "" если не сгенерилось / уже использовали.
+
+    Асинхронная целиком: `HH` — sync wrapper, гоним в thread-pool через
+    `asyncio.to_thread`; sleep — `asyncio.sleep`. Иначе последовательный
+    poll блокирует event loop и рушит `asyncio.gather` из send_response_async
+    (10 вакансий × 6с = 60с фризу цикла).
     """
+    import asyncio as _asyncio
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
     if not xsrf or not resume_hash or not vid:
         return ""
     headers = get_headers(xsrf)
     try:
-        r = HH.post(
+        r = await _asyncio.to_thread(
+            HH.post,
             f"{hh_base()}/shards/hhpro_ai_letter",
             headers={**headers, "Content-Type": "application/json"},
             cookies=acc.get("cookies", {}),
@@ -196,9 +203,10 @@ def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s: int 
 
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        time.sleep(1)
+        await _asyncio.sleep(1)
         try:
-            r = HH.get(
+            r = await _asyncio.to_thread(
+                HH.get,
                 f"{hh_base()}/shards/hhpro_ai_check_status",
                 params={"resumeHash": resume_hash, "vacancyId": str(vid)},
                 cookies=acc.get("cookies", {}),
@@ -208,12 +216,14 @@ def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s: int 
             if r.status_code != 200:
                 continue
             data = r.json()
-            text = (data.get("letter") or data.get("text")
-                    or (data.get("result") or {}).get("text") or "").strip()
+            text = (data.get("generatedLetter") or data.get("letter")
+                    or data.get("text") or (data.get("result") or {}).get("text")
+                    or data.get("content") or "").strip()
             status = (data.get("status") or "").lower()
             if text:
                 return text
             if status in ("ready", "done", "success") and not text:
+                log_debug(f"hhpro_ai_check_status {vid}: ready но текст пуст, ключи={list(data.keys())}")
                 return ""
         except Exception:
             continue
@@ -236,9 +246,8 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
 
     letter = _randomize_text(acc.get("letter", ""))
     try:
-        from app.config import CONFIG as _CFG
-        if getattr(_CFG, "hh_ai_letter_first_try", True):
-            ai_letter = generate_hh_ai_letter(acc, acc.get("resume_hash", ""), vid)
+        if getattr(CONFIG, "hh_ai_letter_first_try", True):
+            ai_letter = await generate_hh_ai_letter(acc, acc.get("resume_hash", ""), vid)
             if ai_letter:
                 letter = ai_letter
                 log_debug(f"   AI-letter от HH: {len(letter)} симв, юзаю его вместо шаблона")
@@ -611,8 +620,16 @@ def touch_resume(acc: dict) -> tuple:
             timeout=_HH_DEFAULT_TIMEOUT,
         )
         if r.status_code == 200:
-            body = r.text[:500].lower() if r.text else ""
-            if '"isbot":true' in body.replace(" ", ""):
+            captcha_flag = False
+            try:
+                _bd = r.json()
+                captcha_flag = bool(
+                    (_bd.get("hhcaptcha") or {}).get("isBot")
+                    or (_bd.get("recaptcha") or {}).get("isBot")
+                )
+            except Exception:
+                captcha_flag = '"isbot":true' in (r.text or "").lower().replace(" ", "")
+            if captcha_flag:
                 log_debug("batch_update: сервер отдал hhcaptcha/recaptcha isBot=true")
             else:
                 return True, "Резюме подняты (batch_update)"

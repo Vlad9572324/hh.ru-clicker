@@ -299,12 +299,14 @@ class BotManager:
                 # был построен на старом тексте. Дропаем ключи по этому чату, при
                 # следующем цикле LLM пересчитает под свежий контекст.
                 chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
-                if chat_id and state._llm_drafts:
-                    to_drop = [k for k in list(state._llm_drafts.keys()) if str(k[0]) == chat_id]
-                    for k in to_drop:
-                        state._llm_drafts.pop(k, None)
-                    if to_drop:
-                        log_debug(f"WS push [{state.short}] edited в {chat_id}: сброшено {len(to_drop)} черновиков")
+                if chat_id:
+                    with state._llm_drafts_lock:
+                        if state._llm_drafts:
+                            to_drop = [k for k in list(state._llm_drafts.keys()) if str(k[0]) == chat_id]
+                            for k in to_drop:
+                                state._llm_drafts.pop(k, None)
+                            if to_drop:
+                                log_debug(f"WS push [{state.short}] edited в {chat_id}: сброшено {len(to_drop)} черновиков")
             elif event_name == "last_viewed_message_change":
                 # HR прочитал наше сообщение — засветим в лог для UI-нотификации.
                 chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
@@ -969,13 +971,15 @@ class BotManager:
                 from app.hh_resume import set_job_search_status
                 r = set_job_search_status(acc, "active_search")
                 if r.get("ok"):
+                    state._active_search_forced = True
                     self._add_log(state.short, state.color,
                                   "\U0001f7e2 Статус: активный поиск", "info")
                 else:
+                    # Транзиентный fail — не выставляем флаг, попробуем на следующем
+                    # перезапуске воркера (после crash или ручной паузы).
                     log_debug(f"active_search [{state.short}]: {r.get('error', '?')[:80]}")
             except Exception as e:
                 log_debug(f"active_search [{state.short}] exception: {e}")
-            state._active_search_forced = True
 
         while not self._stop_event.is_set() and not state._deleted:
             # Global + per-account pause
@@ -2442,7 +2446,8 @@ class BotManager:
                 # с прошлого цикла (auto_send был выкл) — используем его, чтобы не жечь
                 # токены заново. Если auto_send всё ещё False — вообще скипаем без
                 # перегенерации (черновик уже сохранён в llm_log и interviews DB).
-                cached_draft = state._llm_drafts.get(key)
+                with state._llm_drafts_lock:
+                    cached_draft = state._llm_drafts.get(key)
                 if cached_draft and not CONFIG.llm_auto_send:
                     log_debug(f"LLM [{state.short}] {neg_id}: уже есть черновик в кэше, auto_send выкл — пропуск")
                     continue
@@ -2527,7 +2532,8 @@ class BotManager:
                         continue
                     if ok:
                         state.llm_replied_msgs[key] = None
-                        state._llm_drafts.pop(key, None)  # отправили — кэш не нужен
+                        with state._llm_drafts_lock:
+                            state._llm_drafts.pop(key, None)  # отправили — кэш не нужен
                         state._msg_consecutive[neg_id] = state._msg_consecutive.get(neg_id, 0) + 1
                         state._llm_neg_failures.pop(neg_id, None)  # clear backoff on success
                         replied += 1
@@ -2580,7 +2586,8 @@ class BotManager:
                 else:
                     # auto_send=False — сохраняем черновик в кэш чтобы при включении
                     # auto_send отправить без повторного LLM-вызова.
-                    state._llm_drafts[key] = reply_text
+                    with state._llm_drafts_lock:
+                        state._llm_drafts[key] = reply_text
                     # НЕ помечаем llm_replied_msgs[key]=None — иначе при флипе auto_send
                     # бот посчитает чат «уже обработан» и пропустит. Без этой метки
                     # следующий цикл увидит чат, найдёт черновик в кэше и (если
