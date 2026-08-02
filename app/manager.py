@@ -2455,9 +2455,11 @@ class BotManager:
                 if cached_draft and not CONFIG.llm_auto_send:
                     log_debug(f"LLM [{state.short}] {neg_id}: уже есть черновик в кэше, auto_send выкл — пропуск")
                     continue
+                reply_source = "llm"
                 if cached_draft and CONFIG.llm_auto_send:
                     log_debug(f"LLM [{state.short}] {neg_id}: отправляю кэшированный черновик ({len(cached_draft)} симв.)")
                     reply_text = cached_draft
+                    reply_source = "cached"
                 else:
                     # HH сам генерит quick_replies под каждое HR-сообщение
                     # (тот же LLM что показывается кандидату в UI). Пробуем первое —
@@ -2467,6 +2469,7 @@ class BotManager:
                         qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
                         if qr:
                             reply_text = qr[0]
+                            reply_source = "quick_reply"
                             log_debug(f"LLM [{state.short}] {neg_id}: quick_replies дал {len(qr)} вариантов, беру '{reply_text[:40]}…'")
                             self._add_log(state.short, state.color,
                                 f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply вместо LLM", "info", neg_id=neg_id)
@@ -2483,6 +2486,7 @@ class BotManager:
                             account_key=f"{state.short}:{neg_id}",
                             ai_screener_hint=ai_hint,
                         )
+                        reply_source = "llm"
                     if not reply_text:
                         llm_status = get_llm_last_status(f"{state.short}:{neg_id}", "reply")
                         if llm_status.get("provider") == "openclaw" and llm_status.get("status") == "timeout":
@@ -2550,7 +2554,7 @@ class BotManager:
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer, "vacancy_title": vacancy_title,
                             "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
-                            "bot_reply": reply_text, "sent": True,
+                            "bot_reply": reply_text, "sent": True, "source": reply_source,
                         })
                         self._persist_llm_log({
                             "time": datetime.now().isoformat(timespec="seconds"),
@@ -2560,7 +2564,7 @@ class BotManager:
                             "employer": employer,
                             "reply_len": len(reply_text),
                             "send_ok": True,
-                            "source": "auto_send",
+                            "source": reply_source,
                         })
                     else:
                         with self._llm_sent_lock:

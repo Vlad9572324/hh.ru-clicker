@@ -1925,6 +1925,24 @@ function _llmUpdateAccToggles(snap) {
 function renderLlmLog(snap) {
   if (!snap) return;
 
+  // Мини-статистика источников в llm_log (последние 200 записей в памяти).
+  // Показывает сколько ответов пришло из HH-quick_replies vs своего LLM vs кэша.
+  const srcEl = document.getElementById('llm-st-sources');
+  if (srcEl && Array.isArray(snap.llm_log)) {
+    const cnt = {quick_reply: 0, llm: 0, ai_letter: 0, cached: 0, robot: 0, other: 0};
+    for (const r of snap.llm_log) {
+      const s = r.source || 'other';
+      cnt[s] = (cnt[s] || 0) + 1;
+    }
+    const parts = [];
+    if (cnt.quick_reply) parts.push(`<span style="color:var(--green)">💡${cnt.quick_reply}</span>`);
+    if (cnt.ai_letter)   parts.push(`<span style="color:var(--yellow)">✍️${cnt.ai_letter}</span>`);
+    if (cnt.llm)         parts.push(`<span style="color:var(--cyan)">🤖${cnt.llm}</span>`);
+    if (cnt.cached)      parts.push(`<span style="color:var(--dim)">📝${cnt.cached}</span>`);
+    if (cnt.robot)       parts.push(`<span style="color:var(--dim)">🤖${cnt.robot}</span>`);
+    srcEl.innerHTML = parts.length ? parts.join(' · ') : '<span style="color:var(--dim)">без ответов</span>';
+  }
+
   // Update per-account LLM toggles
   _llmUpdateAccToggles(snap);
 
