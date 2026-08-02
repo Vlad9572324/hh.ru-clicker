@@ -160,6 +160,14 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
                 or '"status":"ok"' in txt or '"responded":true' in txt
                 or "shortVacancy" in txt or "topic_id" in txt):
             return "sent", info
+        # HH иногда отдаёт 200 + HTML SPA-страницу редиректа (например на
+        # /vacancy/{id} после успешного отклика) без JSON-маркеров. Если
+        # тело большое (>2KB HTML) и НЕ содержит явных ошибок — trust'им,
+        # 200 от popup submit без 4xx-error = отклик прошёл.
+        if len(txt) > 2000 and ("<!doctype" in txt[:200].lower() or "<html" in txt[:200].lower()):
+            if not any(m in txt for m in ('"error"', 'test-required', 'already-applied',
+                                          'negotiations-limit', 'SPAM_DETECTED', 'captcha')):
+                return "sent", info
         return "error", {"raw": txt[:200], **info}
 
     if status_code in (502, 503, 504):
@@ -279,6 +287,9 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
         log_debug(f"   Ответ HTTP: {status_code} | Размер: {len(txt)}")
         if status_code >= 400:
             log_debug(f"   Тело ответа: {txt[:300]}")
+        elif status_code == 200 and 500 < len(txt) < 30000 and '"topic_id"' not in txt and '"success"' not in txt:
+            # Диагностика: HTML-редирект после отклика — что там?
+            log_debug(f"   200 (не-JSON, {len(txt)}b): {txt[:200]}")
         return classify_apply_response(status_code, txt)
     except Exception as e:
         return "error", {"exception": str(e)}

@@ -354,7 +354,12 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
                 date_str = f"{year}-{month:02d}-{day:02d}"
                 for company in day_entry.get("companies", []):
                     views_ts = company.get("views", [])
-                    ts = views_ts[0][:10] if views_ts else date_str
+                    # HH стал класть в views int-timestamps вместо ISO-строк.
+                    if views_ts:
+                        v0 = views_ts[0]
+                        ts = v0[:10] if isinstance(v0, str) else date_str
+                    else:
+                        ts = date_str
                     result.append({
                         "employer_id": str(company.get("id", "")),
                         "name": company.get("name", "").strip() or "Аноним",
