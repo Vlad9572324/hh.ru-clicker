@@ -194,8 +194,10 @@ async def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s
             timeout=8,
         )
         if r.status_code == 400 and "service_already_used" in r.text.lower():
+            log_debug(f"hhpro_ai_letter {vid}: service_already_used — эту пару уже использовали, юзаем шаблон")
             return ""
         if r.status_code not in (200, 202):
+            log_debug(f"hhpro_ai_letter {vid}: HTTP {r.status_code}, body={r.text[:150]}")
             return ""
     except Exception as e:
         log_debug(f"hhpro_ai_letter start {vid}: {e}")
