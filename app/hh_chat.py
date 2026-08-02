@@ -336,8 +336,11 @@ def fetch_quick_replies(acc: dict, chat_id: str, msg_id: str) -> list:
         if r.status_code != 200:
             return []
         data = r.json()
-        # Формат: {"quick_replies": [{"text": "..."}]} либо просто [...]
-        replies = data.get("quick_replies") or data.get("items") or data
+        # Формат: {"quick_replies": [{"text": "..."}]}, {"items": [...]} либо просто [...]
+        if isinstance(data, dict):
+            replies = data.get("quick_replies") or data.get("items") or []
+        else:
+            replies = data
         if not isinstance(replies, list):
             return []
         out = []

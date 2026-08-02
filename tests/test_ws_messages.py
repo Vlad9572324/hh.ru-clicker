@@ -29,3 +29,14 @@ def test_set_config_wrong_type_does_not_crash():
 def test_empty_payload_does_not_crash():
     with client.websocket_connect("/ws") as ws:
         ws.send_json({})
+
+
+def test_chat_message_edited_invalidates_llm_drafts():
+    from app.manager import _handle_edited_event
+    from app.state import AccountState
+
+    state = AccountState({"name": "Test", "short": "T", "color": "red", "urls": []})
+    state._llm_drafts = {("c1", "m1"): "draft1", ("c2", "m2"): "keep"}
+    _handle_edited_event(state, {"chatId": "c1"})
+    # draft по отредактированному чату сброшен, чужой — на месте
+    assert state._llm_drafts == {("c2", "m2"): "keep"}

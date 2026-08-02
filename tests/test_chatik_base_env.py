@@ -1,6 +1,7 @@
 """Tests for app.hh_chat._CHATIK_BASE env override."""
 
 import pytest
+from types import SimpleNamespace
 
 try:
     from app.hh_chat import _CHATIK_BASE, send_negotiation_message
@@ -58,9 +59,11 @@ def test_send_negotiation_message_url_respects_chatik_base(monkeypatch):
         calls.append(url)
         return FakeResp()
 
-    monkeypatch.setattr(hh_chat.requests, "post", fake_post)
+    # Граница моков — HH (код ушёл с requests.post на HH.post)
+    monkeypatch.setattr(hh_chat, "HH", SimpleNamespace(post=fake_post))
     monkeypatch.setattr(hh_chat, "_ensure_chatik_cookies", lambda acc: None)
 
-    acc = {"cookies": {"_xsrf": "x"}}
+    # hhtoken нужен чтобы не уйти в OAuth-first ветку
+    acc = {"cookies": {"_xsrf": "x", "hhtoken": "tok"}}
     send_negotiation_message(acc, "123", "hello")
     assert calls[0] == f"{hh_chat._CHATIK_BASE}/chatik/api/send"

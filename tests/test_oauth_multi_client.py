@@ -1,5 +1,7 @@
 """Tests for OAuth multi-client fallback."""
 
+from types import SimpleNamespace
+
 import pytest
 
 try:
@@ -28,7 +30,8 @@ def test_do_refresh_returns_none_on_invalid_client(monkeypatch):
     import app.oauth as oauth
 
     fake_resp = MagicMock(status_code=400, json=lambda: {"error": "invalid_client"})
-    monkeypatch.setattr(oauth.requests, "post", lambda *a, **kw: fake_resp)
+    # Граница моков — HH (код ушёл с requests.post на HH.post)
+    monkeypatch.setattr(oauth, "HH", SimpleNamespace(post=lambda *a, **kw: fake_resp))
     result = _do_refresh("refresh_token", "client_id", "secret", "ua")
     assert result is None
 
@@ -76,7 +79,8 @@ def test_fallback_kicks_in_on_primary_invalid_client(monkeypatch):
             },
         )
 
-    monkeypatch.setattr(oauth.requests, "post", fake_post)
+    # Граница моков — HH
+    monkeypatch.setattr(oauth, "HH", SimpleNamespace(post=fake_post))
 
     try:
         token = _obtain_oauth_token(acc)

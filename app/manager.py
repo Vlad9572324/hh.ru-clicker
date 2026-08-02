@@ -129,6 +129,21 @@ async def fetch_page(session, url, sem):
 # BOT MANAGER
 # ============================================================
 
+def _handle_edited_event(state, payload: dict) -> None:
+    """HR отредактировал сообщение — кэшированный draft устарел (строился на
+    старом тексте). Дропаем ключи по этому чату, LLM пересчитает на след. цикле."""
+    chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
+    if not chat_id:
+        return
+    with state._llm_drafts_lock:
+        if state._llm_drafts:
+            to_drop = [k for k in list(state._llm_drafts.keys()) if str(k[0]) == chat_id]
+            for k in to_drop:
+                state._llm_drafts.pop(k, None)
+            if to_drop:
+                log_debug(f"WS push [{state.short}] edited в {chat_id}: сброшено {len(to_drop)} черновиков")
+
+
 class BotManager:
     def __init__(self):
         self.paused = False
@@ -295,18 +310,7 @@ class BotManager:
                     daemon=True, name=f"ws-llm-{state.short}",
                 ).start()
             elif event_name == "chat_message_edited":
-                # HR отредактировал сообщение — наш кэшированный draft устарел, он
-                # был построен на старом тексте. Дропаем ключи по этому чату, при
-                # следующем цикле LLM пересчитает под свежий контекст.
-                chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
-                if chat_id:
-                    with state._llm_drafts_lock:
-                        if state._llm_drafts:
-                            to_drop = [k for k in list(state._llm_drafts.keys()) if str(k[0]) == chat_id]
-                            for k in to_drop:
-                                state._llm_drafts.pop(k, None)
-                            if to_drop:
-                                log_debug(f"WS push [{state.short}] edited в {chat_id}: сброшено {len(to_drop)} черновиков")
+                _handle_edited_event(state, payload)
             elif event_name == "last_viewed_message_change":
                 # HR прочитал наше сообщение — засветим в лог для UI-нотификации.
                 chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
