@@ -168,8 +168,11 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
     return "error", {"raw": txt[:200], **info}
 
 
-async def send_response_async(acc: dict, vid: str) -> tuple:
-    """Асинхронная отправка отклика. Возвращает (результат, инфо)"""
+async def send_response_async(acc: dict, vid: str, letter_max_length: int | None = None) -> tuple:
+    """Асинхронная отправка отклика. Возвращает (результат, инфо).
+    `letter_max_length` — hard-cap длины письма из vacancyView.applicantVacancyResponseStatuses;
+    если задан и превышает — режем чтобы HH не отказал 400.
+    """
     log_debug(f"📤 ОТПРАВКА ОТКЛИКА на вакансию {vid} | Аккаунт: {acc['name']}")
 
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
@@ -178,6 +181,8 @@ async def send_response_async(acc: dict, vid: str) -> tuple:
     headers = get_headers(xsrf)
 
     letter = _randomize_text(acc.get("letter", ""))
+    if letter_max_length and len(letter) > letter_max_length:
+        letter = letter[:letter_max_length].rstrip()
 
     data = aiohttp.FormData()
     data.add_field("resume_hash", acc["resume_hash"])
@@ -456,7 +461,22 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
                 p = phones[0]
                 contact["phone"] = f"+{p.get('country','')}{p.get('city','')}{p.get('number','')}"
 
-        return {"ok": True, "reason": "", "contact": contact}
+        # applicantVacancyResponseStatuses{vid} — test.required / letterMaxLength;
+        # aiAssistantInfo — HR подключил ML-скрининг откликов.
+        avrs = ((body.get("vacancyView") or {}).get("applicantVacancyResponseStatuses")
+                or data.get("applicantVacancyResponseStatuses") or {})
+        vac_status = avrs.get(str(vid), {}) if isinstance(avrs, dict) else {}
+        letter_max = vac_status.get("letterMaxLength")
+        test_info = vac_status.get("test") or {}
+        ai_info = ((body.get("vacancyView") or {}).get("aiAssistantInfo")
+                   or data.get("aiAssistantInfo") or {})
+        extras = {
+            "letter_max_length": int(letter_max) if isinstance(letter_max, (int, str)) and str(letter_max).isdigit() else None,
+            "test_required": bool(test_info.get("required")) if test_info else False,
+            "ai_assistant_enabled": bool(ai_info.get("isCurrentlyEnabled")),
+        }
+
+        return {"ok": True, "reason": "", "contact": contact, "extras": extras}
     except Exception as e:
         log_debug(f"_check_vacancy_before_apply {vid}: {e}")
         # Fail-closed: на любой неожиданной ошибке лучше пропустить вакансию,
@@ -502,28 +522,49 @@ def check_limit(acc: dict) -> bool:
 def touch_resume(acc: dict) -> tuple:
     """
     Поднять резюме в поиске.
-    Tries OAuth API first (no captcha), falls back to web.
+    Порядок попыток:
+      1. OAuth — не требует капчи, но иногда 429.
+      2. `POST /shards/resume/batch_update` — обновляет все резюме аккаунта одним
+         вызовом, без fingerprint, без капчи. Если пройдёт — бесплатный boost.
+      3. `POST /applicant/resumes/touch` — старый путь, может отдать капчу.
     Возвращает (success: bool, message: str)
     """
-    # Try OAuth first — no captcha!
     ok, msg = _oauth_touch_resume(acc)
     if ok:
         return True, msg
     if "429" not in msg:
-        log_debug(f"touch_resume OAuth failed: {msg}, trying web fallback")
+        log_debug(f"touch_resume OAuth failed: {msg}, пробую batch_update")
 
-    # Fallback to web (may hit captcha)
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     if not xsrf:
         return False, msg or "Missing _xsrf token"
     headers = get_headers(xsrf)
-    resume_hash = acc["resume_hash"]
 
+    try:
+        r = HH.post(
+            hh_base() + "/shards/resume/batch_update",
+            headers=headers,
+            cookies=acc["cookies"],
+            timeout=_HH_DEFAULT_TIMEOUT,
+        )
+        if r.status_code == 200:
+            body = r.text[:500].lower() if r.text else ""
+            if '"isbot":true' in body.replace(" ", ""):
+                log_debug("batch_update: сервер отдал hhcaptcha/recaptcha isBot=true")
+            else:
+                return True, "Резюме подняты (batch_update)"
+        elif r.status_code == 429:
+            return False, "Слишком часто (429)"
+        else:
+            log_debug(f"batch_update HTTP {r.status_code}, пробую /applicant/resumes/touch")
+    except Exception as e:
+        log_debug(f"batch_update exception: {e}, пробую /applicant/resumes/touch")
+
+    resume_hash = acc["resume_hash"]
     touch_files = {
         "resume": (None, resume_hash),
-        "undirectable": (None, "true")
+        "undirectable": (None, "true"),
     }
-
     try:
         response = _with_retry(
             lambda: HH.post(
@@ -531,7 +572,7 @@ def touch_resume(acc: dict) -> tuple:
                 headers=headers,
                 cookies=acc["cookies"],
                 files=touch_files,
-                timeout=_HH_DEFAULT_TIMEOUT
+                timeout=_HH_DEFAULT_TIMEOUT,
             ),
             retries=3, backoff_base=2.0,
         )()

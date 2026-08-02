@@ -942,6 +942,19 @@ class BotManager:
     def _run_account_worker_inner(self, idx: int, state: AccountState) -> None:
         acc = state.acc
 
+        if not state._active_search_forced:
+            try:
+                from app.hh_resume import set_job_search_status
+                r = set_job_search_status(acc, "active_search")
+                if r.get("ok"):
+                    self._add_log(state.short, state.color,
+                                  "\U0001f7e2 Статус: активный поиск", "info")
+                else:
+                    log_debug(f"active_search [{state.short}]: {r.get('error', '?')[:80]}")
+            except Exception as e:
+                log_debug(f"active_search [{state.short}] exception: {e}")
+            state._active_search_forced = True
+
         while not self._stop_event.is_set() and not state._deleted:
             # Global + per-account pause
             while (self.paused or state.paused) and not self._stop_event.is_set() and not state._deleted:
@@ -1450,6 +1463,15 @@ class BotManager:
                                 f"⏭ {display_title}: пропуск ({precheck['reason']})", "warning")
                         else:
                             checked_batch.append(vid)
+                            # Обогащаем vacancy_meta полями popup'а (letter_max_length,
+                            # test_required, ai_assistant_enabled) — используются на этапе
+                            # отправки для обрезки письма и адаптации LLM-prompt'а.
+                            extras = precheck.get("extras") or {}
+                            if extras:
+                                meta = state.vacancy_meta.setdefault(vid, {})
+                                for k, v in extras.items():
+                                    if v is not None:
+                                        meta[k] = v
                             # Collect HR contact info if available
                             contact = precheck.get("contact")
                             if contact and (contact.get("email") or contact.get("fio")):
@@ -1496,7 +1518,9 @@ class BotManager:
                     # Web: async batch via aiohttp
                     def _make_send_batch(b):
                         async def send_batch():
-                            tasks = [send_response_async(acc, vid) for vid in b]
+                            tasks = [send_response_async(acc, vid,
+                                        letter_max_length=state.vacancy_meta.get(vid, {}).get("letter_max_length"))
+                                     for vid in b]
                             return await asyncio.gather(*tasks, return_exceptions=True)
                         return send_batch
                     results = asyncio.run(_make_send_batch(batch)())

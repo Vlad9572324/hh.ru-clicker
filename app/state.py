@@ -82,6 +82,9 @@ class AccountState:
         # не ударили hh.ru/oauth/token одновременно (kimi-r13-2 #7, r13-3 #10).
         self.next_resume_touch = datetime.now() + timedelta(seconds=random.uniform(0, 120))
         self.resume_touch_status = ""
+        # active_search принудительно проставляем один раз за жизнь worker'а —
+        # HR-фильтр «готов сразу» отсекает всех без него.
+        self._active_search_forced = False
 
 
 
