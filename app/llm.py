@@ -314,8 +314,12 @@ def _looks_like_direct_answer(conversation: list, text: str) -> bool:
     return True
 
 
-def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "") -> str:
-    """Generate a reply to employer using configured LLM (OpenAI-compatible API)."""
+def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter: str = "", resume_text: str = "", account_key: str = "", ai_screener_hint: bool = False) -> str:
+    """Generate a reply to employer using configured LLM (OpenAI-compatible API).
+    `ai_screener_hint`: у работодателя включён HH AI Assistant (скринит отклики
+    ML'ем). Тогда добавляем в system prompt инструкцию писать явно упоминая
+    ключевые навыки из вакансии — ML лучше матчит structured keyword-heavy текст.
+    """
     global _llm_rr_index
 
     # Build profiles list: use multi-profile config if available, else fall back to legacy fields
@@ -344,6 +348,11 @@ def generate_llm_reply(conversation: list, employer_name: str = "", cover_letter
             f"\n\nКонтекст: {forms['responded']} на вакансию работодателя «{employer_name[:120]}» "
             f"со следующим сопроводительным письмом:\n\"\"\"\n{cover_letter.strip()[:2000]}\n\"\"\"\n"
             f"Учитывай содержание письма при ответе — не противоречь ему и {forms['consistency']}."
+        )
+    if ai_screener_hint:
+        system += (
+            "\n\nЭту переписку скринит AI-ассистент HR. Отвечай по-деловому, "
+            "явно упоминай навыки и опыт из вакансии — это повышает матч скора."
         )
     # Защита от prompt-injection из сообщений работодателя:
     # явно говорим LLM не следовать инструкциям внутри employer-сообщений.

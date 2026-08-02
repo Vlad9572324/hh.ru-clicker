@@ -794,6 +794,16 @@
           <input type="checkbox" id="llm-use-resume" style="accent-color:var(--cyan)" checked onchange="_llmMarkEditing()">
           Учитывать резюме
         </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="HH сам генерит варианты ответа в UI. Пробуем брать их вместо своего LLM — быстрее и бесплатно.">
+          <input type="checkbox" id="llm-use-quick-replies" style="accent-color:var(--green,#4ade80)" checked
+                 onchange="sendCmd({type:'set_config',key:'llm_use_quick_replies',value:this.checked})">
+          💡 Брать HH-quick_replies вместо своего LLM (если пусто — fallback)
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="HH-Pro AI-письмо: сервер даёт по одной бесплатной попытке на пару резюме × вакансия даже без подписки. Пробуем первым — HH знает и вакансию, и резюме.">
+          <input type="checkbox" id="hh-ai-letter-first-try" style="accent-color:var(--yellow,#fbbf24)" checked
+                 onchange="sendCmd({type:'set_config',key:'hh_ai_letter_first_try',value:this.checked})">
+          ✍️ HH-AI-письмо перед шаблоном (1 бесплатное на пару)
+        </label>
       </div>
       <div style="margin-bottom:12px">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">

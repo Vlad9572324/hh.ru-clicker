@@ -885,6 +885,8 @@ class BotManager:
                 "llm_fill_questionnaire": CONFIG.llm_fill_questionnaire,
                 "llm_use_cover_letter": CONFIG.llm_use_cover_letter,
                 "llm_use_resume": CONFIG.llm_use_resume,
+                "llm_use_quick_replies": getattr(CONFIG, "llm_use_quick_replies", True),
+                "hh_ai_letter_first_try": getattr(CONFIG, "hh_ai_letter_first_try", True),
                 "llm_model": CONFIG.llm_model,
                 "llm_base_url": CONFIG.llm_base_url,
                 "llm_status_summary": get_llm_status_summary(),
@@ -2419,12 +2421,14 @@ class BotManager:
                         log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
                         self._add_log(state.short, state.color,
                             f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
+                        ai_hint = bool(state.vacancy_meta.get(vacancy_id, {}).get("ai_assistant_enabled"))
                         reply_text = generate_llm_reply(
                             conversation,
                             thread.get("employer_name", ""),
                             cover_letter,
                             resume_text,
                             account_key=f"{state.short}:{neg_id}",
+                            ai_screener_hint=ai_hint,
                         )
                     if not reply_text:
                         llm_status = get_llm_last_status(f"{state.short}:{neg_id}", "reply")

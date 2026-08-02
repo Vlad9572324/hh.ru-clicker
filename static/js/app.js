@@ -1116,12 +1116,16 @@ function syncLlmSettings(snap) {
   const cl = document.getElementById('llm-use-cover-letter');
   const ur = document.getElementById('llm-use-resume');
   const fq = document.getElementById('llm-fill-questionnaire');
+  const qr = document.getElementById('llm-use-quick-replies');
+  const ail = document.getElementById('hh-ai-letter-first-try');
   const modeEl = document.getElementById('llm-profile-mode');
   if (!_llmSettingsEditing) {
     if (as && cfg.llm_auto_send !== undefined) as.checked = cfg.llm_auto_send;
     if (cl && cfg.llm_use_cover_letter !== undefined) cl.checked = cfg.llm_use_cover_letter;
     if (ur && cfg.llm_use_resume !== undefined) ur.checked = cfg.llm_use_resume;
     if (fq && cfg.llm_fill_questionnaire !== undefined) fq.checked = cfg.llm_fill_questionnaire;
+    if (qr && cfg.llm_use_quick_replies !== undefined) qr.checked = cfg.llm_use_quick_replies;
+    if (ail && cfg.hh_ai_letter_first_try !== undefined) ail.checked = cfg.hh_ai_letter_first_try;
   }
   if (modeEl && cfg.llm_profile_mode) modeEl.value = cfg.llm_profile_mode;
   // Update the global toggle button
