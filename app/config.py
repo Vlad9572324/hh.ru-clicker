@@ -68,6 +68,13 @@ class Config:
     llm_auto_send: bool = False       # True = отправлять, False = только логировать черновик
     llm_use_cover_letter: bool = True  # Передавать сопроводительное письмо в контекст
     llm_use_resume: bool = True        # Включать текст резюме в системный промпт
+    # HH сам генерит quick_replies под каждое HR-сообщение — пробуем сначала их,
+    # только на пустой ответ идём в свой LLM (экономит токены + официально-выглядящий текст).
+    llm_use_quick_replies: bool = True
+    # HH-Pro AI cover letter: `POST /shards/hhpro_ai_letter` даёт 1 бесплатное
+    # письмо на пару (resumeHash, vacancyId) даже без подписки. Пробуем первым —
+    # доменная модель HH пишет письмо под конкретную вакансию с учётом резюме.
+    hh_ai_letter_first_try: bool = True
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
@@ -211,7 +218,8 @@ _CONFIG_KEYS = [
     "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
     "hh_daily_limit",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
-    "llm_ws_push_enabled", "chat_use_oauth",
+    "llm_ws_push_enabled", "chat_use_oauth", "llm_use_quick_replies",
+    "hh_ai_letter_first_try",
 ]
 
 

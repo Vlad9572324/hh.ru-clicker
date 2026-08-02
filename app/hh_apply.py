@@ -168,10 +168,64 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
     return "error", {"raw": txt[:200], **info}
 
 
+def generate_hh_ai_letter(acc: dict, resume_hash: str, vid: str, timeout_s: int = 6) -> str:
+    """`POST /shards/hhpro_ai_letter {resumeHash, vacancyId}` — HH-Pro фича,
+    но сервер даёт по одной бесплатной попытке на пару (resumeHash, vacancyId)
+    независимо от подписки. Async: poll `/shards/hhpro_ai_check_status`.
+    Возвращает текст письма или "" если не сгенерилось / уже использовали.
+    """
+    xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
+    if not xsrf or not resume_hash or not vid:
+        return ""
+    headers = get_headers(xsrf)
+    try:
+        r = HH.post(
+            f"{hh_base()}/shards/hhpro_ai_letter",
+            headers={**headers, "Content-Type": "application/json"},
+            cookies=acc.get("cookies", {}),
+            json={"resumeHash": resume_hash, "vacancyId": str(vid)},
+            timeout=8,
+        )
+        if r.status_code == 400 and "service_already_used" in r.text.lower():
+            return ""
+        if r.status_code not in (200, 202):
+            return ""
+    except Exception as e:
+        log_debug(f"hhpro_ai_letter start {vid}: {e}")
+        return ""
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            r = HH.get(
+                f"{hh_base()}/shards/hhpro_ai_check_status",
+                params={"resumeHash": resume_hash, "vacancyId": str(vid)},
+                cookies=acc.get("cookies", {}),
+                headers=headers,
+                timeout=6,
+            )
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            text = (data.get("letter") or data.get("text")
+                    or (data.get("result") or {}).get("text") or "").strip()
+            status = (data.get("status") or "").lower()
+            if text:
+                return text
+            if status in ("ready", "done", "success") and not text:
+                return ""
+        except Exception:
+            continue
+    return ""
+
+
 async def send_response_async(acc: dict, vid: str, letter_max_length: int | None = None) -> tuple:
     """Асинхронная отправка отклика. Возвращает (результат, инфо).
     `letter_max_length` — hard-cap длины письма из vacancyView.applicantVacancyResponseStatuses;
     если задан и превышает — режем чтобы HH не отказал 400.
+    Если `CONFIG.hh_ai_letter_first_try` включен и у нас ещё есть бесплатная попытка
+    (сервер даст 1 раз на пару resumeHash×vacancyId) — берём письмо от HH-AI.
     """
     log_debug(f"📤 ОТПРАВКА ОТКЛИКА на вакансию {vid} | Аккаунт: {acc['name']}")
 
@@ -181,6 +235,15 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
     headers = get_headers(xsrf)
 
     letter = _randomize_text(acc.get("letter", ""))
+    try:
+        from app.config import CONFIG as _CFG
+        if getattr(_CFG, "hh_ai_letter_first_try", True):
+            ai_letter = generate_hh_ai_letter(acc, acc.get("resume_hash", ""), vid)
+            if ai_letter:
+                letter = ai_letter
+                log_debug(f"   AI-letter от HH: {len(letter)} симв, юзаю его вместо шаблона")
+    except Exception as e:
+        log_debug(f"   hhpro_ai_letter fail {vid}: {e}")
     if letter_max_length and len(letter) > letter_max_length:
         letter = letter[:letter_max_length].rstrip()
 

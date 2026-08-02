@@ -311,6 +311,49 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
         return []
 
 
+def fetch_quick_replies(acc: dict, chat_id: str, msg_id: str) -> list:
+    """`GET chatik.hh.ru/chatik/api/quick_replies?chatId&messageId` —
+    HH сам генерит 2-4 варианта готовых ответов на конкретное сообщение HR
+    (доменно-специфичной моделью, с контекстом всей переписки).
+    Возвращает список строк или пустой список при отказе / отсутствии.
+    """
+    if not chat_id or not msg_id:
+        return []
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    try:
+        r = HH.get(
+            f"{_CHATIK_BASE}/chatik/api/quick_replies",
+            params={"chatId": str(chat_id), "messageId": str(msg_id)},
+            cookies=acc.get("cookies") or {},
+            headers={
+                "User-Agent": ua,
+                "Accept": "application/json",
+                "Origin": _CHATIK_BASE,
+                "Referer": f"{_CHATIK_BASE}/",
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        # Формат: {"quick_replies": [{"text": "..."}]} либо просто [...]
+        replies = data.get("quick_replies") or data.get("items") or data
+        if not isinstance(replies, list):
+            return []
+        out = []
+        for item in replies:
+            if isinstance(item, str):
+                out.append(item.strip())
+            elif isinstance(item, dict):
+                t = (item.get("text") or item.get("value") or "").strip()
+                if t:
+                    out.append(t)
+        return out
+    except Exception as e:
+        log_debug(f"fetch_quick_replies chat={chat_id} msg={msg_id}: {e}")
+        return []
+
+
 def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = "") -> bool:
     """Send a message in an HH negotiation thread.
 

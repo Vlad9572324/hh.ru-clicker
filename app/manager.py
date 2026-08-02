@@ -90,6 +90,7 @@ from app.hh_chat import (
     _fetch_chat_history,
     send_negotiation_message,
     ChatikWSClient,
+    fetch_quick_replies,
 )
 
 from app.hh_resume import (
@@ -2403,16 +2404,28 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {neg_id}: отправляю кэшированный черновик ({len(cached_draft)} симв.)")
                     reply_text = cached_draft
                 else:
-                    log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
-                    self._add_log(state.short, state.color,
-                        f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
-                    reply_text = generate_llm_reply(
-                        conversation,
-                        thread.get("employer_name", ""),
-                        cover_letter,
-                        resume_text,
-                        account_key=f"{state.short}:{neg_id}",
-                    )
+                    # HH сам генерит quick_replies под каждое HR-сообщение
+                    # (тот же LLM что показывается кандидату в UI). Пробуем первое —
+                    # бесплатно, официально-выглядящий текст, не палится AI-детектом.
+                    reply_text = ""
+                    if getattr(CONFIG, "llm_use_quick_replies", True):
+                        qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
+                        if qr:
+                            reply_text = qr[0]
+                            log_debug(f"LLM [{state.short}] {neg_id}: quick_replies дал {len(qr)} вариантов, беру '{reply_text[:40]}…'")
+                            self._add_log(state.short, state.color,
+                                f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply вместо LLM", "info", neg_id=neg_id)
+                    if not reply_text:
+                        log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
+                        self._add_log(state.short, state.color,
+                            f"\U0001f916 {progress} [{employer_short}]: история {len(conversation)} сообщ., жду LLM…", "info", neg_id=neg_id)
+                        reply_text = generate_llm_reply(
+                            conversation,
+                            thread.get("employer_name", ""),
+                            cover_letter,
+                            resume_text,
+                            account_key=f"{state.short}:{neg_id}",
+                        )
                     if not reply_text:
                         llm_status = get_llm_last_status(f"{state.short}:{neg_id}", "reply")
                         if llm_status.get("provider") == "openclaw" and llm_status.get("status") == "timeout":
