@@ -1797,12 +1797,19 @@ class BotManager:
 
                     elif result == "error":
                         state.errors += 1
-                        state.consecutive_errors += 1
                         state.action_history.append(f"❌ {vid}")
                         self._add_response(state, vid, "", "", "error")
                         raw = info.get("raw", "")[:80] if info else ""
                         exc = info.get("exception", "") if info else ""
                         debug_info = raw or exc or "unknown"
+                        # HH иногда возвращает {"error":"unknown"} — это его сервер-сайд сбой,
+                        # не наша проблема (сеть/куки OK). Не растим consecutive_errors чтобы
+                        # auto_pause не срабатывал зря — тогда все успешные отклики в этом
+                        # батче не бракуются `if state.paused: break` циклом ниже.
+                        transient = 'error_code' in (info or {}) and (info or {}).get('error_code') == 'unknown'
+                        transient = transient or 'unknown' in raw.lower()[:40]
+                        if not transient:
+                            state.consecutive_errors += 1
                         self._add_log(state.short, state.color, f"❌ {vid}: {debug_info}", "error")
                         self._add_acc_event(state, "❌", "error", vid, "", debug_info[:60])
                         self._check_auto_pause(state)
