@@ -3,6 +3,7 @@ Browser session routes (temporary accounts added via cookie paste).
 """
 
 import asyncio
+import re
 
 import requests
 from fastapi import APIRouter, Request
@@ -108,6 +109,18 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
         resume_hash = all_resumes[0]["hash"]
     else:
         resume_hash = ""
+
+    # HH-fallback: /applicant/resumes теперь редиректит на /applicant/profile/me,
+    # где нет applicantResumes в SSR. Парсим /resume/HASH прямо из HTML — эти
+    # ссылки остались как навигация к каждому резюме.
+    if not resume_hash:
+        seen = set()
+        for h in re.findall(r'/resume/([a-f0-9]{30,})', r.text):
+            if h not in seen:
+                seen.add(h)
+                all_resumes.append({"hash": h, "title": "Резюме"})
+        if all_resumes:
+            resume_hash = all_resumes[0]["hash"]
 
     return {"ok": True, "name": name or "Браузер", "resume_hash": resume_hash, "all_resumes": all_resumes}
 
@@ -250,7 +263,8 @@ async def api_session_activate(idx: int):
     ts = bot.temp_sessions[temp_idx]
     if not ts.get("resume_hash"):
         return {"status": "error", "message": "Сначала найдите резюме (нажмите \U0001f504)"}
-    ok = bot.activate_session(temp_idx)
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, bot.activate_session, temp_idx)
     if ok:
         return {"status": "ok", "message": f"Сессия {ts['name']} запущена как бот"}
     return {"status": "error", "message": "Не удалось запустить"}
@@ -264,7 +278,8 @@ async def api_session_deactivate(idx: int):
     if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
         return {"status": "error", "message": "Не найдено"}
     ts = bot.temp_sessions[temp_idx]
-    ok = bot.deactivate_session(temp_idx)
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, bot.deactivate_session, temp_idx)
     if ok:
         return {"status": "ok", "message": f"Сессия {ts.get('name','')} остановлена"}
     return {"status": "error", "message": "Не удалось остановить"}
@@ -328,13 +343,28 @@ async def api_session_refresh(idx: int):
     raw_line = ts.get("_raw_cookie_line", "") or "; ".join(f"{k}={v}" for k, v in ts.get("cookies", {}).items())
     loop = asyncio.get_event_loop()
     profile = await loop.run_in_executor(None, _validate_and_profile, raw_line)
-    if not profile["ok"]:
-        # Cookie-путь упал (обычно 403 DDoS-Guard или auth). Пробуем OAuth-fallback:
-        # /resumes/mine работает без кук пока refresh_token живой.
+    # Cookie-путь мог вернуть ok=True но с пустым resume_hash — это случай нового
+    # HH profile-редиректа (/applicant/resumes → /applicant/profile/me, где нет
+    # applicantResumes в SSR). Также HTML-fallback ставит title="Резюме" placeholder
+    # без реального названия — тоже дёргаем OAuth чтобы получить нормальный title.
+    _placeholder_titles = all(
+        (r.get("title") or "").strip() in ("", "Резюме")
+        for r in (profile.get("all_resumes") or [])
+    ) if profile.get("all_resumes") else True
+    need_oauth_fallback = (
+        (not profile["ok"])
+        or (not profile.get("resume_hash") and not profile.get("all_resumes"))
+        or _placeholder_titles
+    )
+    if need_oauth_fallback:
+        # OAuth-based: /resumes/mine работает без кук пока refresh_token живой.
         oauth_profile = await loop.run_in_executor(None, _refresh_via_oauth, ts)
         if oauth_profile.get("ok"):
+            # Сохраняем имя из cookie-пути если оно нашлось (обычно точнее OAuth-версии).
+            if profile.get("ok") and profile.get("name") and profile["name"] != "Браузер":
+                oauth_profile["name"] = profile["name"]
             profile = oauth_profile
-        else:
+        elif not profile["ok"]:
             # Оба пути не сработали — вернём подробную причину.
             cookie_err = profile.get("error", "Ошибка")
             oauth_err = oauth_profile.get("error", "Нет OAuth токена")

@@ -36,6 +36,11 @@ import requests as _requests
 # переопределить через env `HH_IMPERSONATE=chrome131` etc.
 _IMPERSONATE = os.environ.get("HH_IMPERSONATE", "chrome124")
 
+# Прокси для всех исходящих запросов к hh.ru (обход soft-ban DDoS-Guard по IP).
+# Формат: `socks5h://host:port` / `http://host:port`. Пусто = напрямую.
+# Пример: HH_PROXY=socks5h://warp:1080 (WARP-sidecar контейнер).
+_PROXY = os.environ.get("HH_PROXY", "").strip()
+
 _DIAG_PATH = Path("data/diag.log")
 _DIAG_LOCK = threading.Lock()
 _DIAG_MAX_SIZE = 10 * 1024 * 1024  # 10 MB → truncate
@@ -143,6 +148,10 @@ class HHClient:
         # (обычно touch_resume / multipart uploads — редкие, не критично для fingerprint).
         force_requests = kwargs.pop("_force_requests", False) or "files" in kwargs
 
+        # Инжектим прокси если задан HH_PROXY и caller не переопределил свой.
+        if _PROXY and "proxies" not in kwargs and "proxy" not in kwargs:
+            kwargs["proxies"] = {"http": _PROXY, "https": _PROXY}
+
         # curl_cffi понимает большинство requests-опций 1:1 + `impersonate`
         if self._session_cffi is not None and not force_requests:
             try:
@@ -185,3 +194,7 @@ def is_impersonating() -> bool:
 
 def impersonate_version() -> str:
     return _IMPERSONATE if _HAS_CFFI else "requests(no-impersonate)"
+
+
+def proxy_url() -> str:
+    return _PROXY

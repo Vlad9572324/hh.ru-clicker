@@ -4,6 +4,7 @@ HH.ru resume functions: parse, fetch, analyze, edit resume.
 
 import re
 import json
+import html as _html
 import time
 import threading
 import urllib.parse
@@ -38,12 +39,19 @@ def _cleanup_resume_cache(now: float):
 
 
 def parse_hh_lux_ssr(html: str) -> dict:
-    """Извлечь SSR JSON из <template id="HH-Lux-InitialState">"""
+    """Извлечь SSR JSON из <template id="HH-Lux-InitialState">.
+
+    HH недавно перевёл содержимое <template> на HTML-entity-encoded JSON
+    (`&#34;` вместо `"`) — без unescape json.loads падает на второй позиции.
+    """
     m = re.search(r'<template[^>]*id="HH-Lux-InitialState"[^>]*>([\s\S]*?)</template>', html)
     if not m:
         return {}
+    raw = m.group(1)
+    if "&#" in raw or "&quot;" in raw or "&amp;" in raw:
+        raw = _html.unescape(raw)
     try:
-        return json.loads(m.group(1))
+        return json.loads(raw)
     except Exception as e:
         log_debug(f"parse_hh_lux_ssr error: {e}")
         return {}

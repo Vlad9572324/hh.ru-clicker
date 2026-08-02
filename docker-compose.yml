@@ -1,13 +1,25 @@
 services:
+  singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: hhru-clicker_singbox
+    restart: unless-stopped
+    volumes:
+      - ./data/singbox:/etc/sing-box:ro
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+
   hh-bot:
     build: .
+    depends_on:
+      - singbox
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
     environment:
-      # bind 0.0.0.0 ВНУТРИ контейнера, наружу всё равно мапится только на 127.0.0.1
-      # хост-машины (см. ports выше). UNSAFE_EXPOSE=1 обходит web_app._resolve_host check.
+      # Открыто наружу для LAN-доступа (см. ports выше — без 127.0.0.1 префикса).
+      # WARNING: дашборд НЕ имеет авторизации — любой в LAN может управлять ботом.
       HH_BOT_HOST: "0.0.0.0"
       HH_BOT_UNSAFE_EXPOSE: "1"
+      # Весь исходящий hh.ru-трафик идёт через sing-box-sidecar (VLESS+Reality → MSK IP).
+      HH_PROXY: "socks5h://singbox:1080"
     volumes:
       - ./data:/app/data
       - ./web_app.py:/app/web_app.py
