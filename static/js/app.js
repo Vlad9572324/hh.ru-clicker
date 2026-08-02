@@ -1119,6 +1119,10 @@ function syncLlmSettings(snap) {
   const qr = document.getElementById('llm-use-quick-replies');
   const ail = document.getElementById('hh-ai-letter-first-try');
   const rv = document.getElementById('related-vacancies-enabled');
+  // Дубли в главной панели «LLM Ответы» — тот же state, чекбоксы на двух вкладках.
+  const qrM = document.getElementById('llm-use-quick-replies-main');
+  const ailM = document.getElementById('hh-ai-letter-first-try-main');
+  const rvM = document.getElementById('related-vacancies-enabled-main');
   const modeEl = document.getElementById('llm-profile-mode');
   if (!_llmSettingsEditing) {
     if (as && cfg.llm_auto_send !== undefined) as.checked = cfg.llm_auto_send;
@@ -1128,6 +1132,9 @@ function syncLlmSettings(snap) {
     if (qr && cfg.llm_use_quick_replies !== undefined) qr.checked = cfg.llm_use_quick_replies;
     if (ail && cfg.hh_ai_letter_first_try !== undefined) ail.checked = cfg.hh_ai_letter_first_try;
     if (rv && cfg.related_vacancies_enabled !== undefined) rv.checked = cfg.related_vacancies_enabled;
+    if (qrM && cfg.llm_use_quick_replies !== undefined) qrM.checked = cfg.llm_use_quick_replies;
+    if (ailM && cfg.hh_ai_letter_first_try !== undefined) ailM.checked = cfg.hh_ai_letter_first_try;
+    if (rvM && cfg.related_vacancies_enabled !== undefined) rvM.checked = cfg.related_vacancies_enabled;
   }
   if (modeEl && cfg.llm_profile_mode) modeEl.value = cfg.llm_profile_mode;
   // Update the global toggle button

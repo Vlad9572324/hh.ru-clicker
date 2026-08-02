@@ -361,6 +361,25 @@
     <span id="llm-st-sources" style="color:var(--dim);margin-left:auto;font-family:monospace" title="Источник ответов из последних 200 в памяти">—</span>
   </div>
 
+  <!-- Feature toggles: HH-quick_replies / HH-AI-letter / related_vacancies -->
+  <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="HH сам генерит варианты ответа. Берём их вместо своего LLM — бесплатно и не палится AI-детектом.">
+      <input type="checkbox" id="llm-use-quick-replies-main" style="accent-color:var(--green,#4ade80)" checked
+             onchange="sendCmd({type:'set_config',key:'llm_use_quick_replies',value:this.checked})">
+      💡 HH quick_replies (вместо своего LLM)
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="POST /shards/hhpro_ai_letter — 1 бесплатное AI-письмо на пару резюме×вакансия даже без HH-Pro.">
+      <input type="checkbox" id="hh-ai-letter-first-try-main" style="accent-color:var(--yellow,#fbbf24)" checked
+             onchange="sendCmd({type:'set_config',key:'hh_ai_letter_first_try',value:this.checked})">
+      ✍️ HH AI-letter (перед шаблоном)
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="GET /shards/vacancy/related_vacancies — HH-рекомендательный фид. Раз в цикл сбора мержим в пул.">
+      <input type="checkbox" id="related-vacancies-enabled-main" style="accent-color:var(--cyan,#22d3ee)" checked
+             onchange="sendCmd({type:'set_config',key:'related_vacancies_enabled',value:this.checked})">
+      🔗 related_vacancies (доп. источник)
+    </label>
+  </div>
+
   <!-- Per-account LLM toggles -->
   <div id="llm-acc-toggles" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
 
