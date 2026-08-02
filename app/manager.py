@@ -293,7 +293,24 @@ class BotManager:
                     target=_self._process_llm_replies, args=(state,),
                     daemon=True, name=f"ws-llm-{state.short}",
                 ).start()
-            elif event_name in ("chat_state_changed", "chat_message_deleted"):
+            elif event_name == "chat_message_edited":
+                # HR отредактировал сообщение — наш кэшированный draft устарел, он
+                # был построен на старом тексте. Дропаем ключи по этому чату, при
+                # следующем цикле LLM пересчитает под свежий контекст.
+                chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
+                if chat_id and state._llm_drafts:
+                    to_drop = [k for k in list(state._llm_drafts.keys()) if str(k[0]) == chat_id]
+                    for k in to_drop:
+                        state._llm_drafts.pop(k, None)
+                    if to_drop:
+                        log_debug(f"WS push [{state.short}] edited в {chat_id}: сброшено {len(to_drop)} черновиков")
+            elif event_name == "last_viewed_message_change":
+                # HR прочитал наше сообщение — засветим в лог для UI-нотификации.
+                chat_id = str(payload.get("chatId") or payload.get("chat_id") or "")
+                if chat_id:
+                    _self._add_log(state.short, state.color,
+                        f"\U0001f441 HR прочитал ({chat_id})", "info", neg_id=chat_id)
+            elif event_name in ("chat_state_changed", "chat_message_deleted", "chat_participant_action"):
                 log_debug(f"WS push [{state.short}] {event_name}: {str(payload)[:200]}")
         state._ws_client = ChatikWSClient(state.acc, _on_event, label=state.short)
         state._ws_client.start()
@@ -1144,6 +1161,31 @@ class BotManager:
             state.url_stats = dict(state.vacancies_by_url)
 
             unique_vacancies = set(all_vacancies)
+            # related_vacancies — рекомендательный фид HH под seed-вакансию.
+            # Обычно match'ит лучше чем текстовый поиск (внутренний ML ranker).
+            # Один запрос на цикл — берём последнюю applied как seed.
+            if CONFIG.related_vacancies_enabled and unique_vacancies:
+                seed_vid = None
+                for rr in list(self.recent_responses)[:20]:
+                    if rr.get("acc") == state.short:
+                        cand = str(rr.get("id") or "")
+                        if cand:
+                            seed_vid = cand
+                            break
+                if not seed_vid:
+                    seed_vid = next(iter(unique_vacancies), None)
+                if seed_vid:
+                    try:
+                        from app.hh_apply import fetch_related_vacancies
+                        related = fetch_related_vacancies(acc, str(seed_vid), max_pages=1)
+                        if related:
+                            new_ids = set(related) - unique_vacancies
+                            unique_vacancies |= set(related)
+                            if new_ids:
+                                self._add_log(state.short, state.color,
+                                    f"\U0001f517 Related: +{len(new_ids)} вакансий (seed {seed_vid})", "info")
+                    except Exception as e:
+                        log_debug(f"related_vacancies error [{state.short}]: {e}")
             # Favorited из HH — приоритетные кандидаты юзера. Подмешиваем в общий
             # пул (фильтры применятся как обычно — has_test и т.д.). Хранятся
             # отдельно чтобы apply phase могла отсортировать их вперёд.

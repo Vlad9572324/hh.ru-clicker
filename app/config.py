@@ -75,6 +75,10 @@ class Config:
     # письмо на пару (resumeHash, vacancyId) даже без подписки. Пробуем первым —
     # доменная модель HH пишет письмо под конкретную вакансию с учётом резюме.
     hh_ai_letter_first_try: bool = True
+    # related_vacancies: раз в цикл сбора запрашиваем HH-рекомендательный фид
+    # `GET /shards/vacancy/related_vacancies?vacancyId=<seed>` — обычно
+    # match'ит лучше текстового поиска (внутренний ML ranker).
+    related_vacancies_enabled: bool = True
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
@@ -219,7 +223,7 @@ _CONFIG_KEYS = [
     "hh_daily_limit",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
     "llm_ws_push_enabled", "chat_use_oauth", "llm_use_quick_replies",
-    "hh_ai_letter_first_try",
+    "hh_ai_letter_first_try", "related_vacancies_enabled",
 ]
 
 

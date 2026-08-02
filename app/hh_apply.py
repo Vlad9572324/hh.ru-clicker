@@ -649,3 +649,56 @@ def touch_resume(acc: dict) -> tuple:
 
     except Exception as e:
         return False, msg or f"Ошибка: {str(e)[:30]}"
+
+
+def fetch_related_vacancies(acc: dict, seed_vid: str, max_pages: int = 1) -> list:
+    """`GET /shards/vacancy/related_vacancies?vacancyId=X&SourceLabel=suitable_vacancies`
+    — рекомендательный фид HH: подбирает похожие вакансии под seed по своему
+    ML-ranker'у. Обычно лучше match'ит чем текстовый поиск.
+    Возвращает уникальный список vacancy_id (строки).
+    """
+    if not seed_vid:
+        return []
+    xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
+    headers = get_headers(xsrf) if xsrf else {}
+    # X-Proxied-* обязательны для /shards/* endpoint'ов чтобы сервер не отказал 4xx.
+    headers.update({
+        "X-Proxied-Hhtm-Source": "vacancy",
+        "X-Proxied-Page-Name": "vacancy",
+        "X-Proxied-Place": "related_vacancies",
+        "X-Proxied-Type": "Component",
+        "X-Use-SSR": "False",
+        "X-Is-SPA": "true",
+        "Accept": "application/json",
+    })
+    out = []
+    seen = set()
+    for page in range(1, max_pages + 1):
+        try:
+            r = HH.get(
+                f"{hh_base()}/shards/vacancy/related_vacancies",
+                params={
+                    "vacancyId": str(seed_vid),
+                    "page": page,
+                    "SourceLabel": "suitable_vacancies",
+                },
+                headers=headers,
+                cookies=acc.get("cookies", {}),
+                timeout=8,
+            )
+            if r.status_code != 200:
+                break
+            data = r.json()
+            items = data.get("vacancies") or data.get("items") or []
+            for it in items:
+                vid = str((it or {}).get("vacancyId") or (it or {}).get("id") or "")
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    out.append(vid)
+            total = data.get("totalPages") or 1
+            if page >= total:
+                break
+        except Exception as e:
+            log_debug(f"fetch_related_vacancies seed={seed_vid} p={page}: {e}")
+            break
+    return out
