@@ -1007,3 +1007,43 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
     except Exception as e:
         log_debug(f"OAuth chat send chat_id={cid} error: {e}")
         return False
+
+
+def fetch_negotiations_statistic(acc: dict) -> dict:
+    """`GET api.hh.ru/negotiations_statistic/mine` — mobile-endpoint из
+    ru.hh.android v26.28.1 (probe'нут 2026-08-03, работает через web OAuth-token).
+    Возвращает {responses_count, responses_required} — streak-геймификация
+    HH: сколько откликов нужно за период чтобы получить бейдж "часто отвечает".
+    Cached 30 min.
+    """
+    rh = acc.get("resume_hash", "")
+    if not rh:
+        return {}
+    now = time.time()
+    key = f"stat::{rh}"
+    with _negotiations_count_lock:
+        cached = _negotiations_count_cache.get(key)
+        if cached and cached[0] > now:
+            return cached[1]
+    H = _oauth_headers(acc)
+    if not H:
+        return {}
+    # mobile-endpoint требует x-force-app-access + mobile UA (без них 406)
+    H = {**H, "x-force-app-access": "true", "User-Agent": "ru.hh.android/26.28.1"}
+    try:
+        r = HH.get("https://api.hh.ru/negotiations_statistic/mine",
+                   headers=H, timeout=8)
+        if r.status_code != 200:
+            return {}
+        data = r.json()
+        streak = (data.get("applicant_statistic") or {}).get("responses_streak") or {}
+        out = {
+            "responses_count": int(streak.get("responses_count") or 0),
+            "responses_required": int(streak.get("responses_required") or 0),
+        }
+        with _negotiations_count_lock:
+            _negotiations_count_cache[key] = (now + 1800, out)
+        return out
+    except Exception as e:
+        log_debug(f"fetch_negotiations_statistic {rh[:12]}: {e}")
+        return {}

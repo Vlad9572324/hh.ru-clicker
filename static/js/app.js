@@ -3446,7 +3446,13 @@ function updateCard(card, acc) {
   const hhCell = document.getElementById('acc-hh-today-' + acc.idx);
   if (hhCell) {
     if (acc.hh_today_applies_updated) {
-      hhCell.textContent = `HH ${hhUsed}/${hhLim}`;
+      // streak — HH-геймификация: сколько подряд ответов для бейджа "часто отвечает"
+      const strCount = acc.responses_streak_count || 0;
+      const strReq = acc.responses_streak_required || 0;
+      const streakHtml = strReq > 0
+        ? ` · <span style="color:${strCount >= strReq ? 'var(--green)' : 'var(--dim)'}" title="responses_streak — HH-бейдж 'часто отвечает'">🔥${strCount}/${strReq}</span>`
+        : '';
+      hhCell.innerHTML = `HH ${hhUsed}/${hhLim}${streakHtml}`;
       hhCell.style.color = hhUsed >= hhLim ? 'var(--red)' : (hhUsed >= hhLim - 10 ? 'var(--yellow)' : 'var(--dim)');
     } else {
       hhCell.textContent = 'HH —';

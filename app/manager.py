@@ -71,6 +71,7 @@ from app.oauth import (
     fetch_negotiation_messages_oauth,
     send_negotiation_message_oauth,
     fetch_negotiations_today_count,
+    fetch_negotiations_statistic,
 )
 
 from app.hh_api import (
@@ -694,6 +695,8 @@ class BotManager:
                 "hh_today_applies": s.hh_today_applies,
                 "hh_today_applies_updated": s.hh_today_applies_updated,
                 "hh_daily_limit": CONFIG.hh_daily_limit or 200,
+                "responses_streak_count": getattr(s, "responses_streak_count", 0),
+                "responses_streak_required": getattr(s, "responses_streak_required", 0),
                 "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                 "llm_enabled": s.llm_enabled,
                 "llm_status": s.llm_status,
@@ -851,6 +854,8 @@ class BotManager:
                     "hh_today_applies": 0,
                     "hh_today_applies_updated": "",
                     "hh_daily_limit": CONFIG.hh_daily_limit or 200,
+                    "responses_streak_count": 0,
+                    "responses_streak_required": 0,
                     "llm_enabled": True,
                     "use_oauth": bool(ts.get("use_oauth", False)),
                     "daily_sent": 0,
@@ -1873,6 +1878,15 @@ class BotManager:
                     with state._state_lock:
                         state.hh_today_applies = count
                         state.hh_today_applies_updated = datetime.now().isoformat(timespec="seconds")
+                    # Streak-геймификация HH через mobile-endpoint (bonus поле для UI).
+                    try:
+                        streak = fetch_negotiations_statistic(state.acc)
+                        if streak:
+                            with state._state_lock:
+                                state.responses_streak_count = streak.get("responses_count", 0)
+                                state.responses_streak_required = streak.get("responses_required", 0)
+                    except Exception as _e:
+                        log_debug(f"streak fetch [{state.short}]: {_e}")
                     # Auto-recovery: если стоим в лимит-stop, а реально count < лимит
                     limit = CONFIG.hh_daily_limit or 200
                     if (state.hard_stopped or state.paused_reason == "limit") and count < limit - 5:

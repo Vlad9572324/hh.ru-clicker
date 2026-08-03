@@ -85,6 +85,11 @@ class AccountState:
         # active_search принудительно проставляем один раз за жизнь worker'а —
         # HR-фильтр «готов сразу» отсекает всех без него.
         self._active_search_forced = False
+        # HH-геймификация: сколько откликов сделали в текущей streak-серии + сколько
+        # нужно для бейджа «часто отвечает». Обновляется _hh_limit_tracker_worker
+        # раз в 30 мин через api.hh.ru/negotiations_statistic/mine.
+        self.responses_streak_count = 0
+        self.responses_streak_required = 0
 
 
 
