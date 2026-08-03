@@ -746,11 +746,11 @@ function llmProfileAdd(profile) {
   row.dataset.idx = idx;
   row.innerHTML = `
     <div class="llm-profile-row-header">
-      <input class="apply-input lp-name" style="font-size:11px;flex:1" placeholder="Название (например: DeepSeek)" value="${esc(p.name||'')}">
+      <input class="apply-input lp-name" style="font-size:11px;flex:1" placeholder="Название (например: DeepSeek)" value="${esc(p.name||'')}" oninput="llmProfileAutoSave()">
       <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap">
-        <input type="checkbox" class="lp-enabled" ${p.enabled !== false ? 'checked' : ''} style="accent-color:var(--cyan)"> Вкл
+        <input type="checkbox" class="lp-enabled" ${p.enabled !== false ? 'checked' : ''} style="accent-color:var(--cyan)" onchange="llmProfileAutoSave()"> Вкл
       </label>
-      <button class="btn-sm" style="color:var(--red);border-color:var(--red);padding:1px 8px" onclick="this.closest('.llm-profile-row').remove();llmProfileReindex()">✕</button>
+      <button class="btn-sm" style="color:var(--red);border-color:var(--red);padding:1px 8px" onclick="this.closest('.llm-profile-row').remove();llmProfileReindex();llmProfileAutoSave()">✕</button>
     </div>
     <div class="llm-profile-fields">
       <div>
@@ -758,17 +758,17 @@ function llmProfileAdd(profile) {
           <span>API Key</span>
           <span class="lp-key-fingerprint" data-idx="${idx}" style="color:var(--green);font-family:monospace"></span>
         </div>
-        <input class="apply-input lp-key" type="password" style="font-size:11px" placeholder="sk-..." value="${esc(p.api_key||'')}" oninput="llmProfileDetectDebounce(this);_llmUpdateKeyFingerprint(this)">
+        <input class="apply-input lp-key" type="password" style="font-size:11px" placeholder="sk-..." value="${esc(p.api_key||'')}" oninput="llmProfileDetectDebounce(this);_llmUpdateKeyFingerprint(this);llmProfileAutoSave()">
       </div>
       <div>
         <div style="font-size:10px;color:var(--dim);margin-bottom:2px">Модель</div>
-        <input class="apply-input lp-model" style="font-size:11px" placeholder="gpt-4o-mini" value="${esc(p.model||'')}">
+        <input class="apply-input lp-model" style="font-size:11px" placeholder="gpt-4o-mini" value="${esc(p.model||'')}" oninput="llmProfileAutoSave()">
       </div>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
       <div style="flex:1">
         <div style="font-size:10px;color:var(--dim);margin-bottom:2px">Base URL</div>
-        <input class="apply-input lp-url" style="font-size:11px" placeholder="https://api.openai.com/v1" value="${esc(p.base_url||'')}">
+        <input class="apply-input lp-url" style="font-size:11px" placeholder="https://api.openai.com/v1" value="${esc(p.base_url||'')}" oninput="llmProfileAutoSave()">
       </div>
       <div style="display:flex;flex-direction:column;gap:3px;padding-top:14px">
         <button class="btn-sm" onclick="llmProfileDetect(this.closest('.llm-profile-row'))" title="Определить провайдера и загрузить модели">🔍 Определить</button>
@@ -777,6 +777,40 @@ function llmProfileAdd(profile) {
     </div>
   `;
   list.appendChild(row);
+}
+
+// Автосохранение профилей после 1.5с бездействия — юзер вводит ключ и уходит,
+// без нажатия Save. Раньше форма оставалась в буфере, ключ не улетал на сервер.
+let _llmAutoSaveTimer = null;
+function llmProfileAutoSave() {
+  _llmSettingsEditing = true;
+  clearTimeout(_llmAutoSaveTimer);
+  const st = document.getElementById('llm-status');
+  if (st) { st.textContent = '⏳ автосохранение через 1.5с...'; st.style.color = 'var(--dim)'; }
+  _llmAutoSaveTimer = setTimeout(async () => {
+    try {
+      const profiles = llmProfilesRead();
+      const mode = document.getElementById('llm-profile-mode')?.value || 'fallback';
+      const r = await fetch('/api/llm_profiles', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({profiles, mode})
+      });
+      if (r.ok && st) {
+        const withKey = profiles.filter(p => p.api_key).length;
+        const ts = new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        st.innerHTML = `✅ Автосохранено в ${ts} · профилей: <b>${profiles.length}</b> (с ключом: <b>${withKey}</b>)`;
+        st.style.color = 'var(--green)';
+      } else if (st) {
+        st.textContent = '❌ HTTP ' + r.status;
+        st.style.color = 'var(--red)';
+      }
+      document.querySelectorAll('#llm-profiles-list .lp-key').forEach(inp => _llmUpdateKeyFingerprint(inp));
+    } catch (e) {
+      if (st) { st.textContent = '❌ ' + e.message; st.style.color = 'var(--red)'; }
+    } finally {
+      _llmSettingsEditing = false;
+    }
+  }, 1500);
 }
 
 function llmProfileReindex() {
