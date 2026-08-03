@@ -198,3 +198,19 @@ def impersonate_version() -> str:
 
 def proxy_url() -> str:
     return _PROXY
+
+
+def probe_outbound_ip(timeout: float = 6.0) -> dict:
+    """Дёрнуть api.ipify.org через текущий (или дефолтный) сетевой стек и
+    вернуть исходящий IP. Полезно проверить активность прокси и что за IP
+    видит внешний мир."""
+    out = {"proxy": _PROXY, "ip": "", "error": ""}
+    try:
+        r = HH.get("https://api.ipify.org", timeout=timeout, _skip_diag=True)
+        if r.status_code == 200:
+            out["ip"] = (r.text or "").strip()
+        else:
+            out["error"] = f"HTTP {r.status_code}"
+    except Exception as e:
+        out["error"] = str(e)[:120]
+    return out

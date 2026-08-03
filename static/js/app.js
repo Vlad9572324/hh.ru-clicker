@@ -2017,6 +2017,38 @@ function letterPickTpl(idx) {
   if (tpl) ta.value = tpl.text;
 }
 
+async function proxyCheck(btn) {
+  const urlEl = document.getElementById('proxy-url');
+  const ipEl = document.getElementById('proxy-ip');
+  const impEl = document.getElementById('proxy-impersonate');
+  const errEl = document.getElementById('proxy-error');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await fetch('/api/proxy/info', {method: 'GET'});
+    const d = await r.json();
+    if (urlEl) urlEl.textContent = d.proxy || '(нет — напрямую)';
+    if (ipEl) ipEl.textContent = d.ip || '?';
+    if (impEl) impEl.textContent = d.impersonate || 'нет';
+    if (errEl) {
+      if (d.error) { errEl.textContent = '⚠️ ' + d.error; errEl.style.display = ''; }
+      else errEl.style.display = 'none';
+    }
+  } catch (e) {
+    if (errEl) { errEl.textContent = '⚠️ ' + e.message; errEl.style.display = ''; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Проверить'; }
+  }
+}
+
+// Auto-probe при первом раскрытии секции (чтобы не жечь на каждом рендере).
+document.addEventListener('DOMContentLoaded', () => {
+  const sec = document.getElementById('proxy-section');
+  if (sec && !sec._proxyProbed) {
+    sec._proxyProbed = true;
+    setTimeout(() => proxyCheck(), 800);
+  }
+});
+
 async function letterSave(idx, btn) {
   const ta = document.getElementById('acc-letter-ta-' + idx);
   const st = document.getElementById('acc-letter-st-' + idx);

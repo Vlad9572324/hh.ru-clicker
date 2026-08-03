@@ -105,6 +105,16 @@ def _safe_session_dict(s: dict) -> dict:
     return {k: v for k, v in s.items() if k not in _SESSION_REDACT_KEYS}
 
 
+@router.get("/api/proxy/info")
+async def api_proxy_info():
+    """URL прокси + текущий исходящий IP (через прокси если задан)."""
+    from app.hh_http import probe_outbound_ip, is_impersonating, impersonate_version
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, probe_outbound_ip)
+    data["impersonate"] = impersonate_version() if is_impersonating() else ""
+    return data
+
+
 @router.get("/api/debug")
 async def api_debug():
     snap = bot.get_state_snapshot()

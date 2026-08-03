@@ -426,6 +426,26 @@
     <!-- ═══════ ГРУППА 1: Подключение ═══════ -->
     <div class="settings-group-header">🔌 Подключение</div>
 
+    <!-- Proxy info -->
+    <details class="q-section prio-high" id="proxy-section" open>
+      <summary class="q-section-title">🌐 Прокси и исходящий IP</summary>
+      <div class="q-section-body" style="font-size:12px">
+        <div style="margin-bottom:8px;color:var(--dim)">
+          Прокси задаётся через env-переменную <code>HH_PROXY</code> в docker-compose.yml (перезапустить контейнер после смены). Здесь — read-only статус.
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px">
+          <span>Прокси:</span>
+          <span id="proxy-url" style="font-family:monospace;color:var(--cyan)">—</span>
+          <span>Исходящий IP:</span>
+          <span id="proxy-ip" style="font-family:monospace;color:var(--green)">—</span>
+          <span>TLS impersonate:</span>
+          <span id="proxy-impersonate" style="font-family:monospace;color:var(--yellow)">—</span>
+          <button class="btn-sm" onclick="proxyCheck(this)" style="margin-left:auto">↻ Проверить</button>
+        </div>
+        <div id="proxy-error" style="margin-top:8px;color:var(--red);display:none"></div>
+      </div>
+    </details>
+
     <!-- Browser sessions -->
     <details class="q-section prio-critical" open>
       <summary class="q-section-title" data-i18n="sec_sessions">🌐 Браузерные сессии</summary>
