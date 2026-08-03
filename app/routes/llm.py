@@ -171,7 +171,10 @@ async def api_llm_run_now():
     _has_llm = (CONFIG.llm_api_key or "").strip() or any(
         p.get("api_key") for p in (CONFIG.llm_profiles or []) if p.get("enabled", True)
     ) or (getattr(CONFIG, "llm_openclaw_enabled", False) and bool(_openclaw_command()))
-    if not _has_llm:
+    # HH-quick_replies работают без своего LLM (HH сам генерит подсказки) —
+    # если этот флаг вкл, разрешаем прогон даже без API-ключей / OpenClaw.
+    _use_qr = getattr(CONFIG, "llm_use_quick_replies", True)
+    if not _has_llm and not _use_qr:
         return {"started": False, "error": "Не настроен ни один LLM-провайдер: API-профили или OpenClaw"}
     now = _time.time()
     if now - _llm_run_now_last < _LLM_RUN_NOW_COOLDOWN:
