@@ -2468,19 +2468,22 @@ class BotManager:
                     reply_text = cached_draft
                     reply_source = "cached"
                 else:
-                    # HH сам генерит quick_replies под каждое HR-сообщение
-                    # (тот же LLM что показывается кандидату в UI). Первый вариант
-                    # обычно универсальное "Здравствуйте!" — выбираем самый
-                    # содержательный (длиннее и не приветствие).
                     reply_text = ""
                     hr_last = (employer_msg or "").strip()
-                    is_question = "?" in hr_last  # HR задал вопрос — короткое "Здравствуйте!" не подойдёт
-                    if getattr(CONFIG, "llm_use_quick_replies", True):
+                    # Есть ли у нас свой LLM? Если да — идёт первым (даёт
+                    # контекстный ответ). quick_replies HH — шаблонные подсказки,
+                    # часто не в тему (могут ответить "готов работать в гибком
+                    # графике" на "можем созвониться?"). Только fallback.
+                    _has_own_llm = bool(
+                        (CONFIG.llm_api_key or "").strip()
+                        or any(p.get("api_key") for p in (CONFIG.llm_profiles or []) if p.get("enabled", True))
+                        or (getattr(CONFIG, "llm_openclaw_enabled", False))
+                    )
+                    if not _has_own_llm and getattr(CONFIG, "llm_use_quick_replies", True):
+                        # Своего LLM нет — берём quick_replies с умным ranking.
                         qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
                         if qr:
-                            # Простое ranking: длиннее лучше, но пропускаем чистые
-                            # приветствия ("Здравствуйте!", "Добрый день") если HR
-                            # прислал вопрос — на вопрос нужен реальный ответ.
+                            is_question = "?" in hr_last
                             _greet = ("здравствуйте", "добрый день", "добрый вечер", "приветствую")
                             def _score(s):
                                 s_low = s.strip().lower()
@@ -2491,11 +2494,9 @@ class BotManager:
                             if len(best) >= _min_ok:
                                 reply_text = best
                                 reply_source = "quick_reply"
-                                log_debug(f"LLM [{state.short}] {neg_id}: quick_replies {len(qr)} вариантов, взял '{reply_text[:40]}…' (question={is_question})")
+                                log_debug(f"LLM [{state.short}] {neg_id}: quick_replies {len(qr)} вариантов (LLM нет), взял '{reply_text[:40]}…'")
                                 self._add_log(state.short, state.color,
-                                    f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply", "info", neg_id=neg_id)
-                            else:
-                                log_debug(f"LLM [{state.short}] {neg_id}: quick_replies есть но короткие ('{best[:30]}'), fallback на LLM")
+                                    f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply (LLM недоступен)", "info", neg_id=neg_id)
                     if not reply_text:
                         log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
                         self._add_log(state.short, state.color,
@@ -2510,6 +2511,21 @@ class BotManager:
                             ai_screener_hint=ai_hint,
                         )
                         reply_source = "llm"
+                    if not reply_text and _has_own_llm and getattr(CONFIG, "llm_use_quick_replies", True):
+                        # LLM молчит (rate-limit / down) — попробуем quick_replies как последний резерв.
+                        qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
+                        if qr:
+                            is_question = "?" in hr_last
+                            _greet = ("здравствуйте", "добрый день", "добрый вечер", "приветствую")
+                            def _score2(s):
+                                s_low = s.strip().lower()
+                                is_greet = len(s) < 25 and any(g in s_low for g in _greet)
+                                return (0 if (is_question and is_greet) else 1, len(s))
+                            best = max(qr, key=_score2)
+                            if len(best) >= (20 if is_question else 5):
+                                reply_text = best
+                                reply_source = "quick_reply_fallback"
+                                log_debug(f"LLM [{state.short}] {neg_id}: LLM молчит, взял quick_reply '{reply_text[:40]}…'")
                     if not reply_text:
                         llm_status = get_llm_last_status(f"{state.short}:{neg_id}", "reply")
                         if llm_status.get("provider") == "openclaw" and llm_status.get("status") == "timeout":
