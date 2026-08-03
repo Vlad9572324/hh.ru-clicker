@@ -779,39 +779,10 @@ function llmProfileAdd(profile) {
   list.appendChild(row);
 }
 
-// Автосохранение профилей после 1.5с бездействия — юзер вводит ключ и уходит,
-// без нажатия Save. Раньше форма оставалась в буфере, ключ не улетал на сервер.
-let _llmAutoSaveTimer = null;
-function llmProfileAutoSave() {
-  _llmSettingsEditing = true;
-  clearTimeout(_llmAutoSaveTimer);
-  const st = document.getElementById('llm-status');
-  if (st) { st.textContent = '⏳ автосохранение через 1.5с...'; st.style.color = 'var(--dim)'; }
-  _llmAutoSaveTimer = setTimeout(async () => {
-    try {
-      const profiles = llmProfilesRead();
-      const mode = document.getElementById('llm-profile-mode')?.value || 'fallback';
-      const r = await fetch('/api/llm_profiles', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({profiles, mode})
-      });
-      if (r.ok && st) {
-        const withKey = profiles.filter(p => p.api_key).length;
-        const ts = new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-        st.innerHTML = `✅ Автосохранено в ${ts} · профилей: <b>${profiles.length}</b> (с ключом: <b>${withKey}</b>)`;
-        st.style.color = 'var(--green)';
-      } else if (st) {
-        st.textContent = '❌ HTTP ' + r.status;
-        st.style.color = 'var(--red)';
-      }
-      document.querySelectorAll('#llm-profiles-list .lp-key').forEach(inp => _llmUpdateKeyFingerprint(inp));
-    } catch (e) {
-      if (st) { st.textContent = '❌ ' + e.message; st.style.color = 'var(--red)'; }
-    } finally {
-      _llmSettingsEditing = false;
-    }
-  }, 1500);
-}
+// Alias: llmProfileAutoSave = _llmAutoSave (используется в oninput каждого поля
+// row'а профиля, см. llmProfileAdd). Дублирующая переменная удалена — уже есть
+// _llmAutoSaveTimer / _llmAutoSave ниже в файле.
+function llmProfileAutoSave() { _llmAutoSave(); }
 
 function llmProfileReindex() {
   document.querySelectorAll('#llm-profiles-list .llm-profile-row').forEach((row, i) => { row.dataset.idx = i; });
