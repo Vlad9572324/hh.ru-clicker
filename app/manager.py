@@ -2469,17 +2469,33 @@ class BotManager:
                     reply_source = "cached"
                 else:
                     # HH сам генерит quick_replies под каждое HR-сообщение
-                    # (тот же LLM что показывается кандидату в UI). Пробуем первое —
-                    # бесплатно, официально-выглядящий текст, не палится AI-детектом.
+                    # (тот же LLM что показывается кандидату в UI). Первый вариант
+                    # обычно универсальное "Здравствуйте!" — выбираем самый
+                    # содержательный (длиннее и не приветствие).
                     reply_text = ""
+                    hr_last = (employer_msg or "").strip()
+                    is_question = "?" in hr_last  # HR задал вопрос — короткое "Здравствуйте!" не подойдёт
                     if getattr(CONFIG, "llm_use_quick_replies", True):
                         qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
                         if qr:
-                            reply_text = qr[0]
-                            reply_source = "quick_reply"
-                            log_debug(f"LLM [{state.short}] {neg_id}: quick_replies дал {len(qr)} вариантов, беру '{reply_text[:40]}…'")
-                            self._add_log(state.short, state.color,
-                                f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply вместо LLM", "info", neg_id=neg_id)
+                            # Простое ranking: длиннее лучше, но пропускаем чистые
+                            # приветствия ("Здравствуйте!", "Добрый день") если HR
+                            # прислал вопрос — на вопрос нужен реальный ответ.
+                            _greet = ("здравствуйте", "добрый день", "добрый вечер", "приветствую")
+                            def _score(s):
+                                s_low = s.strip().lower()
+                                is_greet = len(s) < 25 and any(g in s_low for g in _greet)
+                                return (0 if (is_question and is_greet) else 1, len(s))
+                            best = max(qr, key=_score)
+                            _min_ok = 20 if is_question else 5
+                            if len(best) >= _min_ok:
+                                reply_text = best
+                                reply_source = "quick_reply"
+                                log_debug(f"LLM [{state.short}] {neg_id}: quick_replies {len(qr)} вариантов, взял '{reply_text[:40]}…' (question={is_question})")
+                                self._add_log(state.short, state.color,
+                                    f"\U0001f4a1 {progress} [{employer_short}]: HH-quick_reply", "info", neg_id=neg_id)
+                            else:
+                                log_debug(f"LLM [{state.short}] {neg_id}: quick_replies есть но короткие ('{best[:30]}'), fallback на LLM")
                     if not reply_text:
                         log_debug(f"LLM [{state.short}] {neg_id}: история {len(conversation)} сообщений, резюме {len(resume_text)} симв., отправляю в LLM")
                         self._add_log(state.short, state.color,
