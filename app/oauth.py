@@ -67,11 +67,15 @@ def _get_refresh_lock(resume_hash: str) -> threading.Lock:
 
 def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
     """Удалить кэшированный токен (на 401/403 от API). После вызова следующий
-    `_obtain_oauth_token` сделает свежий refresh или authorize."""
+    `_obtain_oauth_token` сделает свежий refresh или authorize.
+
+    ⚠️ `_save_oauth_tokens()` ВНЕ `_oauth_lock` — иначе deadlock: save тоже
+    пытается взять `_oauth_lock` для snapshot (issue #19).
+    """
     if not resume_hash:
         return
+    removed = False
     with _oauth_lock:
-        removed = False
         if resume_hash in _oauth_tokens:
             _oauth_tokens.pop(resume_hash, None)
             removed = True
@@ -86,9 +90,9 @@ def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
                 if k.startswith(prefix):
                     _oauth_tokens.pop(k, None)
                     removed = True
-        if removed:
-            _save_oauth_tokens()
-            log_debug(f"OAuth: invalidated token for {resume_hash[:12]} (auth_error)")
+    if removed:
+        _save_oauth_tokens()
+        log_debug(f"OAuth: invalidated token for {resume_hash[:12]} (auth_error)")
 
 
 def _load_oauth_tokens():
