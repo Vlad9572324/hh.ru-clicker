@@ -66,23 +66,42 @@ async def api_llm_profiles(request: Request):
     profiles = body.get("profiles")
     mode = body.get("mode", "fallback")
     if isinstance(profiles, list):
-        # Match old profile by (name, base_url, model) — устойчиво к реордеру.
-        # Иначе ключ профиля #0 мог уехать профилю с тем же индексом, но другим провайдером.
+        # Ключ (type=password) не подставляется из snap в UI, значит autosave
+        # шлёт api_key='' если юзер сам не перепечатал ключ. Не потерять его:
+        # (1) сначала strict match по (name+base_url+model),
+        # (2) fallback по name — иначе смена модели/URL стирала ключ (issue: user).
+        # (3) последний fallback — по индексу, если имена все пустые.
         def _identity(p):
             return (
                 str(p.get("name", "")).strip(),
                 str(p.get("base_url", "")).strip(),
                 str(p.get("model", "")).strip(),
             )
-        old_by_identity = {_identity(p): p for p in (CONFIG.llm_profiles or [])}
-        for p in profiles:
-            if not p.get("api_key"):
-                ident = _identity(p)
-                if ident in old_by_identity and old_by_identity[ident].get("api_key"):
-                    p["api_key"] = old_by_identity[ident]["api_key"]
+        old_profiles = CONFIG.llm_profiles or []
+        old_by_identity = {_identity(p): p for p in old_profiles}
+        old_by_name = {str(p.get("name", "")).strip(): p for p in old_profiles if p.get("api_key")}
+        for i, p in enumerate(profiles):
+            if p.get("api_key"):
+                continue
+            # (1) strict
+            ident = _identity(p)
+            if ident in old_by_identity and old_by_identity[ident].get("api_key"):
+                p["api_key"] = old_by_identity[ident]["api_key"]
+                continue
+            # (2) by name
+            name = str(p.get("name", "")).strip()
+            if name and name in old_by_name:
+                p["api_key"] = old_by_name[name]["api_key"]
+                continue
+            # (3) by index (когда имена одинаковые/пустые)
+            if i < len(old_profiles) and old_profiles[i].get("api_key"):
+                p["api_key"] = old_profiles[i]["api_key"]
         CONFIG.llm_profiles = profiles
         if profiles:
             first = profiles[0]
+            # legacy-поле обновляем ТОЛЬКО если первый профиль сохранил свой api_key
+            # (после fallback выше). Иначе оставляем что было — иначе стёрлось бы
+            # старое рабочее значение legacy-ключа.
             if first.get("api_key"):
                 CONFIG.llm_api_key = first["api_key"]
             if first.get("base_url"):
