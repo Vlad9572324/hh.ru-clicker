@@ -79,6 +79,10 @@ class Config:
     # `GET /shards/vacancy/related_vacancies?vacancyId=<seed>` — обычно
     # match'ит лучше текстового поиска (внутренний ML ranker).
     related_vacancies_enabled: bool = True
+    # Прокси для исходящих запросов к hh.ru (обход soft-ban DDoS-Guard по IP).
+    # Формат: `socks5h://host:port` / `http://user:pass@host:port`. Пусто = напрямую.
+    # При старте `hh_http._PROXY` берётся сначала из env `HH_PROXY`, иначе из этого поля.
+    hh_proxy_url: str = ""
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
@@ -223,7 +227,7 @@ _CONFIG_KEYS = [
     "hh_daily_limit",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
     "llm_ws_push_enabled", "chat_use_oauth", "llm_use_quick_replies",
-    "hh_ai_letter_first_try", "related_vacancies_enabled",
+    "hh_ai_letter_first_try", "related_vacancies_enabled", "hh_proxy_url",
 ]
 
 

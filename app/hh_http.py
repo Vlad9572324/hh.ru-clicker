@@ -200,6 +200,23 @@ def proxy_url() -> str:
     return _PROXY
 
 
+def set_proxy(url: str) -> str:
+    """Заменить прокси runtime (без рестарта контейнера). Приниает пустую строку
+    для отключения. Возвращает актуальный URL после смены.
+    Пересоздаёт curl_cffi Session чтобы старые keep-alive соединения через
+    прежний прокси не переиспользовались."""
+    global _PROXY
+    url = (url or "").strip()
+    _PROXY = url
+    # HH-singleton пересоздаём чтобы sticky-connections не остались от старого прокси.
+    try:
+        HH._session_cffi = _CffiSession() if _HAS_CFFI else None
+        HH._session_req = _requests.Session()
+    except Exception:
+        pass
+    return _PROXY
+
+
 def probe_outbound_ip(timeout: float = 6.0) -> dict:
     """Дёрнуть api.ipify.org через текущий (или дефолтный) сетевой стек и
     вернуть исходящий IP. Полезно проверить активность прокси и что за IP

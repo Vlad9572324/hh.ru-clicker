@@ -326,6 +326,17 @@ class BotManager:
     def start(self):
         _load_cache()
         load_config()
+        # После load_config: если env HH_PROXY не задан, но в CONFIG.hh_proxy_url
+        # что-то сохранено (пользователь выставлял через UI) — применить.
+        # env всегда приоритет чтобы docker-compose override работал.
+        try:
+            import os as _os
+            if not _os.environ.get("HH_PROXY", "").strip() and getattr(CONFIG, "hh_proxy_url", ""):
+                from app.hh_http import set_proxy
+                set_proxy(CONFIG.hh_proxy_url)
+                log_debug(f"HH_PROXY из CONFIG.hh_proxy_url применён: {CONFIG.hh_proxy_url[:40]}")
+        except Exception as _e:
+            log_debug(f"applying stored proxy failed: {_e}")
         self._start_time = datetime.now()
         # Load recent responses from applied_vacancies into deque
         try:

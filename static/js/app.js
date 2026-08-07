@@ -2027,6 +2027,7 @@ async function proxyCheck(btn) {
   const ipEl = document.getElementById('proxy-ip');
   const impEl = document.getElementById('proxy-impersonate');
   const errEl = document.getElementById('proxy-error');
+  const inputEl = document.getElementById('proxy-url-input');
   if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
   try {
     const r = await fetch('/api/proxy/info', {method: 'GET'});
@@ -2034,6 +2035,8 @@ async function proxyCheck(btn) {
     if (urlEl) urlEl.textContent = d.proxy || '(нет — напрямую)';
     if (ipEl) ipEl.textContent = d.ip || '?';
     if (impEl) impEl.textContent = d.impersonate || 'нет';
+    // input предзаполняем текущим URL — юзер видит что там и может править
+    if (inputEl && !inputEl.value) inputEl.value = d.proxy || '';
     if (errEl) {
       if (d.error) { errEl.textContent = '⚠️ ' + d.error; errEl.style.display = ''; }
       else errEl.style.display = 'none';
@@ -2042,6 +2045,45 @@ async function proxyCheck(btn) {
     if (errEl) { errEl.textContent = '⚠️ ' + e.message; errEl.style.display = ''; }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '↻ Проверить'; }
+  }
+}
+
+async function proxySave(btn) {
+  const inputEl = document.getElementById('proxy-url-input');
+  const errEl = document.getElementById('proxy-error');
+  const statusEl = document.getElementById('proxy-status');
+  const urlEl = document.getElementById('proxy-url');
+  const ipEl = document.getElementById('proxy-ip');
+  if (!inputEl) return;
+  const url = (inputEl.value || '').trim();
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Пробую...'; }
+  if (statusEl) { statusEl.textContent = '⏳ probe api.ipify.org через новый прокси…'; statusEl.style.color = 'var(--dim)'; }
+  if (errEl) errEl.style.display = 'none';
+  try {
+    const r = await fetch('/api/proxy/set', {method: 'POST', headers: {'Content-Type':'application/json'},
+                                              body: JSON.stringify({url})});
+    const d = await r.json();
+    if (d.ok) {
+      if (urlEl) urlEl.textContent = d.proxy || '(нет — напрямую)';
+      if (ipEl) ipEl.textContent = d.ip || '?';
+      if (statusEl) {
+        const ts = new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        statusEl.innerHTML = `✅ Применено в ${ts} · IP: <b>${d.ip || '?'}</b>`;
+        statusEl.style.color = 'var(--green)';
+      }
+    } else {
+      if (errEl) {
+        errEl.textContent = `⚠️ ${d.error || 'error'} — откат к предыдущему прокси (${d.reverted_to || 'нет'})`;
+        errEl.style.display = '';
+      }
+      if (statusEl) { statusEl.textContent = ''; }
+      // синхронизируем input с реальным (реверт)
+      if (inputEl && d.reverted_to !== undefined) inputEl.value = d.reverted_to || '';
+    }
+  } catch (e) {
+    if (errEl) { errEl.textContent = '⚠️ ' + e.message; errEl.style.display = ''; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Применить'; }
   }
 }
 

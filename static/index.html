@@ -426,23 +426,30 @@
     <!-- ═══════ ГРУППА 1: Подключение ═══════ -->
     <div class="settings-group-header">🔌 Подключение</div>
 
-    <!-- Proxy info -->
+    <!-- Proxy: runtime editor + info -->
     <details class="q-section prio-high" id="proxy-section" open>
       <summary class="q-section-title">🌐 Прокси и исходящий IP</summary>
       <div class="q-section-body" style="font-size:12px">
         <div style="margin-bottom:8px;color:var(--dim)">
-          Прокси задаётся через env-переменную <code>HH_PROXY</code> в docker-compose.yml (перезапустить контейнер после смены). Здесь — read-only статус.
+          Прокси меняется runtime — сохраняется в config.json, применяется мгновенно (без рестарта). Перед сохранением делается probe через <code>api.ipify.org</code>: если новый прокси не работает — откат к старому. Env <code>HH_PROXY</code> в docker-compose имеет приоритет над этим полем.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <label style="font-size:11px;color:var(--dim);white-space:nowrap">URL прокси:</label>
+          <input type="text" id="proxy-url-input" class="apply-input" style="flex:1;min-width:280px;font-family:monospace;font-size:11px"
+                 placeholder="socks5h://host:1080 или http://user:pass@host:8080 (пусто = напрямую)">
+          <button class="btn-sm" onclick="proxySave(this)" style="background:var(--green);color:#000;border-color:var(--green)">💾 Применить</button>
+          <button class="btn-sm" onclick="proxyCheck(this)">↻ Проверить</button>
         </div>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px">
-          <span>Прокси:</span>
+          <span style="color:var(--dim)">Активный прокси:</span>
           <span id="proxy-url" style="font-family:monospace;color:var(--cyan)">—</span>
-          <span>Исходящий IP:</span>
+          <span style="color:var(--dim);margin-left:12px">Исходящий IP:</span>
           <span id="proxy-ip" style="font-family:monospace;color:var(--green)">—</span>
-          <span>TLS impersonate:</span>
+          <span style="color:var(--dim);margin-left:12px">TLS:</span>
           <span id="proxy-impersonate" style="font-family:monospace;color:var(--yellow)">—</span>
-          <button class="btn-sm" onclick="proxyCheck(this)" style="margin-left:auto">↻ Проверить</button>
         </div>
         <div id="proxy-error" style="margin-top:8px;color:var(--red);display:none"></div>
+        <div id="proxy-status" style="margin-top:6px;font-size:11px;color:var(--dim)"></div>
       </div>
     </details>
 

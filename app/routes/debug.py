@@ -8,7 +8,7 @@ import re
 
 import requests
 from app.config import hh_base
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.hh_chat import fetch_negotiation_thread
 from app.hh_resume import parse_hh_lux_ssr
@@ -113,6 +113,31 @@ async def api_proxy_info():
     data = await loop.run_in_executor(None, probe_outbound_ip)
     data["impersonate"] = impersonate_version() if is_impersonating() else ""
     return data
+
+
+@router.post("/api/proxy/set")
+async def api_proxy_set(request: Request):
+    """Runtime смена прокси. Body {url}. Пустая строка = отключить. Перед save
+    делаем probe (api.ipify.org) — если 200 применяем + persist в CONFIG,
+    иначе возвращаем error без сохранения (не портим рабочую конфигурацию)."""
+    from app.hh_http import set_proxy, proxy_url as _cur_proxy, probe_outbound_ip
+    from app.config import CONFIG, save_config
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "bad json"}
+    new_url = (body.get("url") or "").strip()
+    old_url = _cur_proxy()
+    loop = asyncio.get_event_loop()
+    set_proxy(new_url)
+    probe = await loop.run_in_executor(None, probe_outbound_ip)
+    if new_url and probe.get("error"):
+        # Прокси не работает — откатываем.
+        set_proxy(old_url)
+        return {"ok": False, "error": f"probe failed: {probe['error']}", "reverted_to": old_url}
+    CONFIG.hh_proxy_url = new_url
+    save_config()
+    return {"ok": True, "proxy": new_url, "ip": probe.get("ip", ""), "impersonate": probe.get("impersonate", "")}
 
 
 @router.get("/api/debug")
