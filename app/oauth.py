@@ -163,6 +163,66 @@ def get_oauth_status(resume_hash: str) -> dict:
     }
 
 
+def import_mobile_tokens(tokens: dict, resumes: list[dict], me: dict | None = None) -> int:
+    """Atomically merge an OTP token response into the existing OAuth store.
+
+    A plain resume-id key is intentionally used for compatibility with old accounts.
+    Existing entries are replaced only after the complete input has been validated.
+    """
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        raise ValueError("mobile token response has no access_token")
+    now = int(time.time())
+    expires_at = tokens.get("expires_at")
+    if expires_at is None:
+        expires_at = now + int(tokens.get("expires_in", 1209599))
+    clean = {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_in": int(tokens.get("expires_in", max(0, int(expires_at) - now))),
+        "expires_at": int(expires_at),
+        "obtained_at": int(tokens.get("obtained_at", now)),
+        "source": "mobile_otp",
+    }
+    keys = [str(r.get("id") or "").strip() for r in resumes if isinstance(r, dict)]
+    keys = list(dict.fromkeys(k for k in keys if k))
+    if not keys and isinstance(me, dict) and me.get("id") is not None:
+        keys = [f"mobile-user-{me['id']}"]
+    if not keys:
+        raise ValueError("cannot associate mobile tokens with a user or resume")
+    with _oauth_lock:
+        for key in keys:
+            _oauth_tokens[key] = dict(clean)
+    # Save outside _oauth_lock: _save_oauth_tokens takes the same lock for its snapshot.
+    _save_oauth_tokens()
+    return len(keys)
+
+
+def remove_mobile_tokens() -> int:
+    """Remove only tokens created by the mobile OTP flow."""
+    removed = 0
+    with _oauth_lock:
+        for key in list(_oauth_tokens):
+            if isinstance(_oauth_tokens.get(key), dict) and _oauth_tokens[key].get("source") == "mobile_otp":
+                _oauth_tokens.pop(key, None)
+                removed += 1
+    if removed:
+        # Save outside _oauth_lock (see import_mobile_tokens above).
+        _save_oauth_tokens()
+    return removed
+
+
+def _refresh_identity(cached: dict, fallback_ua: str) -> tuple[str, str, str]:
+    """Use editable Android identity only for tokens created by mobile OTP."""
+    if cached.get("source") == "mobile_otp":
+        try:
+            from app.mobile_auth import effective_config
+            cfg, _ = effective_config()
+            return cfg.oauth_client_id, cfg.oauth_client_secret, cfg.user_agent
+        except Exception:
+            pass
+    return _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, fallback_ua
+
+
 def _do_refresh(refresh: str, client_id: str, client_secret: str, ua: str, resume_hash: str = ""):
     """Refresh token. Returns token dict on success, None if invalid_client (fallback needed), {} on other failure."""
     try:
@@ -286,8 +346,9 @@ def _obtain_oauth_token(acc: dict) -> str:
             cached = _oauth_tokens.get(key, {})
         refresh = cached.get("refresh_token", "")
         if refresh:
-            token_data = _do_refresh(refresh, _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, ua, resume_hash)
-            if token_data is None and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
+            refresh_id, refresh_secret, refresh_ua = _refresh_identity(cached, ua)
+            token_data = _do_refresh(refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
+            if token_data is None and cached.get("source") != "mobile_otp" and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
                 token_data = _do_refresh(refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
             if token_data:
                 access_token = token_data["access_token"]
@@ -298,6 +359,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                     "refresh_token": new_refresh,
                     "expires_at": time.time() + expires_in,
                     "_expires_monotonic": time.monotonic() + expires_in,
+                    **({"source": "mobile_otp"} if cached.get("source") == "mobile_otp" else {}),
                 }
                 with _oauth_lock:
                     _oauth_tokens[key] = token_data_full
@@ -418,8 +480,9 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
             if latest.get("expires_at", 0) >= threshold:
                 continue  # обновили пока ждали лок
             latest_refresh = latest.get("refresh_token", "") or refresh
-            token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, ua, resume_hash)
-            if token_data is None and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
+            refresh_id, refresh_secret, refresh_ua = _refresh_identity(latest, ua)
+            token_data = _do_refresh(latest_refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
+            if token_data is None and latest.get("source") != "mobile_otp" and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
                 token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
             if not token_data:
                 stats["failed"] += 1
@@ -430,6 +493,7 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
                 "refresh_token": token_data["refresh_token"],
                 "expires_at": time.time() + token_data["expires_in"],
                 "_expires_monotonic": time.monotonic() + token_data["expires_in"],
+                **({"source": "mobile_otp"} if latest.get("source") == "mobile_otp" else {}),
             }
             with _oauth_lock:
                 _oauth_tokens[key] = new_full
@@ -826,12 +890,24 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             if "test" in err.lower():
                 return "test", {}
             return "error", {"raw": err}
-        elif r.status_code in (401, 403):
+        elif r.status_code == 401:
             # Очищаем кэшированный токен: иначе manager на каждом следующем apply
             # будет переиспользовать тот же rejected токен → бесконечная петля 401.
             log_debug(f"OAuth apply auth_error for {resume_hash[:12]} vid={vid}")
             invalidate_oauth_token(resume_hash, acc)
             return "auth_error", {}
+        elif r.status_code == 403:
+            # 403 from POST /negotiations is normally a business-rule denial
+            # (vacancy restrictions, questionnaire, visibility), not an expired
+            # OAuth token. Invalidating here emptied oauth_tokens.json after a
+            # perfectly successful mobile login. Only 401 proves bad auth.
+            try:
+                detail = r.json()
+                errors = detail.get("errors", []) if isinstance(detail, dict) else []
+                raw = errors[0].get("value", "forbidden") if errors and isinstance(errors[0], dict) else "forbidden"
+            except Exception:
+                raw = "forbidden"
+            return "error", {"raw": raw, "http_status": 403}
         elif r.status_code == 404:
             return "error", {"raw": "Вакансия не найдена"}
         elif r.status_code == 429:

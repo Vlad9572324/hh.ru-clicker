@@ -1299,13 +1299,14 @@ class BotManager:
             for vid in unique_vacancies:
                 meta = state.vacancy_meta.get(vid, {})
                 title = (meta.get("title") or "").lower()
-                if title:
-                    if title_include_keywords and not any(k in title for k in title_include_keywords):
-                        title_skipped += 1
-                        continue
-                    if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
-                        title_skipped += 1
-                        continue
+                if not title:
+                    continue
+                if title_include_keywords and not any(k in title for k in title_include_keywords):
+                    title_skipped += 1
+                    continue
+                if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
+                    title_skipped += 1
+                    continue
                 # HH сам метит вакансии меткой DISCARD когда нас уже отвергли —
                 # повторный отклик чаще всего бесполезен, экономим лимит/токены.
                 hh_labels = meta.get("hh_labels") or []

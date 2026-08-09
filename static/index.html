@@ -453,6 +453,52 @@
       </div>
     </details>
 
+    <!-- Phone / email OTP authentication -->
+    <details class="q-section prio-critical" id="mobile-auth-section" open>
+      <summary class="q-section-title">📱 Авторизация по телефону / email</summary>
+      <div class="q-section-body" style="font-size:12px">
+        <div style="color:var(--dim);margin-bottom:10px;line-height:1.6">
+          Штатный OTP-поток Android-приложения. Код отправляется только после нажатия кнопки.
+          OAuth-токены сохраняются для каждого найденного резюме.
+        </div>
+        <div style="display:flex;gap:0;margin-bottom:10px;border:1px solid var(--border);border-radius:5px;overflow:hidden;width:fit-content">
+          <button id="ma-type-email" class="btn-sm" onclick="mobileAuthType('email')">Email</button>
+          <button id="ma-type-phone" class="btn-sm" onclick="mobileAuthType('phone')">Телефон</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="ma-login" class="apply-input" type="email" style="min-width:280px" autocomplete="username" placeholder="name@example.com">
+          <button id="ma-request" class="apply-btn" onclick="mobileAuthRequestCode(this)">Отправить код</button>
+          <span id="ma-request-timer" style="color:var(--dim)"></span>
+        </div>
+        <div id="ma-code-row" style="display:none;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <input id="ma-code" class="apply-input" style="width:180px" inputmode="numeric" autocomplete="one-time-code" placeholder="Код из SMS / письма">
+          <button class="apply-btn" onclick="mobileAuthVerify(this)">Подтвердить</button>
+          <button class="btn-sm" onclick="mobileAuthRequestCode(this)">Отправить повторно</button>
+          <button class="btn-sm" onclick="mobileAuthLogout()">Выйти / сбросить</button>
+        </div>
+        <div id="ma-status" style="margin-top:8px;color:var(--dim);white-space:pre-wrap"></div>
+
+        <details class="session-block" style="margin-top:14px">
+          <summary class="session-summary">⚙️ Расширенные параметры мобильного клиента</summary>
+          <div class="session-body">
+            <div id="ma-config-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:9px"></div>
+            <div style="margin-top:10px;padding:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:5px">
+              <div style="color:var(--dim);margin-bottom:4px">Итоговый User-Agent:</div>
+              <code id="ma-user-agent" style="word-break:break-all;color:var(--cyan)">—</code>
+            </div>
+            <div style="margin-top:8px;color:var(--dim)">Приоритет: <code>web → environment → file → default</code>. Источник показан рядом с каждым полем.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+              <button class="apply-btn" onclick="mobileAuthSaveSettings(this)">💾 Сохранить настройки</button>
+              <button class="btn-sm" onclick="mobileAuthValidate(this)">✓ Проверить настройки</button>
+              <button class="btn-sm" onclick="mobileAuthNewUuid()">↻ Новый UUID</button>
+              <button class="btn-sm" onclick="mobileAuthResetSettings()">Восстановить значения по умолчанию</button>
+            </div>
+            <div id="ma-config-status" style="margin-top:8px;color:var(--dim)"></div>
+          </div>
+        </details>
+      </div>
+    </details>
+
     <!-- Browser sessions -->
     <details class="q-section prio-critical" open>
       <summary class="q-section-title" data-i18n="sec_sessions">🌐 Браузерные сессии</summary>
