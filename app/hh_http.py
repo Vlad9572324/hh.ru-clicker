@@ -17,6 +17,7 @@ import json
 import os
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ except Exception:
     _HAS_CFFI = False
 
 import requests as _requests
+
+from app.user_agent import mobile_user_agent
 
 # `CHROME_IMPERSONATE` подсказка для curl_cffi — какую версию Chrome мимикрить.
 # `chrome124` покрывает большинство свежих HH fingerprint-проверок; можно
@@ -147,6 +150,16 @@ class HHClient:
         # curl_cffi не поддерживает `files=` в POST → forced fallback на requests
         # (обычно touch_resume / multipart uploads — редкие, не критично для fingerprint).
         force_requests = kwargs.pop("_force_requests", False) or "files" in kwargs
+
+        # Единая страховка для всех вызовов через HH: даже новый endpoint,
+        # где caller забудет headers, должен представляться Android-приложением.
+        headers = dict(kwargs.get("headers") or {})
+        hostname = (urllib.parse.urlparse(url).hostname or "").lower()
+        is_hh_host = hostname == "hh.ru" or hostname.endswith(".hh.ru") or hostname == "hh.kz" or hostname.endswith(".hh.kz")
+        if is_hh_host and not any(str(key).lower() == "user-agent" for key in headers):
+            headers["User-Agent"] = mobile_user_agent()
+        if headers:
+            kwargs["headers"] = headers
 
         # Инжектим прокси если задан HH_PROXY и caller не переопределил свой.
         if _PROXY and "proxies" not in kwargs and "proxy" not in kwargs:

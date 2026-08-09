@@ -6,6 +6,7 @@ import os
 import requests
 from app.config import hh_base
 from app.hh_http import HH
+from app.user_agent import mobile_user_agent
 
 from app.logging_utils import log_debug, _is_login_page
 
@@ -56,7 +57,7 @@ def _ensure_chatik_cookies(acc: dict) -> None:
 
 
 def _do_fetch_chatik_cookies(acc: dict) -> None:
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = mobile_user_agent()
     try:
         r = HH.get(
             hh_base() + "/",
@@ -85,7 +86,7 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
     _ensure_chatik_cookies(acc)
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": mobile_user_agent(),
         "Accept": "application/json, */*",
         "Origin": _CHATIK_BASE,
         "Referer": f"{_CHATIK_BASE}/",
@@ -249,7 +250,7 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
     oldest first, skipping system/workflow messages.
     """
     _ensure_chatik_cookies(acc)
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = mobile_user_agent()
     xsrf = acc["cookies"].get("_xsrf", "")
     try:
         r = HH.get(
@@ -319,7 +320,7 @@ def fetch_quick_replies(acc: dict, chat_id: str, msg_id: str) -> list:
     """
     if not chat_id or not msg_id:
         return []
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = mobile_user_agent()
     try:
         r = HH.get(
             f"{_CHATIK_BASE}/chatik/api/quick_replies",
@@ -365,7 +366,7 @@ def send_participant_action(acc: dict, chat_id: str, action_type: str = "TYPING"
         return False
     _ensure_chatik_cookies(acc)
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = mobile_user_agent()
     try:
         r = HH.post(
             f"{_CHATIK_BASE}/chatik/api/participant_action",
@@ -404,7 +405,7 @@ def mark_chat_read(acc: dict, chat_id: str, message_id: str) -> bool:
         return False
     _ensure_chatik_cookies(acc)
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = mobile_user_agent()
     try:
         r = HH.post(
             f"{_CHATIK_BASE}/chatik/api/mark_read",
@@ -441,7 +442,7 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
     reverse-engineered chatik.hh.ru/chatik/api/send (старый working путь).
     """
     import uuid as _uuid
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = mobile_user_agent()
 
     # OAuth-first path. Degraded mode forces OAuth (cookies dead).
     try:
@@ -548,7 +549,6 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
 
 _WS_BASE = "https://websocket.hh.ru"
 _WS_APP_VERSION = "1.9.45"
-_WS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 _KNOWN_WS_EVENTS = {
     "connect", "disconnect",
@@ -566,7 +566,7 @@ def fetch_chatik_ws_url(acc: dict) -> str | None:
             params={"connectionMode": "direct", "appVersion": _WS_APP_VERSION},
             cookies=acc.get("cookies") or {},
             headers={
-                "User-Agent": _WS_UA,
+                "User-Agent": mobile_user_agent(),
                 "Accept": "application/json, text/plain, */*",
                 "Origin": _WS_BASE,
                 "Referer": f"{_WS_BASE}/proxy-webapp/index.html",
@@ -647,7 +647,7 @@ class ChatikWSClient:
                 on_error=lambda w, e: log_debug(f"chatik WS [{self.label}] err: {e}"),
                 on_close=lambda w, c, r: log_debug(f"chatik WS [{self.label}] closed code={c}"),
                 cookie=cookie_str,
-                header={"User-Agent": _WS_UA, "Origin": _WS_BASE},
+                header={"User-Agent": mobile_user_agent(), "Origin": _WS_BASE},
             )
             try:
                 self._ws.run_forever(ping_interval=180, ping_timeout=20, skip_utf8_validation=True)
@@ -707,7 +707,7 @@ def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
     try:
         HH.post(
             f"{_CHATIK_BASE}/chatik/api/mark_read",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            headers={"User-Agent": mobile_user_agent(),
                      "Accept": "application/json", "Content-Type": "application/json",
                      "Origin": _CHATIK_BASE, "Referer": f"{_CHATIK_BASE}/",
                      "X-XSRFToken": xsrf},

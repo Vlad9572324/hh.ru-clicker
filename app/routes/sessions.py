@@ -13,6 +13,7 @@ from app.storage import save_browser_sessions
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
 from app.hh_http import HH, is_impersonating
+from app.user_agent import mobile_user_agent, webview_user_agent
 
 from app.routes.accounts import _parse_cookies_str, _AUTH_COOKIE_KEYS
 
@@ -27,7 +28,7 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
     без warm-up прямой GET /applicant/resumes часто возвращает 403 (issue #8).
     """
     base_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ru,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
@@ -296,7 +297,7 @@ def _refresh_via_oauth(acc: dict) -> dict:
         return {"ok": False, "error": "OAuth токен не получен — куки нужны для первичной авторизации"}
     try:
         r = HH.get("https://api.hh.ru/resumes/mine", headers={
-            "User-Agent": "hh-clicker/refresh",
+            "User-Agent": mobile_user_agent(),
             "Authorization": f"Bearer {token}",
         }, params={"per_page": 30}, timeout=10, _diag_tag="sess_refresh_oauth")
     except Exception as e:

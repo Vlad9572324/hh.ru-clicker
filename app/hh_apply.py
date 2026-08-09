@@ -13,6 +13,7 @@ from glom import glom
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
 from app.hh_http import HH
+from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
@@ -303,7 +304,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
     Возвращает (result, info): result = sent | limit | test | error
     """
     headers_get = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": f"{hh_base()}/vacancy/{vid}",
     }
@@ -482,7 +483,7 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
     """Pre-check vacancy before applying: detect impossible responses and experience mismatches.
     Returns {"ok": bool, "reason": str}
     """
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = webview_user_agent()
     try:
         r = _with_retry(
             lambda: HH.get(
@@ -579,7 +580,7 @@ def check_limit(acc: dict) -> bool:
         r_search = _with_retry(
             lambda: HH.get(
                 hh_base() + "/search/vacancy?text=&area=1&page=0",
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                headers={"User-Agent": webview_user_agent(),
                          "Accept": "text/html"},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
             ),
@@ -593,7 +594,7 @@ def check_limit(acc: dict) -> bool:
         r = _with_retry(
             lambda: HH.get(
                 f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                headers={"User-Agent": webview_user_agent(),
                          "Accept": "application/json", "X-Xsrftoken": xsrf},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
             ),

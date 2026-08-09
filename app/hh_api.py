@@ -9,11 +9,12 @@ from bs4 import BeautifulSoup
 
 from app.logging_utils import log_debug
 from app.config import CONFIG
+from app.user_agent import webview_user_agent
 
 
 def get_headers(xsrf: str) -> dict:
     return {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": webview_user_agent(),
         "Origin": "https://hh.ru",
         "X-XsrfToken": xsrf
     }

@@ -10,13 +10,14 @@ from app.logging_utils import log_debug, _is_login_page
 from app.hh_resume import parse_hh_lux_ssr
 from app.config import hh_base
 from app.hh_http import HH
+from app.user_agent import mobile_user_agent, webview_user_agent
 
 
 def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
     """Получить статистику откликов с hh.ru (парсинг HTML)"""
     cookies = acc["cookies"]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": hh_base() + "/applicant/negotiations",
     }
@@ -227,7 +228,7 @@ def fetch_hh_possible_offers(acc: dict) -> list:
     cookies = acc["cookies"]
     xsrf = cookies.get("_xsrf", "")
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": webview_user_agent(),
         "X-XsrfToken": xsrf,
         "Accept": "application/json",
         "Referer": hh_base() + "/applicant/negotiations",
@@ -261,7 +262,7 @@ def auto_decline_discards(acc: dict) -> int:
     if not xsrf:
         return 0
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": hh_base() + "/applicant/negotiations",
         "X-Xsrftoken": xsrf,
@@ -346,7 +347,7 @@ def fetch_employer_rating(acc: dict, employer_id) -> dict | None:
             if now - cached_at < ttl:
                 return data
 
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     try:
         r = HH.get(
             f"{hh_base()}/employer_reviews/proxy_components/small_widget",
@@ -437,7 +438,7 @@ def fetch_employer_id_for_vacancy(acc: dict, vacancy_id) -> int | None:
             if now - cached_at < _VACANCY_EMPLOYER_TTL:
                 return eid
 
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     try:
         r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
@@ -509,7 +510,7 @@ def fetch_negotiations_metadata(acc: dict) -> dict:
         if hit and now - hit[0] < _NEG_META_TTL:
             return hit[1]
 
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     out = {"politeness": {}, "activity": {}, "topics_by_vid": {}}
     try:
         r = HH.get(
@@ -584,7 +585,7 @@ def fetch_vacancy_owner_hr_hhid(acc: dict, vacancy_id) -> int | None:
         hit = _VACANCY_HR_CACHE.get(vid)
         if hit and now - hit[0] < _VACANCY_EMPLOYER_TTL:
             return hit[1]
-    ua = "Mozilla/5.0 Chrome/120"
+    ua = webview_user_agent()
     try:
         r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
@@ -641,7 +642,7 @@ def fetch_similar_vacancies(vacancy_id, page: int = 0, per_page: int = 20) -> di
             f"https://api.hh.ru/vacancies/{vid}/similar_vacancies",
             params={"page": page, "per_page": per_page},
             headers={
-                "User-Agent": "hh-clicker/1.0 (admin@example.com)",
+                "User-Agent": mobile_user_agent(),
                 "Accept": "application/json",
             },
             timeout=12,

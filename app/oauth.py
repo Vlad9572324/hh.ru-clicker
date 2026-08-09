@@ -16,6 +16,7 @@ import requests
 from app.logging_utils import log_debug
 from app.config import CONFIG
 from app.hh_http import HH
+from app.user_agent import mobile_user_agent
 
 # Эти креды извлечены из публичного APK HH Android и широко известны.
 # Не секрет: но желательно вынести в env для возможности замены.
@@ -41,22 +42,7 @@ _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чт�
 _oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
 _oauth_refresh_locks_lock = threading.Lock()
 
-_DEFAULT_MOBILE_USER_AGENT = (
-    "ru.hh.android/26.29.11476, Device: Pixel 10, Android OS: 17 "
-    "(UUID: 8f42e879-43c7-4d86-a671-31ea36ed924b)"
-)
-
-
-def _mobile_user_agent() -> str:
-    """Return the APK-compatible User-Agent from the editable mobile settings."""
-    try:
-        from app.mobile_auth import effective_config
-
-        cfg, _ = effective_config()
-        return cfg.user_agent
-    except Exception as exc:
-        log_debug(f"OAuth: failed to load mobile User-Agent: {exc}")
-        return _DEFAULT_MOBILE_USER_AGENT
+_mobile_user_agent = mobile_user_agent  # backward-compatible internal alias
 
 
 def _account_key(acc: dict) -> str:

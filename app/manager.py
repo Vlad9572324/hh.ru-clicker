@@ -13,6 +13,7 @@ import time
 import threading
 import requests
 from app.hh_http import HH
+from app.user_agent import mobile_user_agent, webview_user_agent
 try:
     from zoneinfo import ZoneInfo
     _MSK = ZoneInfo("Europe/Moscow")
@@ -1434,7 +1435,7 @@ class BotManager:
                 r_offers = HH.get(
                     hh_base() + "/shards/applicant/negotiations/possible_job_offers",
                     headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "User-Agent": webview_user_agent(),
                         "Accept": "application/json",
                         "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                         "Referer": hh_base() + "/applicant/negotiations",
@@ -1962,7 +1963,7 @@ class BotManager:
         token = _obtain_oauth_token(acc)
         if not token:
             return {}, {}, {}
-        headers = {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {token}"}
+        headers = {"User-Agent": mobile_user_agent(), "Authorization": f"Bearer {token}"}
         url_pages = _url_pages_map()
         acc_url_pages = acc.get("url_pages", {})
         effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
