@@ -2680,20 +2680,26 @@ function buildSessList(snap) {
 }
 
 async function sessActivate(idx, btn) {
-  if (btn) btn.disabled = true;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Запуск…'; }
   try {
     const res = await fetch(`/api/session/${idx}/activate`, {method: 'POST'});
-    const data = await res.json();
-    if (data.ok) {
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+    const success = res.ok && (data.ok === true || data.status === 'ok');
+    if (success) {
       const listEl = document.getElementById('sess-list');
-      if (listEl) listEl.dataset.count = '';
+      // buildSessList использует fingerprint, а не count. Сбрасываем именно
+      // его, чтобы ближайший WS snapshot заменил кнопку на активный статус.
+      if (listEl) listEl.dataset.fingerprint = '';
     } else {
-      alert('Ошибка: ' + (data.error || ''));
-      if (btn) btn.disabled = false;
+      const reason = data.message || data.error || data.detail || text || `HTTP ${res.status}`;
+      alert('Ошибка: ' + reason);
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Запустить'; }
     }
   } catch(e) {
-    alert('Ошибка: ' + e);
-    if (btn) btn.disabled = false;
+    alert('Сетевая ошибка: ' + (e?.message || String(e)));
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Запустить'; }
   }
 }
 
