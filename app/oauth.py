@@ -41,6 +41,23 @@ _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чт�
 _oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
 _oauth_refresh_locks_lock = threading.Lock()
 
+_DEFAULT_MOBILE_USER_AGENT = (
+    "ru.hh.android/26.29.11476, Device: Pixel 10, Android OS: 17 "
+    "(UUID: 8f42e879-43c7-4d86-a671-31ea36ed924b)"
+)
+
+
+def _mobile_user_agent() -> str:
+    """Return the APK-compatible User-Agent from the editable mobile settings."""
+    try:
+        from app.mobile_auth import effective_config
+
+        cfg, _ = effective_config()
+        return cfg.user_agent
+    except Exception as exc:
+        log_debug(f"OAuth: failed to load mobile User-Agent: {exc}")
+        return _DEFAULT_MOBILE_USER_AGENT
+
 
 def _account_key(acc: dict) -> str:
     """Stable per-account hash based on hhtoken cookie or short name."""
@@ -212,15 +229,16 @@ def remove_mobile_tokens() -> int:
 
 
 def _refresh_identity(cached: dict, fallback_ua: str) -> tuple[str, str, str]:
-    """Use editable Android identity only for tokens created by mobile OTP."""
+    """Select OAuth credentials while always presenting the configured Android UA."""
+    mobile_ua = _mobile_user_agent()
     if cached.get("source") == "mobile_otp":
         try:
             from app.mobile_auth import effective_config
             cfg, _ = effective_config()
-            return cfg.oauth_client_id, cfg.oauth_client_secret, cfg.user_agent
+            return cfg.oauth_client_id, cfg.oauth_client_secret, mobile_ua
         except Exception:
             pass
-    return _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, fallback_ua
+    return _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, mobile_ua
 
 
 def _do_refresh(refresh: str, client_id: str, client_secret: str, ua: str, resume_hash: str = ""):
@@ -339,7 +357,7 @@ def _obtain_oauth_token(acc: dict) -> str:
             if _is_cached_valid(cached):
                 return cached["access_token"]
 
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ua = _mobile_user_agent()
 
         # Try refresh first
         with _oauth_lock:
@@ -454,7 +472,7 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
     Returns: {'checked': N, 'refreshed': K, 'failed': F}
     """
     threshold = time.time() + min_ttl_hours * 3600
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = _mobile_user_agent()
     with _oauth_lock:
         snapshot = list(_oauth_tokens.items())
     seen_refresh: set = set()
@@ -535,7 +553,7 @@ def _oauth_headers(acc: dict) -> dict:
     tok = _obtain_oauth_token(acc)
     if not tok:
         return {}
-    return {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {tok}"}
+    return {"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {tok}"}
 
 
 def fetch_saved_vacancy_searches(acc: dict) -> list:
@@ -863,7 +881,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             data["message"] = message
         r = HH.post(
             "https://api.hh.ru/negotiations",
-            headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}",
+            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}",
                      "Content-Type": "application/x-www-form-urlencoded"},
             data=data, timeout=15,
         )
@@ -937,7 +955,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
         resume_hash_quoted = urllib.parse.quote(resume_hash, safe="")
         r = HH.post(
             f"https://api.hh.ru/resumes/{resume_hash_quoted}/publish",
-            headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}"},
+            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}"},
             timeout=15,
         )
         if r.status_code in (200, 204):
@@ -1043,7 +1061,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         cid = int(str(chat_id).strip())
     except (ValueError, TypeError):
         return False
-    ua = "hh-clicker/1.0 (admin@example.com)"
+    ua = _mobile_user_agent()
     payload = {
         "text": text,
         "idempotency_key": str(_uuid.uuid4()),
@@ -1109,7 +1127,7 @@ def fetch_negotiations_statistic(acc: dict) -> dict:
     if not H:
         return {}
     # mobile-endpoint требует x-force-app-access + mobile UA (без них 406)
-    H = {**H, "x-force-app-access": "true", "User-Agent": "ru.hh.android/26.28.1"}
+    H = {**H, "x-force-app-access": "true", "User-Agent": _mobile_user_agent()}
     try:
         r = HH.get("https://api.hh.ru/negotiations_statistic/mine",
                    headers=H, timeout=8)
