@@ -40,10 +40,27 @@ def isolated_mobile(monkeypatch, tmp_path):
     monkeypatch.setattr(ma, "LEGACY_CONFIG_FILE", tmp_path / "legacy_mobile_auth_config.json")
     monkeypatch.setattr(ma, "STATE_FILE", tmp_path / "mobile_auth_state.json")
     ma._web_overrides.clear()
+    ma._invalidate_config_caches()
     for env in ma.ENV_KEYS.values():
         monkeypatch.delenv(env, raising=False)
     yield tmp_path
     ma._web_overrides.clear()
+    ma._invalidate_config_caches()
+
+
+def test_effective_config_reads_files_once(isolated_mobile, monkeypatch):
+    reads = []
+    original = ma._read_object
+
+    def counted_read(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(ma, "_read_object", counted_read)
+    ma.effective_config()
+    ma.effective_config()
+
+    assert reads == [ma.CONFIG_FILE, ma.LEGACY_CONFIG_FILE]
 
 
 def test_defaults_and_user_agent(isolated_mobile):

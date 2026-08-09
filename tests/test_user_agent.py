@@ -4,6 +4,7 @@ from app import mobile_auth, user_agent
 
 
 def test_mobile_user_agent_uses_config_and_strips_non_ascii(monkeypatch):
+    user_agent.invalidate_mobile_user_agent_cache()
     cfg = SimpleNamespace(user_agent="ru.hh.android/1.2.3, Device: Pixel Тест")
     monkeypatch.setattr(mobile_auth, "effective_config", lambda: (cfg, {}))
 

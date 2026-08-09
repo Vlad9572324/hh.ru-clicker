@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode, urljoin, urlparse
@@ -139,6 +140,7 @@ def _coerce(values: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+@lru_cache(maxsize=1)
 def effective_config() -> tuple[MobileConfig, dict[str, str]]:
     """Resolve web override > environment > config file > built-in default."""
     root_config = _read_object(CONFIG_FILE)
@@ -161,6 +163,16 @@ def effective_config() -> tuple[MobileConfig, dict[str, str]]:
             values[key], sources[key] = default, "default"
     values = _coerce(values)
     return MobileConfig(**values), sources
+
+
+def _invalidate_config_caches() -> None:
+    effective_config.cache_clear()
+    try:
+        from app.user_agent import invalidate_mobile_user_agent_cache
+
+        invalidate_mobile_user_agent_cache()
+    except ImportError:
+        pass
 
 
 def public_config() -> dict[str, Any]:
@@ -193,6 +205,7 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
             LEGACY_CONFIG_FILE.unlink(missing_ok=True)
         _web_overrides.clear()
         _web_overrides.update(merged)
+        _invalidate_config_caches()
     return public_config()
 
 
@@ -205,6 +218,7 @@ def reset_config() -> dict[str, Any]:
             root_config.pop("mobile_auth", None)
             _atomic_write(CONFIG_FILE, root_config)
             LEGACY_CONFIG_FILE.unlink(missing_ok=True)
+        _invalidate_config_caches()
     return public_config()
 
 

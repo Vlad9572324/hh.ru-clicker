@@ -1,5 +1,7 @@
 """Shared APK-compatible User-Agent for every HH request."""
 
+from functools import lru_cache
+
 from app.logging_utils import log_debug
 
 
@@ -18,6 +20,7 @@ def _ascii(value: str) -> str:
     return value.encode("ascii", errors="ignore").decode("ascii")
 
 
+@lru_cache(maxsize=1)
 def mobile_user_agent() -> str:
     """Build the current Android UA from editable mobile-auth settings."""
     try:
@@ -28,6 +31,10 @@ def mobile_user_agent() -> str:
     except Exception as exc:
         log_debug(f"User-Agent: failed to load mobile settings: {exc}")
         return DEFAULT_MOBILE_USER_AGENT
+
+
+def invalidate_mobile_user_agent_cache() -> None:
+    mobile_user_agent.cache_clear()
 
 
 def webview_user_agent(base_user_agent: str = DEFAULT_WEBVIEW_USER_AGENT) -> str:
