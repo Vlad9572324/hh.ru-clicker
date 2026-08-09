@@ -825,8 +825,7 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
 
 
 def fetch_resume_status(acc: dict) -> dict:
-    """Resume status: published/blocked, finished, progress.percentage, moderation_note.
-    Cached 5 min."""
+    """Load resume state from the endpoint used by the Android application."""
     rh = acc.get("resume_hash", "")
     if not rh:
         return {}
@@ -834,19 +833,40 @@ def fetch_resume_status(acc: dict) -> dict:
         H = _oauth_headers(acc)
         if not H:
             return None
-        r = HH.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=5)
+        resume_id = urllib.parse.quote(str(rh), safe="")
+        r = HH.get(
+            f"https://api.hh.ru/resumes/{resume_id}",
+            headers=H,
+            params={"with_professional_roles": "true", "with_creds": "true"},
+            timeout=5,
+        )
         if r.status_code != 200:
             return None
         d = r.json()
+        status = d.get("status") or {}
+        if isinstance(status, dict):
+            status_id = status.get("id", "")
+            status_name = status.get("name", "")
+        else:
+            status_id = str(status)
+            status_name = str(status)
+        progress = d.get("progress") or 0
+        if isinstance(progress, dict):
+            progress = progress.get("percentage", progress.get("percent", progress.get("value", 0)))
+        moderation_note = d.get("moderation_note") or []
+        if not isinstance(moderation_note, list):
+            moderation_note = [moderation_note]
         return {
-            "status_id": (d.get("status") or {}).get("id", ""),
-            "status_name": (d.get("status") or {}).get("name", ""),
+            "status_id": status_id,
+            "status_name": status_name,
             "blocked": bool(d.get("blocked")),
             "finished": bool(d.get("finished")),
-            "progress": int((d.get("progress") or {}).get("percentage", 0) or 0),
+            "can_publish_or_update": bool(d.get("can_publish_or_update")),
+            "next_publish_at": d.get("next_publish_at") or d.get("next_publish_date"),
+            "progress": int(progress or 0),
             "moderation_note": [
                 (n.get("name") if isinstance(n, dict) else str(n))
-                for n in (d.get("moderation_note") or [])
+                for n in moderation_note
             ],
         }
     return _extras_get("resume_status", rh, 300, _do) or {}
