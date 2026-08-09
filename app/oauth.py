@@ -558,7 +558,7 @@ def fetch_saved_vacancy_searches(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/saved_searches/vacancies",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -590,7 +590,7 @@ def fetch_favorited_vacancies(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/favorited",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -619,7 +619,7 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/blacklisted",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
