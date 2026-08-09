@@ -9,6 +9,7 @@ import time
 import threading
 import urllib.parse
 import requests
+from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 
@@ -266,6 +267,31 @@ def fetch_resume_text(acc: dict) -> str:
         return ""
 
 
+def _merge_oauth_publishability(result: dict, status: dict) -> None:
+    """Fill publish availability when the legacy SSR no longer exposes toUpdate."""
+    if not isinstance(status, dict) or not status:
+        return
+    if status.get("can_publish_or_update"):
+        result["free_touches"] = max(int(result.get("free_touches") or 0), 1)
+        result["next_touch_seconds"] = 0
+        return
+    if int(result.get("next_touch_seconds") or 0) > 0:
+        return
+    raw_next = status.get("next_publish_at")
+    if not raw_next:
+        return
+    try:
+        value = str(raw_next).strip().replace("Z", "+00:00")
+        next_dt = datetime.fromisoformat(value)
+        if next_dt.tzinfo is None:
+            next_dt = next_dt.replace(tzinfo=timezone.utc)
+        result["next_touch_seconds"] = max(
+            0, int((next_dt - datetime.now(timezone.utc)).total_seconds())
+        )
+    except (TypeError, ValueError):
+        pass
+
+
 def fetch_resume_stats(acc: dict) -> dict:
     """
     Статистика резюме за 7 дней + точный таймер поднятия.
@@ -319,6 +345,15 @@ def fetch_resume_stats(acc: dict) -> dict:
 
     except Exception as e:
         log_debug(f"fetch_resume_stats error: {e}")
+    # `applicantResumes[].toUpdate` is a legacy web field and is absent in some
+    # current SSR responses. Android exposes the same decision as
+    # can_publish_or_update + next_publish_at on GET /resumes/{id}.
+    try:
+        from app.oauth import fetch_resume_status
+
+        _merge_oauth_publishability(result, fetch_resume_status(acc))
+    except Exception as e:
+        log_debug(f"fetch_resume_stats OAuth publishability fallback error: {e}")
     return result
 
 

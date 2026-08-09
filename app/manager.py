@@ -1062,6 +1062,10 @@ class BotManager:
 
                     if success:
                         state.resume_touch_status = "✅ Поднято!"
+                        # Не показывать устаревшее «1 поднятие доступно» до
+                        # следующего ответа HH после успешной публикации.
+                        state.resume_free_touches = 0
+                        state.resume_next_touch_seconds = 4 * 3600
                         state.next_resume_touch = now + timedelta(hours=4)
                         self._add_log(
                             state.short, state.color,
@@ -2795,6 +2799,7 @@ class BotManager:
                 offers = fetch_hh_possible_offers(state.acc)
                 state.hh_possible_offers = offers
 
+                was_touch_available = state.resume_free_touches > 0
                 rs = fetch_resume_stats(state.acc)
                 state.resume_views_7d = rs["views"]
                 state.resume_views_new = rs["views_new"]
@@ -2803,6 +2808,17 @@ class BotManager:
                 state.resume_invitations_new = rs["invitations_new"]
                 state.resume_next_touch_seconds = rs["next_touch_seconds"]
                 state.resume_free_touches = rs["free_touches"]
+                # `resume_free_touches` и `next_resume_touch` раньше были двумя
+                # независимыми состояниями. Если HH только что сообщил, что
+                # публикация снова доступна, старый четырёхчасовой schedule не
+                # должен удерживать автоматический подъём.
+                if (
+                    state.resume_touch_enabled
+                    and not was_touch_available
+                    and state.resume_free_touches > 0
+                ):
+                    state.next_resume_touch = datetime.now()
+                    state.resume_touch_status = "🚀 Поднятие доступно"
                 state.resume_global_invitations = rs["global_invitations"]
                 state.resume_new_invitations_total = rs["new_invitations_total"]
 
