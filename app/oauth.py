@@ -16,6 +16,7 @@ import requests
 from app.logging_utils import log_debug
 from app.config import CONFIG
 from app.hh_http import HH
+from app.mobile_auth import MobileAuthError
 from app.user_agent import mobile_user_agent
 
 # Эти креды извлечены из публичного APK HH Android и широко известны.
@@ -111,7 +112,7 @@ def _load_oauth_tokens():
         log_debug(f"OAuth: failed to load tokens: {e}")
 
 
-def _save_oauth_tokens():
+def _save_oauth_tokens() -> bool:
     """Atomic persist (tmp + replace) of OAuth tokens to disk."""
     with _oauth_save_lock:
         try:
@@ -127,11 +128,14 @@ def _save_oauth_tokens():
                     os.chmod(_OAUTH_FILE, 0o600)  # secrets — owner-only
                 except Exception:
                     pass
+                return True
             except Exception as e:
                 log_debug(f"OAuth: failed to save tokens: {e}")
                 tmp.unlink(missing_ok=True)
+                return False
         except Exception as e:
             log_debug(f"OAuth: save outer error: {e}")
+            return False
 
 
 # Load on import
@@ -196,7 +200,11 @@ def import_mobile_tokens(tokens: dict, resumes: list[dict], me: dict | None = No
         for key in keys:
             _oauth_tokens[key] = dict(clean)
     # Save outside _oauth_lock: _save_oauth_tokens takes the same lock for its snapshot.
-    _save_oauth_tokens()
+    if not _save_oauth_tokens():
+        raise MobileAuthError(
+            "Не удалось сохранить OAuth-токены на диске",
+            status_code=500,
+        )
     return len(keys)
 
 

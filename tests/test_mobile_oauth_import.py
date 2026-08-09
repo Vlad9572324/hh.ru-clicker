@@ -1,6 +1,9 @@
 import json
 
+import pytest
+
 from app import oauth
+from app.mobile_auth import MobileAuthError
 
 
 def test_mobile_tokens_import_to_oauth_format(monkeypatch, tmp_path):
@@ -26,3 +29,18 @@ def test_mobile_logout_preserves_other_tokens(monkeypatch, tmp_path):
     })
     assert oauth.remove_mobile_tokens() == 1
     assert set(oauth._oauth_tokens) == {"legacy"}
+
+
+def test_mobile_token_import_fails_when_file_cannot_be_written(monkeypatch, tmp_path):
+    monkeypatch.setattr(oauth, "_OAUTH_FILE", tmp_path / "oauth_tokens.json")
+    monkeypatch.setattr(oauth, "_oauth_tokens", {})
+
+    def deny_write(*args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr("builtins.open", deny_write)
+    with pytest.raises(MobileAuthError, match="сохранить OAuth-токены"):
+        oauth.import_mobile_tokens(
+            {"access_token": "access", "refresh_token": "refresh"},
+            [{"id": "resume-a"}],
+        )
