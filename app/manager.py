@@ -1299,6 +1299,7 @@ class BotManager:
             for vid in unique_vacancies:
                 meta = state.vacancy_meta.get(vid, {})
                 title = (meta.get("title") or "").lower()
+                log_debug(f"Processing vacancy {vid}: {title}")
                 if not title:
                     continue
                 if title_include_keywords and not any(k in title for k in title_include_keywords):
