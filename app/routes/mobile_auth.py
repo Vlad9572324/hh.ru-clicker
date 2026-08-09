@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -94,55 +95,63 @@ async def get_status():
 @router.post("/request-code")
 async def request_code(body: RequestCodeBody):
     try:
-        login = body.login.strip()
-        if not login:
-            raise MobileAuthError("Введите телефон или email")
-        result = HHMobileClient().request_code(login, body.login_type, body.notification_type)
-        return {"ok": True, **auth_status(), "can_request_code_again_in": result.get("can_request_code_again_in", 0)}
+        return await run_in_threadpool(_request_code, body)
     except MobileAuthError as exc:
         return _error(exc)
+
+
+def _request_code(body: RequestCodeBody):
+    login = body.login.strip()
+    if not login:
+        raise MobileAuthError("Введите телефон или email")
+    result = HHMobileClient().request_code(login, body.login_type, body.notification_type)
+    return {"ok": True, **auth_status(), "can_request_code_again_in": result.get("can_request_code_again_in", 0)}
+
+
+def _verify_code(body: VerifyBody):
+    client = HHMobileClient()
+    tokens, me, resumes = client.login(body.code.strip())
+    # Успешный вход должен материализовать настройки даже при значениях по умолчанию.
+    save_config({})
+    try:
+        imported = import_mobile_tokens(tokens, resumes, me)
+    except (TypeError, ValueError, OSError) as exc:
+        raise MobileAuthError("Токены получены, но не удалось безопасно обновить oauth_tokens.json") from exc
+    vacancy_error = ""
+    vacancies_count = 0
+    try:
+        vacancies = client.collect_vacancies(tokens["access_token"], resumes)
+        vacancies_count = sum(len(v.get("items", [])) for v in vacancies["by_resume"].values())
+    except MobileAuthError as exc:
+        vacancy_error = str(exc)
+    browser_error = ""
+    browser_sessions = 0
+    try:
+        cookies = client.create_browser_cookies(tokens["access_token"], me)
+        browser_sessions = upsert_browser_sessions(cookies, me, resumes)
+    except MobileAuthError as exc:
+        browser_error = str(exc)
+    clear_auth_state()
+    return {
+        "ok": True, "stage": "authenticated", "user": {
+            "id": me.get("id"), "first_name": me.get("first_name"), "last_name": me.get("last_name"),
+        },
+        "resumes": len(resumes), "oauth_tokens_imported": imported,
+        "vacancies_count": vacancies_count, "vacancies_error": vacancy_error,
+        "browser_session_created": browser_sessions > 0,
+        "browser_sessions_updated": browser_sessions,
+        "browser_session_note": (
+            f"Обновлено браузерных сессий: {browser_sessions}."
+            if browser_sessions else f"OAuth работает, но браузерная сессия не создана: {browser_error}"
+        ),
+    }
 
 
 @router.post("/verify")
 async def verify_code(body: VerifyBody):
     try:
-        client = HHMobileClient()
-        tokens, me, resumes = client.login(body.code.strip())
-        # A successful login materializes the effective mobile settings in the
-        # main config.json even when the user kept all default field values.
-        save_config({})
-        try:
-            imported = import_mobile_tokens(tokens, resumes, me)
-        except (TypeError, ValueError, OSError) as exc:
-            raise MobileAuthError("Токены получены, но не удалось безопасно обновить oauth_tokens.json") from exc
-        vacancy_error = ""
-        vacancies_count = 0
-        try:
-            vacancies = client.collect_vacancies(tokens["access_token"], resumes)
-            vacancies_count = sum(len(v.get("items", [])) for v in vacancies["by_resume"].values())
-        except MobileAuthError as exc:
-            vacancy_error = str(exc)
-        browser_error = ""
-        browser_sessions = 0
-        try:
-            cookies = client.create_browser_cookies(tokens["access_token"], me)
-            browser_sessions = upsert_browser_sessions(cookies, me, resumes)
-        except MobileAuthError as exc:
-            browser_error = str(exc)
-        clear_auth_state()
-        return {
-            "ok": True, "stage": "authenticated", "user": {
-                "id": me.get("id"), "first_name": me.get("first_name"), "last_name": me.get("last_name"),
-            },
-            "resumes": len(resumes), "oauth_tokens_imported": imported,
-            "vacancies_count": vacancies_count, "vacancies_error": vacancy_error,
-            "browser_session_created": browser_sessions > 0,
-            "browser_sessions_updated": browser_sessions,
-            "browser_session_note": (
-                f"Обновлено браузерных сессий: {browser_sessions}."
-                if browser_sessions else f"OAuth работает, но браузерная сессия не создана: {browser_error}"
-            ),
-        }
+        # Весь сценарий использует синхронный HTTP и может занимать минуты.
+        return await run_in_threadpool(_verify_code, body)
     except MobileAuthError as exc:
         return _error(exc)
 
