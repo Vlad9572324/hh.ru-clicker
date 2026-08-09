@@ -824,11 +824,14 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
     return info
 
 
-def fetch_resume_status(acc: dict) -> dict:
+def fetch_resume_status(acc: dict, force: bool = False) -> dict:
     """Load resume state from the endpoint used by the Android application."""
     rh = acc.get("resume_hash", "")
     if not rh:
         return {}
+    if force:
+        with _extras_lock:
+            _extras_cache.pop(("resume_status", rh), None)
     def _do():
         H = _oauth_headers(acc)
         if not H:

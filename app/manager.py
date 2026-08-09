@@ -23,6 +23,21 @@ except Exception:
 from app.logging_utils import log_debug, log_exception, _is_login_page
 
 
+def _server_next_publish_datetime(status: dict) -> datetime | None:
+    """Convert HH next_publish_at to the local naive datetime used by AccountState."""
+    raw = (status or {}).get("next_publish_at")
+    if not raw:
+        return None
+    try:
+        value = str(raw).strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
 def _today_msk() -> str:
     """Дата по Москве. HH работает в MSK; используем её как «день» бота
     чтобы midnight rollover не зависел от TZ контейнера (Docker = UTC по дефолту).
@@ -1057,29 +1072,55 @@ class BotManager:
                     should_touch = True
 
                 if should_touch:
-                    self._add_log(state.short, state.color, "\U0001f4e4 Поднимаю резюме...", "info")
-                    success, message = touch_resume(acc)
-
-                    if success:
-                        state.resume_touch_status = "✅ Поднято!"
-                        # Не показывать устаревшее «1 поднятие доступно» до
-                        # следующего ответа HH после успешной публикации.
+                    # Всегда сверяемся с сервером непосредственно перед publish:
+                    # UI/фоновая статистика используют 5-минутный cache и после
+                    # предыдущего touch могут ещё показывать устаревшее `true`.
+                    fresh_status = fetch_resume_status(acc, force=True)
+                    server_next = _server_next_publish_datetime(fresh_status)
+                    if fresh_status and not fresh_status.get("can_publish_or_update"):
                         state.resume_free_touches = 0
-                        state.resume_next_touch_seconds = 4 * 3600
-                        state.next_resume_touch = now + timedelta(hours=4)
-                        self._add_log(
-                            state.short, state.color,
-                            f"✅ Резюме поднято! Следующее в {state.next_resume_touch.strftime('%H:%M')}",
-                            "success",
-                        )
+                        if server_next and server_next > now:
+                            state.next_resume_touch = server_next
+                            state.resume_touch_status = f"⏳ Доступно в {server_next.strftime('%H:%M')}"
+                        else:
+                            # Сервер запретил publish, но не отдал время. Не вызываем
+                            # publish в этом проходе; свежий статус проверится в
+                            # следующем обычном цикле без ложного запроса на поднятие.
+                            state.next_resume_touch = now + timedelta(minutes=5)
+                            state.resume_touch_status = "⏳ HH пока не разрешает поднятие"
+                    elif fresh_status.get("can_publish_or_update"):
+                        self._add_log(state.short, state.color, "\U0001f4e4 Поднимаю резюме...", "info")
+                        success, message = touch_resume(acc)
+                        # Результат publish немедленно делает прежний cache статуса
+                        # недействительным. Следующее время берём только у HH.
+                        after_status = fetch_resume_status(acc, force=True)
+                        server_next = _server_next_publish_datetime(after_status)
+                        state.resume_free_touches = int(bool(after_status.get("can_publish_or_update")))
+                        if server_next and server_next > now:
+                            state.next_resume_touch = server_next
+                        else:
+                            # Защита на случай eventual consistency API: повторно
+                            # читаем статус позже, но publish без разрешения не шлём.
+                            state.next_resume_touch = now + timedelta(minutes=5)
+                        if success:
+                            state.resume_touch_status = "✅ Поднято!"
+                            self._add_log(
+                                state.short, state.color,
+                                f"✅ Резюме поднято! Следующая проверка в {state.next_resume_touch.strftime('%H:%M')}",
+                                "success",
+                            )
+                        else:
+                            state.resume_touch_status = f"⏳ {message}"
+                            self._add_log(
+                                state.short, state.color,
+                                f"\U0001f4e4 {message}. Следующая проверка статуса в {state.next_resume_touch.strftime('%H:%M')}",
+                                "warning",
+                            )
                     else:
-                        state.resume_touch_status = f"⏳ {message}"
-                        state.next_resume_touch = now + timedelta(hours=4)
-                        self._add_log(
-                            state.short, state.color,
-                            f"\U0001f4e4 {message}. Повтор в {state.next_resume_touch.strftime('%H:%M')}",
-                            "warning",
-                        )
+                        # Без подтверждённого разрешения от HH ручку publish не
+                        # вызываем. Сетевая ошибка статуса не должна вести к 429.
+                        state.next_resume_touch = now + timedelta(minutes=5)
+                        state.resume_touch_status = "⏳ Не удалось проверить доступность"
 
             # === ПРОВЕРКА ЛИМИТА ===
             if state.limit_exceeded:
