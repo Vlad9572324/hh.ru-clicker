@@ -10,7 +10,7 @@ def test_mobile_user_agent_uses_config_and_strips_non_ascii(monkeypatch):
     assert user_agent.mobile_user_agent() == "ru.hh.android/1.2.3, Device: Pixel "
 
 
-def test_webview_user_agent_appends_mobile_identity(monkeypatch):
-    monkeypatch.setattr(user_agent, "mobile_user_agent", lambda: "ru.hh.android/mobile")
-
-    assert user_agent.webview_user_agent("Browser/1") == "Browser/1 ru.hh.android/mobile"
+def test_webview_user_agent_keeps_desktop_identity():
+    assert user_agent.webview_user_agent("Browser/1 Тест") == "Browser/1"
+    assert "Windows NT" in user_agent.webview_user_agent()
+    assert "ru.hh.android" not in user_agent.webview_user_agent()

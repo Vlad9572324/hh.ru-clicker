@@ -31,5 +31,5 @@ def mobile_user_agent() -> str:
 
 
 def webview_user_agent(base_user_agent: str = DEFAULT_WEBVIEW_USER_AGENT) -> str:
-    """Match UserAgentGenerator.a(): existing WebView UA + Android app UA."""
-    return f"{_ascii(base_user_agent).strip()} {mobile_user_agent()}".strip()
+    """Return a desktop browser identity for HH web products."""
+    return _ascii(base_user_agent).strip()
