@@ -1,0 +1,148 @@
+/*
+ * feat5_recommendations.css — вкладка «🎯 Рекомендации HH» (feat5).
+ * Все классы с префиксом feat5-; цвета — из переменных style.css (:root).
+ */
+
+.feat5-box {
+  max-width: 1000px;
+}
+
+.feat5-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.feat5-desc {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+
+/* ── Controls row ── */
+.feat5-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.feat5-select {
+  background: var(--bg-card2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  min-width: 220px;
+  cursor: pointer;
+}
+
+.feat5-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.feat5-btn:hover:not(:disabled) {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.feat5-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.feat5-btn-primary {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.feat5-btn-primary:hover:not(:disabled) {
+  border-color: var(--green);
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.feat5-progress {
+  font-size: 12px;
+  color: var(--cyan);
+  font-weight: 700;
+}
+
+/* ── Status line ── */
+.feat5-status {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 10px;
+  min-height: 16px;
+}
+
+.feat5-status-ok   { color: var(--green); }
+.feat5-status-err  { color: var(--red); }
+.feat5-status-warn { color: var(--yellow); }
+.feat5-status-info { color: var(--dim); }
+
+/* ── Table ── */
+.feat5-table-wrap {
+  overflow-x: auto;
+}
+
+.feat5-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.feat5-table th {
+  text-align: left;
+  color: var(--dim);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.feat5-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.feat5-table tr:hover td {
+  background: var(--bg-card);
+}
+
+.feat5-table a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.feat5-table a:hover {
+  text-decoration: underline;
+}
+
+.feat5-empty td {
+  color: var(--dim);
+  text-align: center;
+  padding: 16px;
+}
+
+/* ── auto-apply status cell ── */
+.feat5-apply-status {
+  white-space: nowrap;
+}
+
+.feat5-st-ok      { color: var(--green); }
+.feat5-st-warn    { color: var(--yellow); }
+.feat5-st-err     { color: var(--red); }
+.feat5-st-pending { color: var(--dim); }

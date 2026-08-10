@@ -1,0 +1,31 @@
+/* feat4_counters.css — extended HH counters в header-dashboard (feat4).
+   Элемент #feat4-counters инжектится в #header после #hdr-resume-stats;
+   header — flex с gap:12px, поэтому мы просто flex-item в том же стиле,
+   что и соседний блок резюме-статистики. */
+
+.feat4-counters {
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+/* Разбивка по аккаунтам живёт в title-атрибуте — нативный tooltip сам
+   показывает переводы строк. */
+.feat4-counters-group {
+  cursor: help;
+}
+
+.feat4-counters-group:hover .feat4-counters-val {
+  text-decoration: underline;
+}
+
+.feat4-counters-val {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.feat4-counters-sep {
+  opacity: 0.5;
+}

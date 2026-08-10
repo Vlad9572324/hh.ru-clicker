@@ -1,0 +1,56 @@
+/*
+ * Feature 8: WebSocket toggle — точка-индикатор коннекта и глобальный чекбокс.
+ * Все классы с префиксом feat8-. Подключается после static/css/style.css;
+ * использует CSS-переменные темы с fallback'ами.
+ */
+
+/* Точка-индикатор рядом с бейджем статуса (#ws-badge-<idx>) */
+.feat8-dot {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  margin-left: 2px;
+  vertical-align: middle;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* connected */
+.feat8-dot-connected {
+  color: var(--green, #2ecc71);
+}
+
+/* connecting / reconnecting */
+.feat8-dot-pending {
+  color: var(--yellow, #f1c40f);
+}
+
+/* error / no_token */
+.feat8-dot-error {
+  color: var(--red, #e74c3c);
+}
+
+/* disabled / disabled_global / неизвестно */
+.feat8-dot-off {
+  color: var(--dim, #8a8f98);
+}
+
+/* Глобальный чекбокс use_websocket_realtime в #ws-realtime-section */
+.feat8-global-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text, inherit);
+}
+
+.feat8-global-label input[type="checkbox"] {
+  accent-color: var(--green, #2ecc71);
+  cursor: pointer;
+}
+
+.feat8-global-hint {
+  font-size: 11px;
+  color: var(--dim, #8a8f98);
+}

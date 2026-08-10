@@ -1,0 +1,37 @@
+/*
+ * feat1_hr_badge.css — badge активности HR в таблице 📂 База (feat1).
+ * Используются только CSS-переменные темы из style.css.
+ */
+
+.feat1-hr-slot {
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.feat1-hr-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--dim);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.feat1-hr-badge--live {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.feat1-hr-badge--pipeline {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.feat1-hr-badge--unknown {
+  color: var(--dim);
+  border-color: var(--border);
+}

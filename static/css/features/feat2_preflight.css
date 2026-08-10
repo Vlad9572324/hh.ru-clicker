@@ -1,0 +1,21 @@
+/* feat2_preflight.css — pre-flight badge «Резюме готово / не готово» (feat2).
+ *
+ * Бейдж рисуется существующим applyShowResult() в #apply-result;
+ * feat2_preflight.js дополнительно вешает класс feat2-preflight-badge.
+ * Оригинальный flow app.js сам стирает класс (applyShowResult перезаписывает
+ * className), поэтому стили действуют только на badge pre-flight проверки.
+ */
+
+.apply-result.feat2-preflight-badge {
+  border-left-width: 4px;
+  font-weight: 600;
+}
+
+/* Подсказка со списком недостающих полей внутри warn-бейджа */
+.apply-result.feat2-preflight-badge.warn {
+  color: var(--yellow);
+}
+
+.apply-result.feat2-preflight-badge.ok {
+  color: var(--green);
+}
