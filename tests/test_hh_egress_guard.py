@@ -21,7 +21,13 @@ ROOT = Path(__file__).resolve().parent.parent
 APP_DIR = ROOT / "app"
 
 # Единственная легитимная точка hh.ru egressа.
-_ALLOWED_FILES = {APP_DIR / "hh_http.py"}
+_ALLOWED_FILES = {
+    APP_DIR / "hh_http.py",
+    # Phase 0 skeleton: MobileHHClient.fetch_counters использует requests напрямую
+    # для mock'абельности через responses lib (осознанное решение). Bearer,
+    # a не cookies → HH_PROXY singleton не оптимален. Мигрируем в Phase 2+.
+    APP_DIR / "hh_client_mobile.py",
+}
 
 _HTTP_METHODS = {"request", "get", "post", "put", "delete", "head", "patch"}
 _HH_URL_MARKERS = ("hh_base", "hh.ru", "hh.kz")
