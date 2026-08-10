@@ -82,7 +82,10 @@ def test_http_mock_records_post(ui):
     )
     assert res2["status"] == 200
     assert res2["body"] == {"ok": True}
-    assert {"method": "POST", "path": "/api/pause", "json": None} in ui.calls
+    # записи ui.calls содержат доп. ключ 'url' — сравниваем фильтром по method+path
+    pause_calls = [c for c in ui.calls if c["method"] == "POST" and c["path"] == "/api/pause"]
+    assert len(pause_calls) == 1
+    assert pause_calls[0]["json"] is None
 
     # GET без мока -> 404 {"error": "not mocked"}
     res3 = ui.page.evaluate(
