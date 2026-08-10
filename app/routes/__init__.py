@@ -184,6 +184,8 @@ from app.routes.hh_recommendations import router as hh_recommendations_router  #
 from app.routes.autologin import router as autologin_router                # noqa: E402
 from app.routes.account_mode import router as account_mode_router          # noqa: E402
 from app.routes.hedi import router as hedi_router          # noqa: E402
+from app.routes.ui_skills import router as ui_skills_router    # noqa: E402
+from app.routes.ui_reviews import router as ui_reviews_router  # noqa: E402
 
 app.include_router(core_router)
 app.include_router(accounts_router)
@@ -203,3 +205,5 @@ app.include_router(hh_recommendations_router)
 app.include_router(autologin_router)
 app.include_router(account_mode_router)
 app.include_router(hedi_router)
+app.include_router(ui_skills_router)
+app.include_router(ui_reviews_router)

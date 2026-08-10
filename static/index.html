@@ -40,6 +40,7 @@
   <button id="lang-btn" onclick="toggleLang()" style="padding:4px 10px;border:1px solid var(--border);background:var(--bg-card2);color:var(--dim);cursor:pointer;border-radius:4px;font-family:inherit;font-size:11px" title="Switch language">RU</button>
   <button id="pause-btn" onclick="sendCmd({type:'pause_toggle'})">⏸ Пауза</button>
   <span id="apply-mode-badge" style="padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer" onclick="sendCmd({type:'set_config',key:'use_oauth_apply',value:!State.lastSnapshot?.config?.use_oauth_apply})" title="Клик — переключить метод откликов"></span>
+  <span id="reviews-to-rate-badge" style="display:none;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;background:rgba(255,180,0,0.12);border:1px solid var(--yellow);color:var(--yellow)" title="Работодатели, которых можно оценить (mobile /employer_reviews/employers_to_rate)"></span>
 </div>
 
 <!-- Tabs -->
@@ -458,6 +459,24 @@
 <!-- Settings Tab -->
 <div id="panel-settings" class="panel">
   <div id="settings-panel">
+
+    <!-- ═══════ ГРУППА 0: Карьера (UI full coverage) ═══════ -->
+    <div class="settings-group-header">🧭 Карьера</div>
+
+    <details class="q-section" id="job-status-section" open>
+      <summary class="q-section-title">🟢 Статус поиска работы</summary>
+      <div class="q-section-body" id="job-status-root"></div>
+    </details>
+
+    <details class="q-section" id="skills-section">
+      <summary class="q-section-title">🎓 Навыки и верификации</summary>
+      <div class="q-section-body" id="skills-verifications-root"></div>
+    </details>
+
+    <details class="q-section" id="analyze-section">
+      <summary class="q-section-title">🤖 Анализ резюме</summary>
+      <div class="q-section-body" id="analyze-resume-root"></div>
+    </details>
 
     <!-- ═══════ ГРУППА 1: Подключение ═══════ -->
     <div class="settings-group-header">🔌 Подключение</div>
@@ -1065,6 +1084,10 @@
 
 <script src="/static/js/app.js?v=5"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
+<script src="/static/js/features/job_status.js?v=1"></script>
+<script src="/static/js/features/skills.js?v=1"></script>
+<script src="/static/js/features/analyze_resume.js?v=1"></script>
+<script src="/static/js/features/reviews_badge.js?v=1"></script>
 <script>
 // ── WebSocket (realtime, Phase 1): управление per-account WS-слушателем ──
 // Рендерит блок #ws-realtime-section (Настройки → Подключение). Использует

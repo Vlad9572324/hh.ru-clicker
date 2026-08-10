@@ -3490,7 +3490,7 @@ function updateCard(card, acc) {
 
   // Stats
   const dailyInfo = acc.daily_limit > 0 ? ` (${acc.daily_sent || 0}/${acc.daily_limit} сегодня)` : (acc.daily_sent ? ` (${acc.daily_sent} сегодня)` : '');
-  setText('acc-sent-' + acc.idx, acc.sent);
+  setText('acc-sent-' + acc.idx, acc.sent ?? 0);
   setText('acc-total-' + acc.idx, (acc.total_applied ?? '') + dailyInfo);
   // Real HH count today (из OAuth-tracker, обновляется раз в 30 мин)
   const hhUsed = acc.hh_today_applies || 0;

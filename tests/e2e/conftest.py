@@ -649,71 +649,116 @@ def _screenshot_on_failure(request, page):
 
 
 # ============================================================
-# ВРЕМЕННЫЙ SKIP ВСЕГО E2E-СЬЮТА (решение заказчика, 2026-08-10)
+# Ранний teardown Playwright после ПОСЛЕДНЕГО e2e-теста
 # ============================================================
-# Фронтенд (static/js/app.js) после конфликтов параллельных правок разошёлся
-# с ожиданиями e2e-тестов; UI чинится отдельно, и до его починки весь
-# Playwright-сьют пропущен маркером SKIP (не xfail), что даёт:
-#   * браузер не запускается вообще (экономия ~70с полного прогона);
-#   * убирается загрязнение основного потока: фикстуры pytest-playwright
-#     оставляют «running» asyncio-loop на всю сессию, из-за чего
-#     asyncio.run() в других тестовых файлах падает с RuntimeError.
-#   (xfail бы не помог: xfail-тесты всё равно исполняются и поднимают
-#    браузер/фикстуры.)
+# Синхронный API Playwright крутит свой asyncio-loop в гринлете ОСНОВНОГО
+# потока и после каждого sync-вызова делает asyncio._set_running_loop(loop)
+# (playwright/_impl/_sync_base.py, SyncBase._sync / EventInfo.value).
+# Session-фикстуры pytest-playwright (`browser`, `playwright`) по умолчанию
+# живут до конца сессии, поэтому после e2e-тестов в основном потоке остаётся
+# «running» loop и asyncio.run() в юнит-тестах падает с
+# RuntimeError("asyncio.run() cannot be called from a running event loop").
 #
-# Зафиксированные причины текущих фейлов (разбирать после снятия скипа):
-#   1. test_infra_smoke.py::test_http_mock_records_post — баг сравнения в
-#      САМОМ ТЕСТЕ (Playwright и фикстуры исправны): проверка
-#      `{"method": "POST", "path": "/api/pause", "json": None} in ui.calls`
-#      не находит запись, потому что UIController.calls (см. _route_handler
-#      выше) пишет записи {"method","path","url","json"} с доп. ключом
-#      'url', а dict-равенство требует совпадения всего набора ключей.
-#   2. test_tab_tests.py ×3 (test_apply_tests_*) — Page.wait_for_function:
-#      Timeout 15000ms происходит ещё в UIController.open(): ожидание
-#      `#acc-sent-0 == '0'` не выполняется, т.к. _set_single_account()
-#      задаёт аккаунт без ключа 'sent', а updateCard() в static/js/app.js
-#      делает setText('acc-sent-N', acc.sent) без фолбэка → текст элемента
-#      становится 'undefined'. Фронтенд и ожидания тестов разошлись.
-#
-# Снятие скипа: удалить pytest_collection_modifyitems и словари ниже.
-# Ни один тест не удалён и не закомментирован — только марка.
+# Решение: browser и playwright останавливаются сразу после последнего
+# e2e-теста (обёртка pytest_runtest_protocol ниже). Переопределённые
+# session-фикстуры делают teardown идемпотентным, чтобы родные финализаторы
+# pytest-playwright на конце сессии не падали на уже остановленных объектах
+# (browser.close() на закрытом loop кидает Error).
 
-_E2E_SKIP_REASON_DEFAULT = (
-    "E2E Playwright-тесты временно пропущены до починки UI (решение "
-    "заказчика): фронтенд static/js/app.js разошёлся с ожиданиями тестов. "
-    "Skip (не xfail) дополнительно убирает запуски браузера и загрязнение "
-    "основного потока «running» asyncio-loop от фикстур pytest-playwright."
-)
-
-_E2E_SKIP_REASONS_BY_MODULE = {
-    "test_infra_smoke.py": (
-        "Отложено до починки UI (решение заказчика). Playwright и "
-        "e2e-фикстуры исправны; известный дефект самого модуля: "
-        "test_http_mock_records_post — баг сравнения в тесте: dict-проверка "
-        "без ключа 'url' против записей UIController.calls, которые "
-        "содержат доп. ключ 'url' (tests/e2e/conftest.py, _route_handler)."
-    ),
-    "test_tab_tests.py": (
-        "Отложено до починки UI (решение заказчика): фронтенд "
-        "static/js/app.js разошёлся с ожиданиями тестов apply_tests — "
-        "Page.wait_for_function: Timeout 15000ms в UIController.open() "
-        "(#acc-sent-0 не становится '0': в тестовом аккаунте нет ключа "
-        "'sent', updateCard() пишет undefined). Playwright исправен."
-    ),
-}
+_PW_STATE = {"playwright": None, "browser": None, "stopped": False}
 
 
-def pytest_collection_modifyitems(config, items):
-    """SKIP на все тесты, собранные под tests/e2e/ (см. блок выше)."""
-    e2e_root = Path(__file__).resolve().parent
-    for item in items:
-        path_attr = getattr(item, "path", None)  # pytest >= 7
-        if path_attr is None:  # pragma: no cover — совместимость со старыми pytest
-            path_attr = item.fspath
+def _pw_shutdown():
+    """Идемпотентно закрыть browser и остановить Playwright (синхронный API).
+
+    pw.stop() внутри playwright идемпотентен сам по себе (_exit_was_called),
+    но browser.close() не идемпотентен — состояние tracked здесь.
+    """
+    if _PW_STATE["stopped"]:
+        return
+    _PW_STATE["stopped"] = True
+    browser = _PW_STATE["browser"]
+    playwright_obj = _PW_STATE["playwright"]
+    if browser is not None:
         try:
-            rel = Path(str(path_attr)).resolve().relative_to(e2e_root)
-        except ValueError:
-            continue  # тест не из tests/e2e — не трогаем
-        module = rel.parts[0] if rel.parts else ""
-        reason = _E2E_SKIP_REASONS_BY_MODULE.get(module, _E2E_SKIP_REASON_DEFAULT)
-        item.add_marker(pytest.mark.skip(reason=reason))
+            browser.close()
+        except Exception:
+            pass
+    if playwright_obj is not None:
+        try:
+            playwright_obj.stop()
+        except Exception:
+            pass
+    _PW_STATE["browser"] = None
+    _PW_STATE["playwright"] = None
+    # Страховка: после stop в основном потоке не должно остаться «running»
+    # loop (run_until_complete в dispatcher-гринлете сбрасывает его сам,
+    # т.к. состояние thread-local общее для гринлетов одного потока).
+    if asyncio.events._get_running_loop() is not None:
+        asyncio._set_running_loop(None)
+
+
+@pytest.fixture(scope="session")
+def playwright():
+    """Override фикстуры pytest-playwright (для тестов tests/e2e/).
+
+    Ссылка сохраняется в _PW_STATE для раннего останова в _pw_shutdown();
+    финализатор идемпотентен (реальный stop происходит после последнего
+    e2e-теста, повторный вызов на конце сессии — no-op).
+    """
+    from playwright.sync_api import sync_playwright
+
+    pw = sync_playwright().start()
+    _PW_STATE["playwright"] = pw
+    yield pw
+    _pw_shutdown()
+
+
+@pytest.fixture(scope="session")
+def browser(launch_browser):
+    """Override фикстуры pytest-playwright: реальный close в _pw_shutdown().
+
+    Без override родной финализатор `browser.close()` на конце сессии
+    выполнялся бы на уже остановленном Playwright и кидал Error.
+    """
+    _PW_STATE["browser"] = launch_browser()
+    yield _PW_STATE["browser"]
+    _pw_shutdown()
+
+
+_E2E_ROOT = Path(__file__).resolve().parent
+_PENDING_E2E = None  # set[str]: nodeid ещё не выполненных e2e-тестов
+
+
+def _is_e2e_item(item) -> bool:
+    path_attr = getattr(item, "path", None)
+    if path_attr is None:  # pragma: no cover — старый pytest
+        path_attr = getattr(item, "fspath", None)
+    if path_attr is None:
+        return False
+    try:
+        Path(str(path_attr)).resolve().relative_to(_E2E_ROOT)
+        return True
+    except ValueError:
+        return False
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """После ПОСЛЕДНЕГО e2e-теста сразу остановить Playwright (см. блок выше).
+
+    Хуки conftest-а действуют на всю сессию после загрузки conftest-а,
+    поэтому переход e2e -> юнит-тесты виден здесь независимо от порядка.
+    """
+    global _PENDING_E2E
+    if _PENDING_E2E is None:
+        _PENDING_E2E = {
+            i.nodeid for i in item.session.items if _is_e2e_item(i)
+        }
+    result = yield
+    if item.nodeid in _PENDING_E2E:
+        _PENDING_E2E.discard(item.nodeid)
+        if not _PENDING_E2E and _PW_STATE["playwright"] is not None:
+            _pw_shutdown()
+    return result
+
