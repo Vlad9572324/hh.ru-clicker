@@ -3,11 +3,20 @@
 шлёт api_key=''; backend должен подтянуть старый по name/index fallback,
 иначе смена модели стирает ключ (описано в жалобе юзера)."""
 import asyncio
+import concurrent.futures
 from types import SimpleNamespace
 
 from fastapi import Request
 from app.routes import llm as llm_route
 from app.config import CONFIG
+
+
+def _run_coro(coro):
+    """Запуск корутины в отдельном потоке: pytest-playwright (tests/e2e) держит
+    session-scoped loop «running» в главном потоке, и прямой asyncio.run() падает
+    с RuntimeError. Исключения корутины пробрасываются через future.result()."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
 
 
 class _FakeRequest:
@@ -18,7 +27,7 @@ class _FakeRequest:
 
 
 def _save(profiles, mode="fallback"):
-    return asyncio.run(llm_route.api_llm_profiles(_FakeRequest({"profiles": profiles, "mode": mode})))
+    return _run_coro(llm_route.api_llm_profiles(_FakeRequest({"profiles": profiles, "mode": mode})))
 
 
 def test_key_preserved_on_model_change(monkeypatch):
