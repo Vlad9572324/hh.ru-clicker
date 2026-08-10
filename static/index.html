@@ -53,6 +53,7 @@
   <div class="tab" data-tab="views" data-i18n="tab_views">👁️ Просмотры</div>
   <div class="tab" data-tab="apply" data-i18n="tab_apply">🚀 Отклик</div>
   <div class="tab" data-tab="llm" data-i18n="tab_llm">🤖 LLM Ответы</div>
+  <div class="tab" data-tab="hedi">🤖 HH Хэдди</div>
   <div class="tab" data-tab="settings" data-i18n="tab_settings">⚙️ Настройки</div>
 </div>
 
@@ -424,6 +425,32 @@
     </table>
     <div id="llm-interviews-empty" style="color:var(--dim);font-size:12px;display:none">
       Нет данных. Переговоры появятся после первого опроса HH-статистики (~15 мин).
+    </div>
+  </div>
+</div>
+
+<!-- HH AI Hedi Tab -->
+<div id="panel-hedi" class="panel">
+  <div class="hedi-shell">
+    <div class="hedi-toolbar">
+      <div>
+        <div class="hedi-title">🤖 HH Хэдди</div>
+        <div class="hedi-badge">Bot: Хэдди · powered by HH.ru AI</div>
+      </div>
+      <div class="hedi-controls">
+        <label for="hedi-account">Аккаунт</label>
+        <select id="hedi-account" class="apply-input" onchange="hediSelectAccount(this.value)">
+          <option value="">Выберите аккаунт</option>
+        </select>
+        <button class="btn-refresh" type="button" onclick="hediLoadHistory(true)">🔄 Обновить историю</button>
+      </div>
+    </div>
+    <div id="hedi-status" class="hedi-status">Выберите mobile-аккаунт для начала чата.</div>
+    <div id="hedi-messages" class="hedi-messages" aria-live="polite"></div>
+    <div class="hedi-compose">
+      <textarea id="hedi-input" class="apply-input" rows="3" maxlength="4000"
+        placeholder="Напишите Хэдди…"></textarea>
+      <button id="hedi-send" type="button" onclick="hediSendMessage()">Отправить</button>
     </div>
   </div>
 </div>
@@ -1037,6 +1064,7 @@
 </div>
 
 <script src="/static/js/app.js?v=5"></script>
+<script src="/static/js/features/hedi.js?v=1"></script>
 <script>
 // ── WebSocket (realtime, Phase 1): управление per-account WS-слушателем ──
 // Рендерит блок #ws-realtime-section (Настройки → Подключение). Использует

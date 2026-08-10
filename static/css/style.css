@@ -64,6 +64,7 @@ body {
   background: var(--bg-card);
   padding: 0 16px;
   gap: 2px;
+  overflow-x: auto;
 }
 .tab {
   padding: 8px 16px;
@@ -80,6 +81,28 @@ body {
 /* ── Tab panels ── */
 .panel { display: none; padding: 16px; }
 .panel.active { display: block; }
+
+/* ── HH AI Hedi chat ── */
+.hedi-shell { max-width: 900px; margin: 0 auto; }
+.hedi-toolbar { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:12px; }
+.hedi-title { color:var(--cyan); font-size:17px; font-weight:700; margin-bottom:5px; }
+.hedi-badge { display:inline-block; color:var(--dim); background:var(--bg-card2); border:1px solid var(--border); border-radius:12px; padding:3px 9px; font-size:10px; }
+.hedi-controls { display:flex; align-items:center; flex-wrap:wrap; gap:8px; color:var(--dim); font-size:11px; }
+.hedi-status { min-height:20px; color:var(--dim); font-size:11px; margin-bottom:6px; }
+.hedi-status.error { color:var(--red); }
+.hedi-messages { height:min(58vh,560px); min-height:320px; overflow-y:auto; padding:16px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; display:flex; flex-direction:column; gap:10px; }
+.hedi-empty { color:var(--dim); text-align:center; margin:auto; }
+.hedi-message { display:flex; gap:8px; align-items:flex-end; max-width:82%; }
+.hedi-message.user { align-self:flex-end; flex-direction:row-reverse; }
+.hedi-avatar { width:30px; height:30px; border-radius:50%; display:grid; place-items:center; flex:0 0 30px; background:var(--bg-card2); border:1px solid var(--border); }
+.hedi-bubble { padding:9px 12px; border-radius:12px 12px 12px 3px; background:var(--bg-card2); border:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.45; }
+.hedi-message.user .hedi-bubble { background:#123746; border-color:#246173; border-radius:12px 12px 3px 12px; }
+.hedi-time { color:var(--dim); font-size:9px; margin-top:4px; text-align:right; }
+.hedi-compose { display:flex; gap:8px; margin-top:10px; align-items:stretch; }
+.hedi-compose textarea { flex:1; resize:vertical; min-height:58px; }
+.hedi-compose button { min-width:120px; border:1px solid var(--cyan); border-radius:5px; background:var(--bg-card2); color:var(--cyan); cursor:pointer; font-family:inherit; }
+.hedi-compose button:disabled { opacity:.5; cursor:wait; }
+@media (max-width:700px) { .hedi-toolbar { align-items:flex-start; flex-direction:column; } .hedi-message { max-width:94%; } .hedi-compose { flex-direction:column; } .hedi-compose button { min-height:40px; } }
 
 /* ── Main tab layout ── */
 #main-layout {

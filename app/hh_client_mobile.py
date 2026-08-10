@@ -39,6 +39,7 @@ from app import (
     mobile_chat_thread,
     mobile_check_limit,
     mobile_job_search_status,
+    mobile_hedi,
     mobile_neg_meta,
     mobile_negotiations,
     mobile_precheck,
@@ -74,6 +75,9 @@ class MobileHHClient(HHClient):
                          page: int = 0, filters=None) -> list:
         return mobile_search.search_vacancies(
             self.acc, text, area_id, per_page, page, filters)
+    def start_hedi(self) -> str:
+        """Start the mobile-only HH AI vacancy-search assistant."""
+        return mobile_hedi.start_hedi(self.acc)
 
     # ── Phase 2: переговоры/чаты (реализовано: api.hh.ru, Bearer) ─────────────
     # Делегирование в app/mobile_*.py; транспорт — app/hh_mobile_transport.py

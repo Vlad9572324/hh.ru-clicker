@@ -4367,6 +4367,7 @@ document.getElementById('tabs').addEventListener('click', e => {
   else if (tab === 'tests') loadTests();
   else if (tab === 'db') loadDB();
   else if (tab === 'hh' && State.lastSnapshot) renderHH(State.lastSnapshot);
+  else if (tab === 'hedi' && typeof initHediTab === 'function') initHediTab();
   else if (tab === 'llm') {
     // Only reload table if stale (>10s since last load) — prevents wipe on quick tab switches
     const stale = Date.now() - _llmLastDbRefresh > 10000;
@@ -6261,7 +6262,7 @@ function exportDbCSV() {
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────
-const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'hh','7':'views','8':'apply','9':'settings'};
+const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'hh','7':'views','8':'apply','9':'settings','0':'hedi'};
 
 // ── HH mobile OTP authentication ───────────────────────────
 const MOBILE_AUTH_FIELDS = [

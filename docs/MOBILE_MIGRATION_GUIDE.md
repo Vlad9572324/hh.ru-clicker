@@ -310,6 +310,20 @@ A: Проверьте по порядку: (1) кнопка на карточк�
 
 ---
 
+## AI-помощник Хэдди
+
+В дашборде доступна вкладка **«🤖 HH Хэдди»** для общения со встроенным
+HH.ru AI-помощником по поиску вакансий. Функция работает только для аккаунтов
+с `mode: mobile`, поскольку использует OAuth и mobile API. При первом открытии
+создаётся (или возобновляется) персональный чат аккаунта; история обновляется
+автоматически раз в 30 секунд и вручную кнопкой в интерфейсе.
+
+API дашборда: `GET /api/account/{idx}/hedi/start`,
+`GET /api/account/{idx}/hedi/history?limit=50` и
+`POST /api/account/{idx}/hedi/send` с JSON `{"text": "..."}`.
+
+---
+
 *Источники: `app/mobile_auth.py`, `app/routes/mobile_auth.py`,
 `app/oauth.py`, `app/user_agent.py`, `app/config.py` (docstring схемы
 `mode`), `app/hh_client*.py` (Phase 0), `app/manager.py`
