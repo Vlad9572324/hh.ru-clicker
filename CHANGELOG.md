@@ -7,6 +7,21 @@
 PR/ветке, слитой в `main`; baseline (состояние «до») — `origin/main` (`b3bba5a`, 2026-08-07).
 Commit-хэши указаны в скобках.
 
+## [0.5.0-phase3.6] — ветка `feat/phase3.6-remaining-callers` (в разработке)
+
+**Завершена проверка оставшихся hot-path caller-файлов на использование
+`get_client(acc)`.** В `routes/apply.py` фабричный caller уже присутствует;
+в остальных проверенных файлах account-bound вызовов web-flow модулей нет.
+Допустимые чистые вызовы `parse_hh_lux_ssr` сохранены.
+
+### Changed
+
+- AST-guard расширен на `routes/settings.py`, `routes/llm.py`,
+  `routes/data.py`, `routes/core.py`, `routes/sessions.py`, `routes/apply.py`
+  и `hh_api.py`; он не требует фиктивного импорта фабрики в файлах без caller.
+- Оригинальные функции `hh_chat`, `hh_apply`, `hh_negotiations` и `hh_resume`
+  сохранены как fallback-делегаты `WebHHClient`.
+
 ## [0.4.0-phase3.5] — ветка `feat/phase3.5-migrate-callers` (в разработке)
 
 **Phase 3.5 миграции mobile-API: все внешние hot-path callers web-flow функций

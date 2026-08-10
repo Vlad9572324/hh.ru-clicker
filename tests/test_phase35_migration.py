@@ -12,8 +12,8 @@ app/hh_apply.py, app/hh_negotiations.py, app/hh_resume.py) на
 2. во внешних файлах НЕТ вызовов/обращений к мигрированным функциям —
    ни по имени из from-import, ни по атрибуту модуля-алиаса
    (`import app.hh_X` / `from app import hh_X`);
-3. мигрированные файлы (manager.py, routes/accounts.py, routes/debug.py)
-   импортируют get_client из app.hh_client_factory;
+3. все файлы, включённые в миграцию callers Phase 3.5/3.6, покрыты guard;
+   файлы с вызовом get_client импортируют его из app.hh_client_factory;
 4. app/hh_client_web.py по-прежнему импортирует из всех 4 модулей —
    guard от случайного удаления делегатов web-flow реализации.
 
@@ -122,6 +122,13 @@ MIGRATED_CALLER_FILES = (
     "app/manager.py",
     "app/routes/accounts.py",
     "app/routes/debug.py",
+    "app/routes/settings.py",
+    "app/routes/llm.py",
+    "app/routes/data.py",
+    "app/routes/core.py",
+    "app/routes/sessions.py",
+    "app/routes/apply.py",
+    "app/hh_api.py",
 )
 
 WEB_ADAPTER = "app/hh_client_web.py"
@@ -267,20 +274,32 @@ def test_no_direct_calls_of_migrated_functions():
 
 
 # ---------------------------------------------------------------------------
-# 3. Позитивная проверка: мигрированные файлы импортируют get_client.
+# 3. Позитивная проверка: мигрированные файлы существуют, а реальные callers
+#    get_client импортируют его из factory. Часть файлов Phase 3.6 не имела
+#    account-bound web-flow вызовов; для них не создаём фиктивный импорт.
 # ---------------------------------------------------------------------------
 
 def test_migrated_callers_import_get_client():
     missing = []
     for rel in MIGRATED_CALLER_FILES:
-        tree = _parse(ROOT / rel)
+        path = ROOT / rel
+        if not path.is_file():
+            missing.append(f"{rel} (file missing)")
+            continue
+        tree = _parse(path)
+        calls_get_client = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "get_client"
+            for node in ast.walk(tree)
+        )
         found = any(
             isinstance(node, ast.ImportFrom)
             and node.module == "app.hh_client_factory"
             and any(alias.name == "get_client" for alias in node.names)
             for node in ast.walk(tree)
         )
-        if not found:
+        if calls_get_client and not found:
             missing.append(rel)
     assert not missing, (
         "Файлы с мигрированными call-site должны импортировать "
