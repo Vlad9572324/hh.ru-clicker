@@ -134,3 +134,188 @@ def test_auth_status_does_not_leak_code_length(otp_env):
     status = ma.auth_status()
     assert status.get("stage") == "code_requested"
     assert "code_length" not in status
+
+
+class _Clock:
+    """Детерминированные часы вместо time.time(): now = base + shift."""
+
+    def __init__(self, base: float):
+        self.base = float(base)
+        self.shift = 0.0
+
+    def time(self) -> float:
+        return self.base + self.shift
+
+    def advance(self, seconds: float) -> None:
+        self.shift += seconds
+
+
+def _patch_clock(monkeypatch) -> _Clock:
+    """Подменяет time в модуле mobile_auth управляемыми часами."""
+    clock = _Clock(int(time.time()))
+    monkeypatch.setattr(ma, "time", clock)
+    return clock
+
+
+def _fail_login_times(n: int, monkeypatch_calls: dict) -> None:
+    """n неудачных попыток login() до срабатывания lockout."""
+    for _ in range(n):
+        with pytest.raises(MobileAuthError):
+            HHMobileClient().login("0000")
+    assert monkeypatch_calls["n"] == n
+
+
+def test_request_code_during_lockout_is_rejected(otp_env, monkeypatch):
+    """HIGH №6: запрос нового кода НЕ сбрасывает активный lockout.
+
+    Цикл «5 попыток -> подождал throttle -> новый код -> ещё 5 попыток»
+    больше не обходит 15-минутную блокировку: и немедленный request_code,
+    и повторный после resend-throttle (в т.ч. с другим phone/email) дают 429.
+    """
+    clock = _patch_clock(monkeypatch)
+    _write_state(_fresh_state())
+    calls = {"n": 0}
+
+    def fake_request(self, method, path, **kwargs):
+        calls["n"] += 1
+        if path.endswith("/generate"):
+            return {"can_request_code_again_in": 30, "code_length": 4}
+        raise MobileAuthError("Неверный код подтверждения.")
+
+    monkeypatch.setattr(HHMobileClient, "_request", fake_request)
+
+    # 5 неверных кодов -> lockout на OTP_LOCKOUT_SECONDS.
+    _fail_login_times(ma.OTP_MAX_ATTEMPTS, calls)
+    locked = _read_state()
+    assert locked["attempts"] == ma.OTP_MAX_ATTEMPTS
+    assert locked.get("last_lockout_at") == int(clock.time())
+    assert locked["locked_until"] > clock.time()
+
+    calls["n"] = 0
+    # Немедленный запрос нового кода (тот же phone) — 429 с retry_after.
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+    assert 0 < excinfo.value.retry_after <= ma.OTP_LOCKOUT_SECONDS
+
+    # 60-секундный resend-throttle истёк, а lockout всё ещё действует.
+    clock.advance(ma.REQUEST_CODE_THROTTLE_SECONDS + 1)
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+
+    # Другой phone/email не обходит блокировку — lockout глобальный.
+    clock.advance(ma.REQUEST_CODE_THROTTLE_SECONDS + 1)
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79998887766", "phone")
+    assert excinfo.value.status_code == 429
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("someone@example.com", "email")
+    assert excinfo.value.status_code == 429
+
+    # Итог: к HH не обращались, код не выдан, attempts не сброшены,
+    # активный challenge не заменён, lockout не снят.
+    assert calls["n"] == 0
+    state = _read_state()
+    assert state["attempts"] == ma.OTP_MAX_ATTEMPTS
+    assert state["login"] == "+79161234567"
+    assert state["requested_at"] == locked["requested_at"]
+    assert state["last_lockout_at"] == locked["last_lockout_at"]
+    assert state["locked_until"] > clock.time()
+
+    # /verify в этом состоянии тоже отдаёт 429 без обращения к HH.
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().login("0000")
+    assert excinfo.value.status_code == 429
+    assert calls["n"] == 0
+
+
+def test_lockout_expires_and_new_code_allowed(otp_env, monkeypatch):
+    """После истечения TTL lockout снимается: новый код, attempts=0, вход работает."""
+    clock = _patch_clock(monkeypatch)
+    _write_state(_fresh_state())
+    phase = {"fail_login": True}
+
+    def fake_request(self, method, path, **kwargs):
+        if path.endswith("/generate"):
+            return {"can_request_code_again_in": 30, "code_length": 4}
+        if path.endswith("/login"):
+            if phase["fail_login"]:
+                raise MobileAuthError("Неверный код подтверждения.")
+            return {"access_token": "access", "refresh_token": "refresh", "expires_in": 60}
+        if path == "me":
+            return {"id": "user-1", "first_name": "Test"}
+        if path == "resumes/mine":
+            return {"items": []}
+        raise AssertionError(f"неожиданный запрос: {path}")
+
+    monkeypatch.setattr(HHMobileClient, "_request", fake_request)
+    for _ in range(ma.OTP_MAX_ATTEMPTS):
+        with pytest.raises(MobileAuthError):
+            HHMobileClient().login("0000")
+
+    # За секунду до конца TTL код всё ещё не выдаётся.
+    clock.advance(ma.OTP_LOCKOUT_SECONDS - 1)
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.retry_after == 1
+
+    # TTL истёк — request_code работает как раньше.
+    clock.advance(2)
+    phase["fail_login"] = False
+    payload = HHMobileClient().request_code("+79161234567", "phone")
+    assert payload["code_length"] == 4
+    state = _read_state()
+    assert state["attempts"] == 0
+    assert ma._otp_locked_until(state) == 0, "после TTL lockout должен быть снят"
+
+    # Новый код верифицируется.
+    tokens, me, resumes = HHMobileClient().login("5678")
+    assert tokens["access_token"] == "access"
+    assert me["id"] == "user-1"
+
+
+def test_throttle_still_works_without_lockout(otp_env, monkeypatch):
+    """60-секундный throttle запросов кода работает как раньше, если lockout нет."""
+    clock = _patch_clock(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_request(self, method, path, **kwargs):
+        calls["n"] += 1
+        return {"can_request_code_again_in": 30, "code_length": 4}
+
+    monkeypatch.setattr(HHMobileClient, "_request", fake_request)
+
+    assert HHMobileClient().request_code("+79161234567", "phone")
+
+    clock.advance(30)
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.retry_after == ma.REQUEST_CODE_THROTTLE_SECONDS - 30
+    assert calls["n"] == 1, "повторный запрос в throttle-окне не должен доходить до HH"
+
+    clock.advance(31)
+    assert HHMobileClient().request_code("+79161234567", "phone")
+    assert calls["n"] == 2
+
+
+def test_lockout_survives_state_rewrite_without_locked_until(otp_env):
+    """State с last_lockout_at, но без locked_until, всё равно блокирует выдачу кода."""
+    _write_state(_fresh_state(attempts=ma.OTP_MAX_ATTEMPTS,
+                              last_lockout_at=int(time.time()) - 60))
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+    assert 0 < excinfo.value.retry_after <= ma.OTP_LOCKOUT_SECONDS
+
+
+def test_lockout_recognized_from_legacy_locked_until_only(otp_env):
+    """Старый state только с locked_until (без last_lockout_at) тоже блокирует."""
+    _write_state(_fresh_state(attempts=ma.OTP_MAX_ATTEMPTS,
+                              locked_until=int(time.time()) + 600))
+    with pytest.raises(MobileAuthError) as excinfo:
+        HHMobileClient().request_code("+79161234567", "phone")
+    assert excinfo.value.status_code == 429
+    assert 595 <= excinfo.value.retry_after <= 600

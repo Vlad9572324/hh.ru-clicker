@@ -8,7 +8,6 @@ import html as _html
 import time
 import threading
 import urllib.parse
-import requests
 from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
@@ -824,14 +823,16 @@ def _edit_resume_field(acc: dict, resume_hash: str, fields: dict) -> dict:
     ua = webview_user_agent()
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
-        # Warm up session (DDoS Guard needs a GET first)
-        s = requests.Session()
-        s.verify = False
-        try:
-            s.get(hh_base() + "/applicant/resumes", headers={"User-Agent": ua, "Accept": "text/html"},
-                  cookies=acc.get("cookies", {}), timeout=10)
-            # POST edit
-            r = s.post(
+        # Warm up session (DDoS Guard needs a GET first).
+        # Оба запроса — через HH-клиент: он инжектит HH_PROXY и cookies,
+        # вместо голого requests.Session(), который ходил напрямую.
+        HH.get(
+            hh_base() + "/applicant/resumes",
+            headers={"User-Agent": ua, "Accept": "text/html"},
+            cookies=acc.get("cookies", {}), timeout=10,
+        )
+        # POST edit
+        r = HH.post(
             f"{hh_base()}/applicant/resume/edit?resume={resume_hash}&hhtmSource=resume_partial_edit",
             headers={
                 "User-Agent": ua,
@@ -845,11 +846,9 @@ def _edit_resume_field(acc: dict, resume_hash: str, fields: dict) -> dict:
             json=fields,
             timeout=15,
         )
-            if r.status_code in (200, 204):
-                return {"ok": True}
-            return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
-        finally:
-            s.close()
+        if r.status_code in (200, 204):
+            return {"ok": True}
+        return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

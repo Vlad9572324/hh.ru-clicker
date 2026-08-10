@@ -38,10 +38,16 @@ _oauth_tokens: dict = {}  # {resume_hash or resume_hash::account_key: {access_to
 _oauth_lock = threading.Lock()
 _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чтобы не интерливить файл
 
-# Per-account locks для refresh/authorize: иначе два потока могут одновременно
-# увидеть expired token и оба пойти refresh с одним и тем же refresh_token.
-# HH ротирует refresh tokens — второй запрос получит invalid_grant. (swarm-7 #1)
-_oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
+# Locks для refresh/authorize: иначе два потока могут одновременно увидеть
+# expired token и оба пойти refresh с одним и тем же refresh_token. HH ротирует
+# refresh tokens — второй запрос получит invalid_grant. (swarm-7 #1)
+#
+# ВАЖНО (аудит CRITICAL #4): ключ lock'а — ВЛАДЕЛЕЦ refresh_token (identity
+# token family), а не resume_hash. import_mobile_tokens копирует ОДИН mobile
+# refresh_token под все резюме пользователя, и per-resume lock не мешал двум
+# потокам одновременно предъявить его HH → invalid_grant / split-brain.
+# См. `_refresh_lock_key()`.
+_oauth_refresh_locks: dict = {}  # {identity: threading.Lock}
 _oauth_refresh_locks_lock = threading.Lock()
 
 _mobile_user_agent = mobile_user_agent  # backward-compatible internal alias
@@ -61,13 +67,41 @@ def _token_key(acc: dict) -> str:
     return f"{resume_hash}::{_account_key(acc)}"
 
 
-def _get_refresh_lock(resume_hash: str) -> threading.Lock:
+def _get_refresh_lock(identity: str) -> threading.Lock:
+    """Lock на identity владельца refresh_token (см. `_refresh_lock_key`)."""
     with _oauth_refresh_locks_lock:
-        lock = _oauth_refresh_locks.get(resume_hash)
+        lock = _oauth_refresh_locks.get(identity)
         if lock is None:
             lock = threading.Lock()
-            _oauth_refresh_locks[resume_hash] = lock
+            _oauth_refresh_locks[identity] = lock
         return lock
+
+
+# Один общий lock для всех mobile_otp-записей без mobile_user_id (импорт до
+# появления поля): они потенциально разделяют один refresh_token, поэтому их
+# refresh сериализуется консервативно через общий ключ family.
+_MOBILE_OTP_FAMILY_LOCK_KEY = "mobile-otp:shared-family"
+
+
+def _refresh_lock_key(cached: dict | None, resume_hash: str) -> str:
+    """Ключ refresh-lock'а = ВЛАДЕЛЕЦ refresh_token (identity token family),
+    а не resume (аудит CRITICAL #4).
+
+    - mobile-запись с `mobile_user_id` → один общий lock на пользователя:
+      все его резюме разделяют один refresh_token (import_mobile_tokens);
+    - mobile_otp без user_id → один общий lock на всю такую family;
+    - браузерные токены не разделяются между резюме → per-resume lock.
+
+    Префиксы в ключах гарантируют, что пространства user/mobile/resume
+    не пересекаются между собой.
+    """
+    cached = cached or {}
+    uid = cached.get("mobile_user_id")
+    if uid:
+        return f"user:{uid}"
+    if cached.get("source") == "mobile_otp":
+        return _MOBILE_OTP_FAMILY_LOCK_KEY
+    return f"resume:{resume_hash}"
 
 
 def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
@@ -199,6 +233,11 @@ def import_mobile_tokens(tokens: dict, resumes: list[dict], me: dict | None = No
         "obtained_at": int(tokens.get("obtained_at", now)),
         "source": "mobile_otp",
     }
+    # Identity владельца token family (аудит CRITICAL #4): один mobile
+    # refresh_token копируется под все резюме пользователя, и refresh_lock
+    # берётся по этому id, а не по resume_hash — см. `_refresh_lock_key()`.
+    if isinstance(me, dict) and me.get("id") is not None:
+        clean["mobile_user_id"] = str(me["id"])
     keys = [str(r.get("id") or "").strip() for r in resumes if isinstance(r, dict)]
     keys = list(dict.fromkeys(k for k in keys if k))
     if not keys and isinstance(me, dict) and me.get("id") is not None:
@@ -366,37 +405,48 @@ def _obtain_oauth_token(acc: dict) -> str:
             return False
         return True
 
-    with _oauth_lock:
-        cached = _oauth_tokens.get(key)
-        if not cached:
-            # Migrate old plain-key token if present
-            old = _oauth_tokens.get(resume_hash)
-            if old:
-                _oauth_tokens[key] = dict(old)
-                cached = _oauth_tokens[key]
-        if _is_cached_valid(cached):
-            return cached["access_token"]
-
-    # Сериализуем refresh/authorize per-account: один поток делает HTTP, остальные ждут.
-    refresh_lock = _get_refresh_lock(resume_hash)
-    with refresh_lock:
-        # Double-checked: пока ждали лок, другой поток мог уже обновить токен.
+    def _read_record() -> dict:
+        """Актуальная запись под `_oauth_lock` (+ миграция с plain-ключа)."""
         with _oauth_lock:
-            cached = _oauth_tokens.get(key)
-            if not cached:
+            rec = _oauth_tokens.get(key)
+            if not rec:
+                # Migrate old plain-key token if present
                 old = _oauth_tokens.get(resume_hash)
                 if old:
                     _oauth_tokens[key] = dict(old)
-                    cached = _oauth_tokens[key]
-            if _is_cached_valid(cached):
+                    rec = _oauth_tokens[key]
+            return rec or {}
+
+    cached = _read_record()
+    if _is_cached_valid(cached):
+        return cached["access_token"]
+
+    # Сериализуем refresh/authorize по ВЛАДЕЛЬЦУ refresh_token (identity token
+    # family), а не по resume_hash: один mobile refresh_token разделяют все
+    # резюме пользователя, и per-resume lock не спасал от concurrent refresh
+    # (аудит CRITICAL #4). Один поток делает HTTP, остальные ждут.
+    stale_refresh = cached.get("refresh_token", "")  # что видели ДО lock'а
+    refresh_lock = _get_refresh_lock(_refresh_lock_key(cached, resume_hash))
+    with refresh_lock:
+        # Double-checked: пока ждали лок, другой поток мог уже обновить токен.
+        cached = _read_record()
+        if _is_cached_valid(cached):
+            return cached["access_token"]
+
+        # CAS (аудит CRITICAL #4): перечитанная под lock'ом запись сравнивается
+        # с предъявленным до lock'а refresh_token. Если он сменился — family уже
+        # обновил другой поток, старый токен ротирован в HH и сетевой вызов с ним
+        # даст invalid_grant. Не ходим в сеть, переиспользуем результат соседа.
+        refresh = cached.get("refresh_token", "")
+        if stale_refresh and refresh and refresh != stale_refresh:
+            if cached.get("access_token") and cached.get("expires_at", 0) > time.time():
                 return cached["access_token"]
+            # Запись обновлена, но TTL всё ещё недостаточен (короткий expires_in
+            # от HH): под family-lock'ом мы одни, продолжаем с НОВЕЙШИМ токеном.
 
         ua = _mobile_user_agent()
 
         # Try refresh first
-        with _oauth_lock:
-            cached = _oauth_tokens.get(key, {})
-        refresh = cached.get("refresh_token", "")
         if refresh:
             refresh_id, refresh_secret, refresh_ua = _refresh_identity(cached, ua)
             token_data = _do_refresh(refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
@@ -412,7 +462,14 @@ def _obtain_oauth_token(acc: dict) -> str:
                     "expires_at": time.time() + expires_in,
                     "_expires_monotonic": time.monotonic() + expires_in,
                     **({"source": "mobile_otp"} if cached.get("source") == "mobile_otp" else {}),
+                    # mobile_user_id сохраняется чтобы refresh_lock остался
+                    # привязан к владельцу family и после ротации (аудит #4).
+                    **({"mobile_user_id": cached["mobile_user_id"]} if cached.get("mobile_user_id") else {}),
                 }
+                # Точечная запись + propagation — одна логическая транзакция
+                # обновления family: выполняются последовательно под одним
+                # family-lock'ом, `_save_oauth_tokens()` вызывается ВНЕ
+                # `_oauth_lock` (иначе deadlock, issue #19).
                 with _oauth_lock:
                     _oauth_tokens[key] = token_data_full
                     # backward-compat plain key for external readers
@@ -517,6 +574,9 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
     ua = _mobile_user_agent()
     with _oauth_lock:
         snapshot = list(_oauth_tokens.items())
+    # seen_refresh дедупит только записи внутри ОДНОГО вызова; от гонок
+    # между потоками защищает family-lock + CAS-перечитывание под lock'ом
+    # (аудит CRITICAL #4).
     seen_refresh: set = set()
     stats = {"checked": 0, "refreshed": 0, "failed": 0}
     for key, cached in snapshot:
@@ -530,15 +590,21 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
             continue
         seen_refresh.add(refresh)
         resume_hash = key.split("::", 1)[0]
-        # Per-resume_hash lock — синхронизируется с lazy refresh из
-        # `_obtain_oauth_token`, чтобы не делать двух parallel-refresh с
-        # одним и тем же refresh_token (HH ротирует → второй получает invalid_grant).
-        lock = _get_refresh_lock(resume_hash)
+        # Lock по ВЛАДЕЛЬЦУ refresh_token (identity family) — синхронизируется
+        # и с lazy refresh из `_obtain_oauth_token`, и с другими concurrent
+        # proactive-вызовами: один mobile refresh_token разделяют несколько
+        # резюме, per-resume lock не спасал от двойного refresh (аудит #4).
+        lock = _get_refresh_lock(_refresh_lock_key(cached, resume_hash))
         with lock:
             with _oauth_lock:
                 latest = _oauth_tokens.get(key, {}) or {}
+            if not latest:
+                continue  # запись удалили (invalidate) пока ждали lock
             if latest.get("expires_at", 0) >= threshold:
-                continue  # обновили пока ждали лок
+                continue  # family уже обновили пока ждали lock — переиспользуем результат
+            # CAS: в сеть идёт refresh_token из АКТУАЛЬНОЙ записи, а не из
+            # snapshot'а. Если он сменился — family уже ротировал другой поток,
+            # и предъявлять старый токен нельзя (HH вернёт invalid_grant).
             latest_refresh = latest.get("refresh_token", "") or refresh
             refresh_id, refresh_secret, refresh_ua = _refresh_identity(latest, ua)
             token_data = _do_refresh(latest_refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
@@ -554,7 +620,13 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
                 "expires_at": time.time() + token_data["expires_in"],
                 "_expires_monotonic": time.monotonic() + token_data["expires_in"],
                 **({"source": "mobile_otp"} if latest.get("source") == "mobile_otp" else {}),
+                # mobile_user_id сохраняется чтобы refresh_lock остался
+                # привязан к владельцу family и после ротации (аудит #4).
+                **({"mobile_user_id": latest["mobile_user_id"]} if latest.get("mobile_user_id") else {}),
             }
+            # Точечная запись + propagation — одна логическая транзакция
+            # обновления family под общим family-lock'ом; `_save_oauth_tokens()`
+            # вызывается ВНЕ `_oauth_lock` (иначе deadlock, issue #19).
             with _oauth_lock:
                 _oauth_tokens[key] = new_full
                 # backward-compat plain key
