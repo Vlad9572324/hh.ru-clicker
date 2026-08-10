@@ -224,6 +224,8 @@ async def api_raw_accounts_set(request: Request):
 
 # ============================================================
 # BACKUP / RESTORE — единый JSON со всем (включая cookies/API-keys).
+# Доступ ВСЕГДА требует API-key — проверка в middleware (app/routes/__init__.py,
+# _ALWAYS_AUTH_PREFIXES), даже при пустом HH_BOT_API_KEY.
 # ============================================================
 
 _BACKUP_FILES = ("config.json", "accounts.json", "browser_sessions.json", "oauth_tokens.json")

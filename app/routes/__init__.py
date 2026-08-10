@@ -83,7 +83,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Активируется если установлен `HH_BOT_API_KEY` env. Без env — пропускает всё
 # (backward compat для локального dev на 127.0.0.1).
 _API_KEY = os.environ.get("HH_BOT_API_KEY", "").strip()
-_PUBLIC_PATHS = ("/", "/static/", "/favicon.ico", "/healthz")  # GET-only публичные пути
+# GET-only публичные пути. "/" — ТОЛЬКО точное совпадение: startswith("/")
+# совпадал бы с ЛЮБЫМ путём и при заданном ключе открывал бы все GET-эндпоинты
+# (включая /api/raw/config с llm_api_key) без auth (audit CRITICAL #1, follow-up).
+_PUBLIC_PATHS_EXACT = ("/", "/favicon.ico", "/healthz")
+_PUBLIC_PATH_PREFIXES = ("/static/",)
+# Пути, требующие API-key ВСЕГДА — даже при пустом HH_BOT_API_KEY и
+# HH_BOT_UNSAFE_EXPOSE=1: в бэкапе ВСЕ секреты (cookies, oauth_tokens,
+# llm_api_key), их нельзя отдавать без auth (audit CRITICAL #1).
+_ALWAYS_AUTH_PREFIXES = ("/api/backup",)
 
 
 _SAFE_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
@@ -91,22 +99,35 @@ _SAFE_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
 
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    # Если ключ не задан — auth выключен (опасно, но не ломает существующие deployments).
-    if not _API_KEY:
-        resp = await call_next(request)
-        _set_security_headers(resp)
-        return resp
     path = request.url.path
-    if request.method == "GET" and any(path == p or path.startswith(p) for p in _PUBLIC_PATHS):
-        resp = await call_next(request)
-        _set_security_headers(resp)
-        return resp
     # State-changing методы запрещают ?api_key= (CSRF: form POST с query-string проходил
     # без CORS preflight; теперь нужен X-API-Key header, см. kimi-r13-4 #3).
     if request.method in _SAFE_METHODS:
         presented = request.headers.get("X-API-Key", "") or request.query_params.get("api_key", "")
     else:
         presented = request.headers.get("X-API-Key", "")
+    # Backup всегда за API-key: если ключ не задан/не совпадает — 401 на любом методе.
+    if any(path == p or path.startswith(p) for p in _ALWAYS_AUTH_PREFIXES):
+        if not _API_KEY or not presented or not secrets.compare_digest(str(presented), str(_API_KEY)):
+            log_debug(f"auth_denied path={path} method={request.method} ip={request.client.host if request.client else '?'}")
+            resp = JSONResponse(
+                {"ok": False, "error": "API key required for backup operations"},
+                status_code=401,
+            )
+            _set_security_headers(resp)
+            return resp
+    # Если ключ не задан — auth выключен (опасно, но не ломает существующие deployments).
+    if not _API_KEY:
+        resp = await call_next(request)
+        _set_security_headers(resp)
+        return resp
+    if request.method == "GET" and (
+        path in _PUBLIC_PATHS_EXACT
+        or any(path.startswith(pfx) for pfx in _PUBLIC_PATH_PREFIXES)
+    ):
+        resp = await call_next(request)
+        _set_security_headers(resp)
+        return resp
     if not presented or not secrets.compare_digest(str(presented), str(_API_KEY)):
         log_debug(f"auth_denied path={path} method={request.method} ip={request.client.host if request.client else '?'}")
         # 401 тоже должен иметь security headers — clickjacking/MIME-sniffing
@@ -152,6 +173,7 @@ from app.routes.apply import router as apply_router        # noqa: E402
 from app.routes.settings import router as settings_router  # noqa: E402
 from app.routes.llm import router as llm_router            # noqa: E402
 from app.routes.debug import router as debug_router        # noqa: E402
+from app.routes.mobile_auth import router as mobile_auth_router  # noqa: E402
 
 app.include_router(core_router)
 app.include_router(accounts_router)
@@ -161,3 +183,4 @@ app.include_router(apply_router)
 app.include_router(settings_router)
 app.include_router(llm_router)
 app.include_router(debug_router)
+app.include_router(mobile_auth_router)

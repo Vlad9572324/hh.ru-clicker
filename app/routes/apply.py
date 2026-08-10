@@ -15,6 +15,8 @@ from app.storage import add_applied
 from app.hh_api import get_headers
 from app.questionnaire import get_questionnaire_answer
 from app.instances import bot
+from app.user_agent import webview_user_agent
+from app.hh_apply import _aio_egress_kwargs
 
 
 router = APIRouter()
@@ -26,13 +28,14 @@ async def _fetch_questionnaire_data(acc: dict, vid: str) -> dict:
     НЕ отправляет отклик.
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": f"{hh_base()}/vacancy/{vid}",
     }
     url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
-    async with aiohttp.ClientSession(cookies=acc["cookies"], headers=headers) as session:
-        async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
+    sess_kw, req_kw = _aio_egress_kwargs()
+    async with aiohttp.ClientSession(cookies=acc["cookies"], headers=headers, **sess_kw) as session:
+        async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15), **req_kw) as r:
             html = await r.text()
             if r.status in (401, 403) or _is_login_page(html):
                 return {"questions": [], "hidden": {}, "error": "auth"}
@@ -146,10 +149,12 @@ async def api_apply_check(body: dict):
     if custom_letter:
         acc["letter"] = custom_letter
 
+    sess_kw, req_kw = _aio_egress_kwargs()
     try:
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
-            headers=get_headers(acc.get("cookies", {}).get("_xsrf", ""))
+            headers=get_headers(acc.get("cookies", {}).get("_xsrf", "")),
+            **sess_kw
         ) as session:
             data = aiohttp.FormData()
             for k, v in [("resume_hash", acc["resume_hash"]), ("vacancy_id", vid),
@@ -157,7 +162,7 @@ async def api_apply_check(body: dict):
                 data.add_field(k, v)
             async with session.post(
                 hh_base() + "/applicant/vacancy_response/popup",
-                data=data, timeout=aiohttp.ClientTimeout(total=10)
+                data=data, timeout=aiohttp.ClientTimeout(total=10), **req_kw
             ) as r:
                 txt = await r.text()
                 status_code = r.status
@@ -222,13 +227,15 @@ async def api_apply_submit(body: dict):
 
     url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
+    sess_kw, req_kw = _aio_egress_kwargs()
     try:
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                     "Accept": "text/html,*/*", "Referer": f"{hh_base()}/vacancy/{vid}"}
+            headers={"User-Agent": webview_user_agent(),
+                     "Accept": "text/html,*/*", "Referer": f"{hh_base()}/vacancy/{vid}"},
+            **sess_kw
         ) as session:
-            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=15), **req_kw) as r:
                 html = await r.text()
                 if r.status in (401, 403) or _is_login_page(html):
                     return {"status": "error", "message": "⚠️ Куки протухли — обновите в настройках"}
@@ -253,6 +260,7 @@ async def api_apply_submit(body: dict):
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=15),
                 allow_redirects=False,
+                **req_kw
             ) as r2:
                 status = r2.status
                 location = r2.headers.get("location", "")

@@ -5,6 +5,7 @@ HH.ru apply functions: send response, fill questionnaire, check vacancy, check l
 import re
 import json
 import time
+import urllib.parse
 import requests
 import aiohttp
 
@@ -12,7 +13,8 @@ from glom import glom
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
-from app.hh_http import HH
+from app.hh_http import HH, egress_proxy
+from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
@@ -20,6 +22,53 @@ from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm
 from app.hh_resume import fetch_resume_text
 
 _HH_DEFAULT_TIMEOUT = 15
+
+
+# ── Egress через HH_PROXY для aiohttp-запросов ─────────────────────────────
+# Иначе отклики/анкеты ходят НАПРЯМУЮ, минуя HH_PROXY синглтона HH — засвет
+# реального IP сервера, обесценивающий всю anti-ban архитектуру (audit HIGH #5).
+
+def _aio_proxy() -> str | None:
+    """Текущий HH_PROXY для aiohttp-запросов. None = без прокси (прямой egress).
+    Читается runtime — подхватывает set_proxy() без рестарта."""
+    p = (egress_proxy() or "").strip()
+    return p or None
+
+
+def _aio_session_connector(proxy: str | None):
+    """Connector для ClientSession под socks-прокси: aiohttp нативно socks НЕ
+    умеет, нужен aiohttp-socks (ProxyConnector.from_url). Для http(s)-прокси
+    возвращает None — там достаточно proxy=... на каждый запрос.
+    КРИТИЧНО (fail-closed): если socks-прокси задан, но aiohttp_socks недоступен —
+    поднимаем RuntimeError: запрос НЕ ДОЛЖЕН идти напрямую (засвет реального IP)."""
+    if not proxy:
+        return None
+    scheme = urllib.parse.urlparse(proxy).scheme.lower()
+    if not scheme.startswith("socks"):
+        return None
+    try:
+        from aiohttp_socks import ProxyConnector
+    except ImportError as exc:
+        raise RuntimeError(
+            "HH_PROXY задаёт socks-прокси, но aiohttp-socks не установлен — "
+            "aiohttp не умеет socks нативно. Прямой egress запрещён (засвет "
+            "реального IP); добавьте aiohttp-socks в окружение."
+        ) from exc
+    return ProxyConnector.from_url(proxy)
+
+
+def _aio_egress_kwargs() -> tuple[dict, dict]:
+    """Разложить HH_PROXY на две пачки kwargs:
+    (для aiohttp.ClientSession, для каждого session.get/post-вызова).
+    socks-прокси → ProxyConnector на сессию (запросы без proxy=);
+    http(s)-прокси → proxy= на каждый запрос; пусто → оба пустые (как раньше)."""
+    proxy = _aio_proxy()
+    connector = _aio_session_connector(proxy)
+    if connector is not None:
+        return {"connector": connector}, {}
+    if proxy:
+        return {}, {"proxy": proxy}
+    return {}, {}
 
 
 def _parse_retry_after(value: str) -> int | None:
@@ -275,11 +324,15 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
     data.add_field("ignore_postponed", "true")
 
     try:
-        async with aiohttp.ClientSession(headers=headers, cookies=acc["cookies"]) as session:
+        # Egress через HH_PROXY: socks → ProxyConnector на сессию,
+        # http(s) → proxy= на запрос (см. _aio_egress_kwargs).
+        sess_kw, req_kw = _aio_egress_kwargs()
+        async with aiohttp.ClientSession(headers=headers, cookies=acc["cookies"], **sess_kw) as session:
             async with session.post(
                 hh_base() + "/applicant/vacancy_response/popup",
                 data=data,
-                timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)
+                timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT),
+                **req_kw,
             ) as r:
                 txt = await r.text()
                 status_code = r.status
@@ -303,20 +356,24 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
     Возвращает (result, info): result = sent | limit | test | error
     """
     headers_get = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": f"{hh_base()}/vacancy/{vid}",
     }
 
     try:
+        # Egress через HH_PROXY: socks → ProxyConnector на сессию,
+        # http(s) → proxy= на каждый запрос (и GET формы, и POST ниже).
+        sess_kw, req_kw = _aio_egress_kwargs()
         async with aiohttp.ClientSession(
             cookies=acc["cookies"],
-            headers=headers_get
+            headers=headers_get,
+            **sess_kw,
         ) as session:
             url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 
             # Шаг 1: GET форма опроса
-            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT)) as r:
+            async with session.get(url_form, timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT), **req_kw) as r:
                 html = await r.text()
                 status_code = r.status
 
@@ -448,6 +505,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=_HH_DEFAULT_TIMEOUT),
                 allow_redirects=False,
+                **req_kw,
             ) as r2:
                 status = r2.status
                 location = r2.headers.get("location", "")
@@ -482,7 +540,7 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
     """Pre-check vacancy before applying: detect impossible responses and experience mismatches.
     Returns {"ok": bool, "reason": str}
     """
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = webview_user_agent()
     try:
         r = _with_retry(
             lambda: HH.get(
@@ -579,7 +637,7 @@ def check_limit(acc: dict) -> bool:
         r_search = _with_retry(
             lambda: HH.get(
                 hh_base() + "/search/vacancy?text=&area=1&page=0",
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                headers={"User-Agent": webview_user_agent(),
                          "Accept": "text/html"},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
             ),
@@ -593,7 +651,7 @@ def check_limit(acc: dict) -> bool:
         r = _with_retry(
             lambda: HH.get(
                 f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                headers={"User-Agent": webview_user_agent(),
                          "Accept": "application/json", "X-Xsrftoken": xsrf},
                 cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
             ),

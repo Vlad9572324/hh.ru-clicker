@@ -13,6 +13,7 @@ import time
 import threading
 import requests
 from app.hh_http import HH
+from app.user_agent import mobile_user_agent, webview_user_agent
 try:
     from zoneinfo import ZoneInfo
     _MSK = ZoneInfo("Europe/Moscow")
@@ -20,6 +21,21 @@ except Exception:
     _MSK = None  # fallback на local
 
 from app.logging_utils import log_debug, log_exception, _is_login_page
+
+
+def _server_next_publish_datetime(status: dict) -> datetime | None:
+    """Convert HH next_publish_at to the local naive datetime used by AccountState."""
+    raw = (status or {}).get("next_publish_at")
+    if not raw:
+        return None
+    try:
+        value = str(raw).strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except (TypeError, ValueError):
+        return None
 
 
 def _today_msk() -> str:
@@ -110,11 +126,11 @@ LLM_LOG_FILE = Path("data") / "llm_log.jsonl"
 
 # -- Async page fetcher (used only by BotManager) --
 
-async def fetch_page(session, url, sem):
+async def fetch_page(session, url, sem, req_kw: dict | None = None):
     async with sem:
         try:
             await asyncio.sleep(0.05)
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), **(req_kw or {})) as r:
                 html = await r.text()
                 # Логируем только не-200 и аномальные размеры — иначе hundreds
                 # of disk writes per cycle давят RotatingFileHandler (swarm-16 #9).
@@ -1056,25 +1072,55 @@ class BotManager:
                     should_touch = True
 
                 if should_touch:
-                    self._add_log(state.short, state.color, "\U0001f4e4 Поднимаю резюме...", "info")
-                    success, message = touch_resume(acc)
-
-                    if success:
-                        state.resume_touch_status = "✅ Поднято!"
-                        state.next_resume_touch = now + timedelta(hours=4)
-                        self._add_log(
-                            state.short, state.color,
-                            f"✅ Резюме поднято! Следующее в {state.next_resume_touch.strftime('%H:%M')}",
-                            "success",
-                        )
+                    # Всегда сверяемся с сервером непосредственно перед publish:
+                    # UI/фоновая статистика используют 5-минутный cache и после
+                    # предыдущего touch могут ещё показывать устаревшее `true`.
+                    fresh_status = fetch_resume_status(acc, force=True)
+                    server_next = _server_next_publish_datetime(fresh_status)
+                    if fresh_status and not fresh_status.get("can_publish_or_update"):
+                        state.resume_free_touches = 0
+                        if server_next and server_next > now:
+                            state.next_resume_touch = server_next
+                            state.resume_touch_status = f"⏳ Доступно в {server_next.strftime('%H:%M')}"
+                        else:
+                            # Сервер запретил publish, но не отдал время. Не вызываем
+                            # publish в этом проходе; свежий статус проверится в
+                            # следующем обычном цикле без ложного запроса на поднятие.
+                            state.next_resume_touch = now + timedelta(minutes=5)
+                            state.resume_touch_status = "⏳ HH пока не разрешает поднятие"
+                    elif fresh_status.get("can_publish_or_update"):
+                        self._add_log(state.short, state.color, "\U0001f4e4 Поднимаю резюме...", "info")
+                        success, message = touch_resume(acc)
+                        # Результат publish немедленно делает прежний cache статуса
+                        # недействительным. Следующее время берём только у HH.
+                        after_status = fetch_resume_status(acc, force=True)
+                        server_next = _server_next_publish_datetime(after_status)
+                        state.resume_free_touches = int(bool(after_status.get("can_publish_or_update")))
+                        if server_next and server_next > now:
+                            state.next_resume_touch = server_next
+                        else:
+                            # Защита на случай eventual consistency API: повторно
+                            # читаем статус позже, но publish без разрешения не шлём.
+                            state.next_resume_touch = now + timedelta(minutes=5)
+                        if success:
+                            state.resume_touch_status = "✅ Поднято!"
+                            self._add_log(
+                                state.short, state.color,
+                                f"✅ Резюме поднято! Следующая проверка в {state.next_resume_touch.strftime('%H:%M')}",
+                                "success",
+                            )
+                        else:
+                            state.resume_touch_status = f"⏳ {message}"
+                            self._add_log(
+                                state.short, state.color,
+                                f"\U0001f4e4 {message}. Следующая проверка статуса в {state.next_resume_touch.strftime('%H:%M')}",
+                                "warning",
+                            )
                     else:
-                        state.resume_touch_status = f"⏳ {message}"
-                        state.next_resume_touch = now + timedelta(hours=4)
-                        self._add_log(
-                            state.short, state.color,
-                            f"\U0001f4e4 {message}. Повтор в {state.next_resume_touch.strftime('%H:%M')}",
-                            "warning",
-                        )
+                        # Без подтверждённого разрешения от HH ручку publish не
+                        # вызываем. Сетевая ошибка статуса не должна вести к 429.
+                        state.next_resume_touch = now + timedelta(minutes=5)
+                        state.resume_touch_status = "⏳ Не удалось проверить доступность"
 
             # === ПРОВЕРКА ЛИМИТА ===
             if state.limit_exceeded:
@@ -1299,13 +1345,15 @@ class BotManager:
             for vid in unique_vacancies:
                 meta = state.vacancy_meta.get(vid, {})
                 title = (meta.get("title") or "").lower()
-                if title:
-                    if title_include_keywords and not any(k in title for k in title_include_keywords):
-                        title_skipped += 1
-                        continue
-                    if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
-                        title_skipped += 1
-                        continue
+                log_debug(f"Processing vacancy {vid}: {title}")
+                if not title:
+                    continue
+                if title_include_keywords and not any(k in title for k in title_include_keywords):
+                    title_skipped += 1
+                    continue
+                if title_exclude_keywords and any(k in title for k in title_exclude_keywords):
+                    title_skipped += 1
+                    continue
                 # HH сам метит вакансии меткой DISCARD когда нас уже отвергли —
                 # повторный отклик чаще всего бесполезен, экономим лимит/токены.
                 hh_labels = meta.get("hh_labels") or []
@@ -1432,7 +1480,7 @@ class BotManager:
                 r_offers = HH.get(
                     hh_base() + "/shards/applicant/negotiations/possible_job_offers",
                     headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "User-Agent": webview_user_agent(),
                         "Accept": "application/json",
                         "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                         "Referer": hh_base() + "/applicant/negotiations",
@@ -1960,7 +2008,7 @@ class BotManager:
         token = _obtain_oauth_token(acc)
         if not token:
             return {}, {}, {}
-        headers = {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {token}"}
+        headers = {"User-Agent": mobile_user_agent(), "Authorization": f"Bearer {token}"}
         url_pages = _url_pages_map()
         acc_url_pages = acc.get("url_pages", {})
         effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
@@ -2034,12 +2082,37 @@ class BotManager:
         headers = get_headers(xsrf)
         sem = asyncio.Semaphore(CONFIG.max_concurrent * 3)
 
-        # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
-        # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
-        connector = aiohttp.TCPConnector(
-            limit=CONFIG.max_concurrent * 3,
-            enable_cleanup_closed=True,
-        )
+        # Единый egress: collect тоже идёт через HH_PROXY, если задан (audit HIGH #5).
+        # socks → aiohttp-socks ProxyConnector; http(s) → proxy= на каждый запрос.
+        from app.hh_http import egress_proxy
+        proxy = (egress_proxy() or "").strip()
+        collect_req_kw: dict = {}
+        if proxy:
+            import urllib.parse as _urlparse
+            if _urlparse.urlparse(proxy).scheme.lower().startswith("socks"):
+                try:
+                    from aiohttp_socks import ProxyConnector
+                except ImportError as _e:
+                    raise RuntimeError(
+                        "HH_PROXY задаёт socks-прокси, но aiohttp-socks не установлен — "
+                        "прямой egress запрещён (засвет реального IP)"
+                    ) from _e
+                connector = ProxyConnector.from_url(proxy, limit=CONFIG.max_concurrent * 3)
+            else:
+                collect_req_kw = {"proxy": proxy}
+                # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
+                # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
+                connector = aiohttp.TCPConnector(
+                    limit=CONFIG.max_concurrent * 3,
+                    enable_cleanup_closed=True,
+                )
+        else:
+            # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
+            # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
+            connector = aiohttp.TCPConnector(
+                limit=CONFIG.max_concurrent * 3,
+                enable_cleanup_closed=True,
+            )
 
         all_tasks = []
         url_pages = _url_pages_map()
@@ -2076,7 +2149,7 @@ class BotManager:
                 nonlocal completed
                 if state._deleted:
                     return url, set(), {}, {}, {}
-                html = await fetch_page(session, page_url, sem)
+                html = await fetch_page(session, page_url, sem, collect_req_kw)
                 completed += 1
                 state.status_detail = f"Загрузка {completed}/{total_tasks}"
                 if html and _is_login_page(html):
@@ -2792,6 +2865,7 @@ class BotManager:
                 offers = fetch_hh_possible_offers(state.acc)
                 state.hh_possible_offers = offers
 
+                was_touch_available = state.resume_free_touches > 0
                 rs = fetch_resume_stats(state.acc)
                 state.resume_views_7d = rs["views"]
                 state.resume_views_new = rs["views_new"]
@@ -2800,6 +2874,17 @@ class BotManager:
                 state.resume_invitations_new = rs["invitations_new"]
                 state.resume_next_touch_seconds = rs["next_touch_seconds"]
                 state.resume_free_touches = rs["free_touches"]
+                # `resume_free_touches` и `next_resume_touch` раньше были двумя
+                # независимыми состояниями. Если HH только что сообщил, что
+                # публикация снова доступна, старый четырёхчасовой schedule не
+                # должен удерживать автоматический подъём.
+                if (
+                    state.resume_touch_enabled
+                    and not was_touch_available
+                    and state.resume_free_touches > 0
+                ):
+                    state.next_resume_touch = datetime.now()
+                    state.resume_touch_status = "🚀 Поднятие доступно"
                 state.resume_global_invitations = rs["global_invitations"]
                 state.resume_new_invitations_total = rs["new_invitations_total"]
 

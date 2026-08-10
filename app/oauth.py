@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import time
 import threading
 import urllib.parse
@@ -16,6 +17,8 @@ import requests
 from app.logging_utils import log_debug
 from app.config import CONFIG
 from app.hh_http import HH
+from app.mobile_auth import MobileAuthError
+from app.user_agent import mobile_user_agent
 
 # Эти креды извлечены из публичного APK HH Android и широко известны.
 # Не секрет: но желательно вынести в env для возможности замены.
@@ -40,6 +43,8 @@ _oauth_save_lock = threading.Lock()  # сериализует tmp+replace, чт�
 # HH ротирует refresh tokens — второй запрос получит invalid_grant. (swarm-7 #1)
 _oauth_refresh_locks: dict = {}  # {resume_hash: threading.Lock}
 _oauth_refresh_locks_lock = threading.Lock()
+
+_mobile_user_agent = mobile_user_agent  # backward-compatible internal alias
 
 
 def _account_key(acc: dict) -> str:
@@ -102,33 +107,44 @@ def _load_oauth_tokens():
     try:
         if _OAUTH_FILE.exists():
             with open(_OAUTH_FILE, "r", encoding="utf-8") as f:
-                _oauth_tokens = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                # Файл существует, но внутри не объект (битый/чужой JSON) — сбрасываем
+                log_debug("OAuth: token file does not contain a dict, resetting")
+                loaded = {}
+            _oauth_tokens = loaded
             log_debug(f"OAuth: loaded {len(_oauth_tokens)} tokens from disk")
-    except Exception as e:
+    except (OSError, ValueError) as e:
         log_debug(f"OAuth: failed to load tokens: {e}")
 
 
-def _save_oauth_tokens():
+def _save_oauth_tokens() -> bool:
     """Atomic persist (tmp + replace) of OAuth tokens to disk."""
     with _oauth_save_lock:
         try:
             _OAUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
             with _oauth_lock:
                 snapshot = dict(_oauth_tokens)
-            tmp = _OAUTH_FILE.with_suffix(".tmp")
+            # Уникальный tmp в той же директории: фиксированный .tmp конфликтовал
+            # между процессами и с backup-restore, который пишет свой .tmp.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=_OAUTH_FILE.parent, prefix=".oauth_tokens.", suffix=".tmp"
+            )
             try:
-                with open(tmp, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(snapshot, f, ensure_ascii=False, indent=2)
-                tmp.replace(_OAUTH_FILE)
-                try:
-                    os.chmod(_OAUTH_FILE, 0o600)  # secrets — owner-only
-                except Exception:
-                    pass
-            except Exception as e:
+                    f.flush()
+                    os.fsync(f.fileno())  # данные реально на диске до replace
+                os.chmod(tmp_path, 0o600)  # secrets — owner-only (до replace)
+                os.replace(tmp_path, _OAUTH_FILE)
+                return True
+            except (OSError, ValueError, TypeError) as e:
                 log_debug(f"OAuth: failed to save tokens: {e}")
-                tmp.unlink(missing_ok=True)
-        except Exception as e:
+                Path(tmp_path).unlink(missing_ok=True)
+                return False
+        except (OSError, ValueError, TypeError) as e:
             log_debug(f"OAuth: save outer error: {e}")
+            return False
 
 
 # Load on import
@@ -137,7 +153,7 @@ _load_oauth_tokens()
 try:
     if _OAUTH_FILE.exists():
         os.chmod(_OAUTH_FILE, 0o600)
-except Exception:
+except OSError:
     pass
 
 
@@ -161,6 +177,102 @@ def get_oauth_status(resume_hash: str) -> dict:
         "expires_hours": remaining,
         "has_refresh": bool(cached.get("refresh_token")),
     }
+
+
+def import_mobile_tokens(tokens: dict, resumes: list[dict], me: dict | None = None) -> int:
+    """Atomically merge an OTP token response into the existing OAuth store.
+
+    A plain resume-id key is intentionally used for compatibility with old accounts.
+    Existing entries are replaced only after the complete input has been validated.
+    """
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        raise ValueError("mobile token response has no access_token")
+    now = int(time.time())
+    expires_at = tokens.get("expires_at")
+    if expires_at is None:
+        expires_at = now + int(tokens.get("expires_in", 1209599))
+    clean = {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_in": int(tokens.get("expires_in", max(0, int(expires_at) - now))),
+        "expires_at": int(expires_at),
+        "obtained_at": int(tokens.get("obtained_at", now)),
+        "source": "mobile_otp",
+    }
+    keys = [str(r.get("id") or "").strip() for r in resumes if isinstance(r, dict)]
+    keys = list(dict.fromkeys(k for k in keys if k))
+    if not keys and isinstance(me, dict) and me.get("id") is not None:
+        keys = [f"mobile-user-{me['id']}"]
+    if not keys:
+        raise ValueError("cannot associate mobile tokens with a user or resume")
+    with _oauth_lock:
+        for key in keys:
+            _oauth_tokens[key] = dict(clean)
+    # Save outside _oauth_lock: _save_oauth_tokens takes the same lock for its snapshot.
+    if not _save_oauth_tokens():
+        raise MobileAuthError(
+            "Не удалось сохранить OAuth-токены на диске",
+            status_code=500,
+        )
+    return len(keys)
+
+
+def remove_mobile_tokens() -> int:
+    """Remove only tokens created by the mobile OTP flow."""
+    removed = 0
+    with _oauth_lock:
+        for key in list(_oauth_tokens):
+            if isinstance(_oauth_tokens.get(key), dict) and _oauth_tokens[key].get("source") == "mobile_otp":
+                _oauth_tokens.pop(key, None)
+                removed += 1
+    if removed:
+        # Save outside _oauth_lock (see import_mobile_tokens above).
+        _save_oauth_tokens()
+    return removed
+
+
+def _propagate_refresh_token(old_refresh: str, new_full: dict) -> int:
+    """Обновить ВСЕ записи, разделяющие old_refresh, новыми токенами.
+    Возвращает число обновлённых записей. Вызывать под refresh_lock,
+    ДО _save_oauth_tokens().
+
+    import_mobile_tokens копирует один refresh_token под каждый resume id
+    пользователя, а refresh идёт per-resume_hash: без propagation после
+    ротации только запись текущего резюме получает новый refresh_token,
+    а остальные копии идут в HH с уже ротированным токеном и получают
+    invalid_grant (аудит #4).
+    """
+    if not old_refresh:
+        return 0
+    updated = 0
+    with _oauth_lock:
+        for key, entry in _oauth_tokens.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("refresh_token") != old_refresh:
+                continue
+            # plain backward-compat ключи (без "::") пишутся без служебных
+            # полей на "_" — как и точечная запись в callers
+            plain_key = "::" not in key
+            for field, value in new_full.items():
+                if plain_key and field.startswith("_"):
+                    continue
+                entry[field] = value
+            updated += 1
+    return updated
+
+
+def _refresh_identity(cached: dict, fallback_ua: str) -> tuple[str, str, str]:
+    """Select OAuth credentials while always presenting the configured Android UA."""
+    mobile_ua = _mobile_user_agent()
+    if cached.get("source") == "mobile_otp":
+        try:
+            from app.mobile_auth import effective_config
+            cfg, _ = effective_config()
+            return cfg.oauth_client_id, cfg.oauth_client_secret, mobile_ua
+        except Exception:
+            pass
+    return _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, mobile_ua
 
 
 def _do_refresh(refresh: str, client_id: str, client_secret: str, ua: str, resume_hash: str = ""):
@@ -279,15 +391,16 @@ def _obtain_oauth_token(acc: dict) -> str:
             if _is_cached_valid(cached):
                 return cached["access_token"]
 
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ua = _mobile_user_agent()
 
         # Try refresh first
         with _oauth_lock:
             cached = _oauth_tokens.get(key, {})
         refresh = cached.get("refresh_token", "")
         if refresh:
-            token_data = _do_refresh(refresh, _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, ua, resume_hash)
-            if token_data is None and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
+            refresh_id, refresh_secret, refresh_ua = _refresh_identity(cached, ua)
+            token_data = _do_refresh(refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
+            if token_data is None and cached.get("source") != "mobile_otp" and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
                 token_data = _do_refresh(refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
             if token_data:
                 access_token = token_data["access_token"]
@@ -298,6 +411,7 @@ def _obtain_oauth_token(acc: dict) -> str:
                     "refresh_token": new_refresh,
                     "expires_at": time.time() + expires_in,
                     "_expires_monotonic": time.monotonic() + expires_in,
+                    **({"source": "mobile_otp"} if cached.get("source") == "mobile_otp" else {}),
                 }
                 with _oauth_lock:
                     _oauth_tokens[key] = token_data_full
@@ -305,6 +419,12 @@ def _obtain_oauth_token(acc: dict) -> str:
                     _oauth_tokens[resume_hash] = {
                         k: v for k, v in token_data_full.items() if not k.startswith("_")
                     }
+                # Propagate новые токены на ВСЕ записи с этим старым refresh_token —
+                # копии, созданные import_mobile_tokens под другие resume id
+                # (аудит #4). Если HH не ротировал refresh_token (вернул тот же),
+                # propagation обновит им expires_at; точечная запись выше остаётся
+                # обязательной.
+                _propagate_refresh_token(refresh, token_data_full)
                 _save_oauth_tokens()
                 log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
                 return access_token
@@ -392,7 +512,7 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
     Returns: {'checked': N, 'refreshed': K, 'failed': F}
     """
     threshold = time.time() + min_ttl_hours * 3600
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = _mobile_user_agent()
     with _oauth_lock:
         snapshot = list(_oauth_tokens.items())
     seen_refresh: set = set()
@@ -418,8 +538,9 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
             if latest.get("expires_at", 0) >= threshold:
                 continue  # обновили пока ждали лок
             latest_refresh = latest.get("refresh_token", "") or refresh
-            token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID, _HH_OAUTH_CLIENT_SECRET, ua, resume_hash)
-            if token_data is None and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
+            refresh_id, refresh_secret, refresh_ua = _refresh_identity(latest, ua)
+            token_data = _do_refresh(latest_refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
+            if token_data is None and latest.get("source") != "mobile_otp" and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
                 token_data = _do_refresh(latest_refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
             if not token_data:
                 stats["failed"] += 1
@@ -430,11 +551,17 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
                 "refresh_token": token_data["refresh_token"],
                 "expires_at": time.time() + token_data["expires_in"],
                 "_expires_monotonic": time.monotonic() + token_data["expires_in"],
+                **({"source": "mobile_otp"} if latest.get("source") == "mobile_otp" else {}),
             }
             with _oauth_lock:
                 _oauth_tokens[key] = new_full
                 # backward-compat plain key
                 _oauth_tokens[resume_hash] = {k: v for k, v in new_full.items() if not k.startswith("_")}
+            # Propagate новые токены на ВСЕ записи со старым refresh_token
+            # (копии от import_mobile_tokens под другие resume id — аудит #4):
+            # иначе следующий проактивный цикл предъявит HH уже ротированный
+            # токен и получит invalid_grant с разлогином.
+            _propagate_refresh_token(latest_refresh, new_full)
             _save_oauth_tokens()
             stats["refreshed"] += 1
             log_debug(f"OAuth proactive: refreshed {resume_hash[:12]} (+{token_data['expires_in']}s)")
@@ -471,7 +598,7 @@ def _oauth_headers(acc: dict) -> dict:
     tok = _obtain_oauth_token(acc)
     if not tok:
         return {}
-    return {"User-Agent": "hh-clicker/1.0", "Authorization": f"Bearer {tok}"}
+    return {"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {tok}"}
 
 
 def fetch_saved_vacancy_searches(acc: dict) -> list:
@@ -490,7 +617,7 @@ def fetch_saved_vacancy_searches(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/saved_searches/vacancies",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -522,7 +649,7 @@ def fetch_favorited_vacancies(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/favorited",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -551,7 +678,7 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/blacklisted",
-                             headers=H, params={"per_page": 50, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -756,29 +883,52 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
     return info
 
 
-def fetch_resume_status(acc: dict) -> dict:
-    """Resume status: published/blocked, finished, progress.percentage, moderation_note.
-    Cached 5 min."""
+def fetch_resume_status(acc: dict, force: bool = False) -> dict:
+    """Load resume state from the endpoint used by the Android application."""
     rh = acc.get("resume_hash", "")
     if not rh:
         return {}
+    if force:
+        with _extras_lock:
+            _extras_cache.pop(("resume_status", rh), None)
     def _do():
         H = _oauth_headers(acc)
         if not H:
             return None
-        r = HH.get(f"https://api.hh.ru/resumes/{rh}/status", headers=H, timeout=5)
+        resume_id = urllib.parse.quote(str(rh), safe="")
+        r = HH.get(
+            f"https://api.hh.ru/resumes/{resume_id}",
+            headers=H,
+            params={"with_professional_roles": "true", "with_creds": "true"},
+            timeout=5,
+        )
         if r.status_code != 200:
             return None
         d = r.json()
+        status = d.get("status") or {}
+        if isinstance(status, dict):
+            status_id = status.get("id", "")
+            status_name = status.get("name", "")
+        else:
+            status_id = str(status)
+            status_name = str(status)
+        progress = d.get("progress") or 0
+        if isinstance(progress, dict):
+            progress = progress.get("percentage", progress.get("percent", progress.get("value", 0)))
+        moderation_note = d.get("moderation_note") or []
+        if not isinstance(moderation_note, list):
+            moderation_note = [moderation_note]
         return {
-            "status_id": (d.get("status") or {}).get("id", ""),
-            "status_name": (d.get("status") or {}).get("name", ""),
+            "status_id": status_id,
+            "status_name": status_name,
             "blocked": bool(d.get("blocked")),
             "finished": bool(d.get("finished")),
-            "progress": int((d.get("progress") or {}).get("percentage", 0) or 0),
+            "can_publish_or_update": bool(d.get("can_publish_or_update")),
+            "next_publish_at": d.get("next_publish_at") or d.get("next_publish_date"),
+            "progress": int(progress or 0),
             "moderation_note": [
                 (n.get("name") if isinstance(n, dict) else str(n))
-                for n in (d.get("moderation_note") or [])
+                for n in moderation_note
             ],
         }
     return _extras_get("resume_status", rh, 300, _do) or {}
@@ -799,7 +949,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             data["message"] = message
         r = HH.post(
             "https://api.hh.ru/negotiations",
-            headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}",
+            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}",
                      "Content-Type": "application/x-www-form-urlencoded"},
             data=data, timeout=15,
         )
@@ -826,12 +976,24 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             if "test" in err.lower():
                 return "test", {}
             return "error", {"raw": err}
-        elif r.status_code in (401, 403):
+        elif r.status_code == 401:
             # Очищаем кэшированный токен: иначе manager на каждом следующем apply
             # будет переиспользовать тот же rejected токен → бесконечная петля 401.
             log_debug(f"OAuth apply auth_error for {resume_hash[:12]} vid={vid}")
             invalidate_oauth_token(resume_hash, acc)
             return "auth_error", {}
+        elif r.status_code == 403:
+            # 403 from POST /negotiations is normally a business-rule denial
+            # (vacancy restrictions, questionnaire, visibility), not an expired
+            # OAuth token. Invalidating here emptied oauth_tokens.json after a
+            # perfectly successful mobile login. Only 401 proves bad auth.
+            try:
+                detail = r.json()
+                errors = detail.get("errors", []) if isinstance(detail, dict) else []
+                raw = errors[0].get("value", "forbidden") if errors and isinstance(errors[0], dict) else "forbidden"
+            except Exception:
+                raw = "forbidden"
+            return "error", {"raw": raw, "http_status": 403}
         elif r.status_code == 404:
             return "error", {"raw": "Вакансия не найдена"}
         elif r.status_code == 429:
@@ -861,7 +1023,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
         resume_hash_quoted = urllib.parse.quote(resume_hash, safe="")
         r = HH.post(
             f"https://api.hh.ru/resumes/{resume_hash_quoted}/publish",
-            headers={"User-Agent": "Mozilla/5.0", "Authorization": f"Bearer {token}"},
+            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}"},
             timeout=15,
         )
         if r.status_code in (200, 204):
@@ -967,7 +1129,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         cid = int(str(chat_id).strip())
     except (ValueError, TypeError):
         return False
-    ua = "hh-clicker/1.0 (admin@example.com)"
+    ua = _mobile_user_agent()
     payload = {
         "text": text,
         "idempotency_key": str(_uuid.uuid4()),
@@ -1033,7 +1195,7 @@ def fetch_negotiations_statistic(acc: dict) -> dict:
     if not H:
         return {}
     # mobile-endpoint требует x-force-app-access + mobile UA (без них 406)
-    H = {**H, "x-force-app-access": "true", "User-Agent": "ru.hh.android/26.28.1"}
+    H = {**H, "x-force-app-access": "true", "User-Agent": _mobile_user_agent()}
     try:
         r = HH.get("https://api.hh.ru/negotiations_statistic/mine",
                    headers=H, timeout=8)

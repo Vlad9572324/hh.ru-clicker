@@ -14,6 +14,7 @@ from app.hh_chat import fetch_negotiation_thread
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
 from app.hh_http import is_impersonating, impersonate_version
+from app.user_agent import webview_user_agent
 from fastapi.responses import PlainTextResponse
 from pathlib import Path
 
@@ -73,7 +74,7 @@ async def api_debug_session(idx: int):
     if not raw_line:
         raw_line = "; ".join(f"{k}={v}" for k, v in ts.get("cookies", {}).items())
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Cookie": raw_line,
     }
@@ -166,7 +167,7 @@ async def api_debug_neg_ids(idx: int):
     acc = state.acc
     cookies = acc["cookies"]
     headers_req = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
     try:
@@ -241,7 +242,7 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
     acc = state.acc
     def _fetch():
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": webview_user_agent(),
             "Accept": "application/json, */*",
             "Referer": hh_base() + "/applicant/negotiations",
         }

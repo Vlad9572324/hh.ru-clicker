@@ -9,12 +9,14 @@ import time
 import threading
 import urllib.parse
 import requests
+from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
 from app.hh_http import HH
+from app.user_agent import webview_user_agent
 
 _resume_cache: dict = {}   # {resume_hash: (text, timestamp)}
 # RLock — reentrant: fetch_resume_text держит лок, потом вызывает _cleanup_resume_cache,
@@ -241,8 +243,7 @@ def fetch_resume_text(acc: dict) -> str:
         r = HH.get(
             f"{hh_base()}/resume/{resume_hash}",
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": webview_user_agent(),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Referer": hh_base() + "/applicant/resumes",
             },
@@ -266,6 +267,31 @@ def fetch_resume_text(acc: dict) -> str:
         return ""
 
 
+def _merge_oauth_publishability(result: dict, status: dict) -> None:
+    """Fill publish availability when the legacy SSR no longer exposes toUpdate."""
+    if not isinstance(status, dict) or not status:
+        return
+    if status.get("can_publish_or_update"):
+        result["free_touches"] = max(int(result.get("free_touches") or 0), 1)
+        result["next_touch_seconds"] = 0
+        return
+    if int(result.get("next_touch_seconds") or 0) > 0:
+        return
+    raw_next = status.get("next_publish_at")
+    if not raw_next:
+        return
+    try:
+        value = str(raw_next).strip().replace("Z", "+00:00")
+        next_dt = datetime.fromisoformat(value)
+        if next_dt.tzinfo is None:
+            next_dt = next_dt.replace(tzinfo=timezone.utc)
+        result["next_touch_seconds"] = max(
+            0, int((next_dt - datetime.now(timezone.utc)).total_seconds())
+        )
+    except (TypeError, ValueError):
+        pass
+
+
 def fetch_resume_stats(acc: dict) -> dict:
     """
     Статистика резюме за 7 дней + точный таймер поднятия.
@@ -273,7 +299,7 @@ def fetch_resume_stats(acc: dict) -> dict:
     next_touch_seconds, free_touches, global_invitations, new_invitations_total
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": hh_base() + "/",
     }
@@ -319,6 +345,15 @@ def fetch_resume_stats(acc: dict) -> dict:
 
     except Exception as e:
         log_debug(f"fetch_resume_stats error: {e}")
+    # `applicantResumes[].toUpdate` is a legacy web field and is absent in some
+    # current SSR responses. Android exposes the same decision as
+    # can_publish_or_update + next_publish_at on GET /resumes/{id}.
+    try:
+        from app.oauth import fetch_resume_status
+
+        _merge_oauth_publishability(result, fetch_resume_status(acc))
+    except Exception as e:
+        log_debug(f"fetch_resume_stats OAuth publishability fallback error: {e}")
     return result
 
 
@@ -329,7 +364,7 @@ def fetch_resume_view_history(acc: dict, limit: int = 50) -> list:
     """
     resume_hash = acc["resume_hash"]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": hh_base() + "/applicant/resumes",
     }
@@ -416,7 +451,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
     if not resume_hash:
         return {"error": "Нет resume_hash"}
     cookies = acc.get("cookies", {})
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = webview_user_agent()
 
     try:
         # 1. Fetch resume page SSR
@@ -782,7 +817,7 @@ def _analyze_resume(acc: dict, extra_terms: list = None) -> dict:
 
 def _edit_resume_field(acc: dict, resume_hash: str, fields: dict) -> dict:
     """Edit resume fields via POST /applicant/resume/edit. Returns {ok, error}."""
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = webview_user_agent()
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
         # Warm up session (DDoS Guard needs a GET first)
@@ -836,7 +871,7 @@ def set_job_search_status(acc: dict, status: str) -> dict:
     status = (status or "").strip().lower()
     if status not in _JOB_SEARCH_STATUSES:
         return {"ok": False, "error": f"Неизвестный статус: {status!r}. Доступные: {list(_JOB_SEARCH_STATUSES)}"}
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     xsrf = (acc.get("cookies") or {}).get("_xsrf", "")
     try:
         r = HH.put(
@@ -865,7 +900,7 @@ def fetch_account_diagnostics(acc: dict) -> dict:
     Возвращает {status: str|None, red_flags: [str], stats: {...}, resumes: [{...}]}
     red_flags — список понятных строк, которые надо показать юзеру.
     """
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     out = {"status": None, "status_label": None, "red_flags": [], "stats": {}, "resumes": []}
     try:
         r = HH.get(
@@ -957,7 +992,7 @@ def fetch_resume_views_aggregate(acc: dict) -> dict:
     resume_hash = acc.get("resume_hash") or acc.get("resume", {}).get("hash") or ""
     if not resume_hash:
         return {"total_all_time": 0, "total_new": 0, "graph_30d": []}
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0"
+    ua = webview_user_agent()
     out = {"total_all_time": 0, "total_new": 0, "graph_30d": []}
     try:
         r = HH.get(

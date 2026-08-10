@@ -12,6 +12,7 @@ import requests
 from fastapi import APIRouter, Request
 
 from app.logging_utils import log_debug, _is_login_page
+from app.user_agent import webview_user_agent
 from app.config import accounts_data, save_accounts, hh_base
 from app.storage import save_browser_sessions
 from app.oauth import (
@@ -663,7 +664,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
     if not acc:
         return {"ok": False, "error": "Invalid idx"}
     def _do():
-        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        ua = webview_user_agent()
         r = requests.get(
             f"{hh_base()}/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
             headers={"User-Agent": ua, "Accept": "text/html"},
@@ -759,7 +760,7 @@ async def api_hot_leads(idx: int):
         r = requests.get(
             hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": webview_user_agent(),
                 "Accept": "application/json",
                 "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                 "Referer": hh_base() + "/applicant/negotiations",
@@ -790,7 +791,7 @@ async def api_remindable(idx: int):
     acc = bot._get_apply_acc(idx)
     if acc is None:
         return {"ok": False, "error": "Invalid idx"}
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ua = webview_user_agent()
     try:
         r = requests.get(
             hh_base() + "/applicant/negotiations",
@@ -849,7 +850,7 @@ async def api_clone_resume(idx: int, request: Request):
         r = requests.post(
             hh_base() + "/applicant/resumes/clone",
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": webview_user_agent(),
                 "Accept": "application/json",
                 "X-Xsrftoken": xsrf,
                 "Content-Type": "application/x-www-form-urlencoded",
@@ -870,7 +871,7 @@ async def api_clone_resume(idx: int, request: Request):
             if not new_hash:
                 return {"ok": True, "new_hash": "", "message": "Склонировано, но hash не получен"}
 
-            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ua = webview_user_agent()
             r_orig = requests.get(f"{hh_base()}/resume/{resume_hash}",
                 headers={"User-Agent": ua, "Accept": "text/html"},
                 cookies=acc.get("cookies", {}), timeout=15)
@@ -967,7 +968,7 @@ async def api_all_resumes(idx: int):
     acc = bot._get_apply_acc(idx)
     if acc is None:
         return {"ok": False, "error": "Invalid idx"}
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    ua = webview_user_agent()
     try:
         r = requests.get(
             hh_base() + "/applicant/resumes",
@@ -1019,7 +1020,7 @@ _URL_PREVIEW_MAX = 200
 def _url_preview_compute(url: str, cookies: dict) -> dict:
     """Достать кол-во вакансий + (если возможно) кол-во активных соискателей по URL."""
     import urllib.parse as _up
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    ua = webview_user_agent()
     result = {"vacancies": 0, "seekers": 0, "ratio": 0.0}
     try:
         # 1. Vacancies count — фетчим URL как есть, парсим SSR.

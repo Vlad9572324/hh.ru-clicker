@@ -67,6 +67,22 @@ def log_exception(message: str, exc: Exception | None = None, **fields):
     log_debug(" | ".join(parts) + "\n" + traceback.format_exc())
 
 
+def _mask(value: str | None, keep: int = 2) -> str:
+    """Маскировать чувствительное значение для логов: оставить keep первых символов,
+    остальное заменить на '*'. Пустое/None → '***'.
+
+    Использование: телефоны (_mask('+79161234567') → '+7********'),
+    токены (_mask('token-abc-123') → 'to********'), email, SMS-коды, пароли.
+    Длина хвоста скрывается (не более 8 звёздочек), чтобы не раскрывать
+    полную длину значения."""
+    if not value:
+        return "***"
+    value = str(value)
+    if len(value) <= keep:
+        return "***"
+    return value[:keep] + "*" * min(len(value) - keep, 8)
+
+
 def _is_login_page(html: str) -> bool:
     """Определить, является ли HTML страница страницей входа HH (протухшие куки)."""
     if not html:
