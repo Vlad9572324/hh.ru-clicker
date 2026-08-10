@@ -287,7 +287,7 @@ query-параметров → 400). Текст в `body.text.content` (не в�
 
 ```json
 {"id": 14932421768, "participant_id": "153336782-APPLICANT_USER",
- "participant_display": {"name": "Мария Выучейская", "is_bot": false},
+ "participant_display": {"name": "Тестовый Пользователь", "is_bot": false},
  "created_at": "2026-07-30T03:48:33+0300", "type": "SIMPLE",
  "body": {"text": {"content": "Здравствуйте! ..."}},
  "workflow_transition": {"id": "14932421765", "topic_id": "5465575576",
@@ -522,9 +522,9 @@ Mobile: 🔜 phase 3. Составной кандидат (гр.2): `GET /vacanc
 
 ```json
 {"counters": {"suitable": 0, "not_published": 0, "already_applied": 1, "unavailable": 0},
- "resume_inconsistencies": {"4b08137aff0e...": [
+ "resume_inconsistencies": {"RESUME_HASH_EXAMPLE...": [
    {"type": "DISTANCE", "actual": "1498.66", "required": "30.0"}]},
- "already_applied": [{"id": "4b08137aff0e...", "title": "Тестировщик ПО / Автоматизация", "...": "..."}]}
+ "already_applied": [{"id": "RESUME_HASH_EXAMPLE...", "title": "Тестировщик ПО / Автоматизация", "...": "..."}]}
 ```
 
 #### B18. check_limit
@@ -612,10 +612,10 @@ Mobile: 🔜 phase 4. `GET /resumes/{resume_id}` (гр.2, live) — полное
 JSON. Пример начала объекта (live-проба):
 
 ```json
-{"last_name": "Выучейская", "first_name": "Мария",
+{"last_name": "Пользователь", "first_name": "Тестовый",
  "title": "Тестировщик ПО / Автоматизация",
  "total_experience": {"months": 36},
- "id": "4b08137aff0e8512b70039ed1f516f62495877", "...": "..."}
+ "id": "RESUME_HASH_EXAMPLE", "...": "..."}
 ```
 
 ПДн — не логировать в открытом виде (примечание гр.2).
@@ -756,9 +756,9 @@ Mobile (реализовано): `GET https://api.hh.ru/me?with_user_statuses=tr
 Форма ответа (гр.5, live-пробы):
 
 ```json
-{"auth_type": "applicant", "id": "176187251",
+{"auth_type": "applicant", "id": "USER_ID_EXAMPLE",
  "first_name": "...", "last_name": "...",
- "crypted_id": "1942DC67...",
+ "crypted_id": "CRYPTED_ID_EXAMPLE...",
  "counters": {"new_resume_views": 938, "unread_negotiations": 428, "resumes_count": 1},
  "user_statuses": {"job_search_status": {"id": "...", "name": "Активно ищу работу"}}}
 ```

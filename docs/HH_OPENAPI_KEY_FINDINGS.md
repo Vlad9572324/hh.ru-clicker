@@ -51,7 +51,7 @@ Official OAuth alternative to our reverse-engineered chatik.hh.ru:
 - Title: `HeadHunter API` — public dev portal, not a staging server.
 - `/admin` — developer "personal cabinet" (where you register OAuth
   applications). Pages through with our applicant cookies; we are
-  logged in as user_id 176187251 and offered the «Регистрация нового
+  logged in as user_id USER_ID_EXAMPLE and offered the «Регистрация нового
   приложения» form.
 - Linked sister domains found in `permittedHosts` allowlist:
   hr.zarplata.ru, talantix.ru, career.ru, livehh.ru, joblist.ru,

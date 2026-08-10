@@ -38,7 +38,7 @@ WEB_KEYS = (
 # ---------------------------------------------------------------------------
 
 ME_RESPONSE = {
-    "id": "176187251",
+    "id": "USER_ID_EXAMPLE",
     "counters": {
         "new_resume_views": 3,
         "unread_negotiations": 428,

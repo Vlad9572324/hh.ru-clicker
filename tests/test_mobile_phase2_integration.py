@@ -115,7 +115,7 @@ CHAT_LIST_RESPONSE = {
     "participants": {
         "163778010-EMPLOYER_USER": {"display": {"name": "Анна"}},
         "153336782-APPLICANT_USER": {
-            "display": {"name": "Мария Выучейская"},
+            "display": {"name": "Тестовый Пользователь"},
             "is_current_user": True,
         },
     },
@@ -144,7 +144,7 @@ CHAT_THREAD_RESPONSE = {
                 {
                     "id": 14932421767,
                     "participant_id": "153336782-APPLICANT_USER",
-                    "participant_display": {"name": "Мария Выучейская", "is_bot": False},
+                    "participant_display": {"name": "Тестовый Пользователь", "is_bot": False},
                     "created_at": "2026-07-29T12:00:00+0300",
                     "type": "SIMPLE",
                     "body": {"text": {"content": "Здравствуйте! Откликнулась на вакансию."}},
@@ -165,7 +165,7 @@ CHAT_THREAD_RESPONSE = {
     },
     "participants": {
         "163778010-EMPLOYER_USER": {"display": {"name": "Анна"}},
-        "153336782-APPLICANT_USER": {"display": {"name": "Мария Выучейская"}},
+        "153336782-APPLICANT_USER": {"display": {"name": "Тестовый Пользователь"}},
     },
     "resources": {"negotiations": {"5465575576": {"state": {"id": "response"}}}},
     "chat_states": {"write_message_state": {"allowed": True, "reasons": []}},

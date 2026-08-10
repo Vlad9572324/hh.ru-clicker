@@ -18,7 +18,7 @@ from app.state import AccountState
 ME_URL = "https://api.hh.ru/me"
 COUNTERS_URL = "https://api.hh.ru/counters/user"
 
-ME_BODY = {"id": "176187251"}
+ME_BODY = {"id": "USER_ID_EXAMPLE"}
 COUNTERS_BODY = {
     "unread_chats": 100,
     "unread_negotiations": 431,
@@ -68,7 +68,7 @@ def test_counters_v2_happy_path(client):
     assert resp.status_code == 200
     j = resp.json()
     assert j["ok"] is True
-    assert j["user_id"] == "176187251"
+    assert j["user_id"] == "USER_ID_EXAMPLE"
     assert j["counters"]["unread_chats"] == 100
     assert j["counters"]["unread_negotiations"] == 431
     assert j["counters"]["new_resume_views"] == 938
@@ -81,7 +81,7 @@ def test_counters_v2_happy_path(client):
     ctr = _counters_calls()
     assert len(ctr) == 1
     req = ctr[0].request
-    assert "uuid=176187251" in req.url
+    assert "uuid=USER_ID_EXAMPLE" in req.url
     assert req.headers["Authorization"] == "Bearer test-oauth-token"
     assert req.headers["User-Agent"] == "ru.hh.android/26.28.1"
     assert req.headers["x-force-app-access"] == "true"

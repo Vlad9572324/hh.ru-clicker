@@ -36,7 +36,7 @@ NEG_HISTORY = {
                 {
                     "id": 14932421768,
                     "participant_id": "153336782-APPLICANT_USER",
-                    "participant_display": {"name": "Мария Выучейская", "is_bot": False},
+                    "participant_display": {"name": "Тестовый Пользователь", "is_bot": False},
                     "created_at": "2026-07-30T03:48:33+0300",
                     "type": "SIMPLE",
                     "body": {"text": {"content": "Здравствуйте! Я выражаю искренний интерес к вашей компании."}},
@@ -102,7 +102,7 @@ BOT_HISTORY = {
                 {
                     "id": 15043347546,
                     "participant_id": "153336782-APPLICANT_USER",
-                    "participant_display": {"name": "Мария Выучейская", "is_bot": False},
+                    "participant_display": {"name": "Тестовый Пользователь", "is_bot": False},
                     "type": "SIMPLE",
                     "body": {"text": {"content": "Ищу работу в продажах"}},
                 },
@@ -165,7 +165,7 @@ def test_fetch_thread_last_from_applicant_no_reply(acc):
     payload["chat"]["messages"]["items"].append({
         "id": 15030336999,
         "participant_id": "153336782-APPLICANT_USER",
-        "participant_display": {"name": "Мария Выучейская", "is_bot": False},
+        "participant_display": {"name": "Тестовый Пользователь", "is_bot": False},
         "type": "SIMPLE",
         "body": {"text": {"content": "Поняла, спасибо за ответ!"}},
     })
