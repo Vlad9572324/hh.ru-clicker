@@ -89,9 +89,14 @@ async def api_vacancy_hr_activity(id: str, account_idx: int = 0):
     # vid — только цифры: защищаем конструирование URL от path-injection.
     if not re.fullmatch(r"\d+", id or ""):
         return _err(404, "invalid_vacancy_id")
-    if not (0 <= account_idx < len(bot.account_states)):
-        return _err(404, "invalid_account_idx")
-    acc = bot.account_states[account_idx].acc
+    idx_arg = account_idx
+
+    acc = bot._get_apply_acc(idx_arg)
+
+    if acc is None:
+
+
+        return JSONResponse({"ok": False, "error": "account not found"}, status_code=404)
 
     # Кэш-хит — без OAuth и без HTTP к HH.
     now = time.monotonic()

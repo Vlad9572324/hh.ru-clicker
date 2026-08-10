@@ -134,9 +134,14 @@ def _do_recommend(acc: dict) -> dict:
 @router.post("/api/account/{idx}/skills_recommend")
 async def api_skills_recommend(idx: int):
     """Skills gap: какие skills ML HH советует добавить в резюме аккаунта."""
-    if not (0 <= idx < len(bot.account_states)):
-        return _err(404, "account_not_found")
-    acc = bot.account_states[idx].acc
+    idx_arg = idx
+
+    acc = bot._get_apply_acc(idx_arg)
+
+    if acc is None:
+
+
+        return JSONResponse({"ok": False, "error": "account not found"}, status_code=404)
     if not acc.get("resume_hash", ""):
         return _err(400, "no_resume")
     loop = asyncio.get_event_loop()

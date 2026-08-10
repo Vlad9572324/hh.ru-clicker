@@ -149,4 +149,4 @@ def test_counters_v2_no_token_returns_400(client, monkeypatch):
 def test_counters_v2_invalid_idx_returns_404(client):
     resp = client.get("/api/account/99/counters_v2")
     assert resp.status_code == 404
-    assert resp.json() == {"ok": False, "error": "invalid_idx"}
+    assert resp.json() == {"ok": False, "error": "account not found"}

@@ -110,7 +110,7 @@ def test_invalid_idx(client):
     """idx вне диапазона (и отрицательный) → 404 invalid_idx."""
     r = client.post("/api/account/99/autologin_url")
     assert r.status_code == 404
-    assert r.json() == {"ok": False, "error": "invalid_idx"}
+    assert r.json() == {"ok": False, "error": "account not found"}
 
     r2 = client.post("/api/account/-1/autologin_url")
     assert r2.status_code == 404

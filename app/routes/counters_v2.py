@@ -134,9 +134,14 @@ def _fetch_counters_v2(idx: int, acc: dict, token: str) -> dict:
 @router.get("/api/account/{idx}/counters_v2")
 async def api_account_counters_v2(idx: int):
     """Extended counters аккаунта для header-dashboard (💬/📮/👁️/🔔)."""
-    if not (0 <= idx < len(bot.account_states)):
-        return _err(404, "invalid_idx")
-    acc = bot.account_states[idx].acc
+    idx_arg = idx
+
+    acc = bot._get_apply_acc(idx_arg)
+
+    if acc is None:
+
+
+        return JSONResponse({"ok": False, "error": "account not found"}, status_code=404)
 
     loop = asyncio.get_event_loop()
     token = await loop.run_in_executor(None, _obtain_oauth_token, acc)

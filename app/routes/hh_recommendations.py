@@ -48,11 +48,9 @@ def _fetch_offers(token: str):
 @router.get("/api/account/{idx}/hh_recommendations")
 async def api_hh_recommendations(idx: int):
     """Список рекомендованных HH вакансий для аккаунта idx."""
-    if idx < 0 or idx >= len(bot.account_states):
-        return JSONResponse(
-            {"ok": False, "error": "account not found"}, status_code=404
-        )
-    acc = bot.account_states[idx].acc
+    acc = bot._get_apply_acc(idx)
+    if acc is None:
+        return JSONResponse({"ok": False, "error": "account not found"}, status_code=404)
 
     loop = asyncio.get_event_loop()
     token = await loop.run_in_executor(None, _obtain_oauth_token, acc)

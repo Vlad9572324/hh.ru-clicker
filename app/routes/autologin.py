@@ -133,9 +133,14 @@ def _build_autologin_url(acc: dict):
 @router.post("/api/account/{idx}/autologin_url")
 async def api_autologin_url(idx: int):
     """Одноразовый URL для входа в web-версию hh.ru без пароля (autologin bridge)."""
-    if idx < 0 or idx >= len(bot.account_states):
-        return JSONResponse({"ok": False, "error": "invalid_idx"}, status_code=404)
-    acc = bot.account_states[idx].acc
+    idx_arg = idx
+
+    acc = bot._get_apply_acc(idx_arg)
+
+    if acc is None:
+
+
+        return JSONResponse({"ok": False, "error": "account not found"}, status_code=404)
     loop = asyncio.get_event_loop()
     try:
         url, err = await loop.run_in_executor(None, _build_autologin_url, acc)
