@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0] - 2026-08-10
+
+### Added
+
+- Завершён mobile migration roadmap Phase 0–5: OTP/OAuth, переговоры, отклики,
+  резюме, skills, job status и mobile-first fallback.
+- Вкладка HH Хэдди, WebSocket realtime и восемь UI-интеграций: HR-ranking,
+  pre-flight, skill verifications, counters/streak, resume recommendations,
+  autologin, account mode selector и WS toggle.
+- Актуальные маскированные SVG screenshots и новый user/data-protection guide.
+
+### Security
+
+- Всегда закрытый API-key endpoint `/api/backup`, mandatory key для внешнего
+  bind, CSP/security headers, per-account cookie jars, per-user OAuth refresh
+  locks и OTP lockout (5 попыток / 15 минут).
+
 Все значимые изменения проекта **hh.ru-clicker** документируются в этом файле.
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 
