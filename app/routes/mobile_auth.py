@@ -13,6 +13,7 @@ from app.mobile_auth import (
     upsert_browser_sessions,
 )
 from app.oauth import import_mobile_tokens, remove_mobile_tokens
+from app.logging_utils import log_debug
 
 
 router = APIRouter(prefix="/api/mobile-auth", tags=["mobile-auth"])
@@ -110,39 +111,50 @@ def _request_code(body: RequestCodeBody):
 
 def _verify_code(body: VerifyBody):
     client = HHMobileClient()
+    log_debug("mobile_auth verify: login start")
     tokens, me, resumes = client.login(body.code.strip())
+    log_debug(f"mobile_auth verify: login done, resumes={len(resumes)}")
     # Успешный вход должен материализовать настройки даже при значениях по умолчанию.
     save_config({})
     try:
+        log_debug("mobile_auth verify: import_mobile_tokens start")
         imported = import_mobile_tokens(tokens, resumes, me)
+        log_debug(f"mobile_auth verify: import_mobile_tokens done, imported={imported}")
     except (TypeError, ValueError, OSError) as exc:
+        log_debug(f"mobile_auth verify: import_mobile_tokens error: {type(exc).__name__}: {exc}")
         raise MobileAuthError("Токены получены, но не удалось безопасно обновить oauth_tokens.json") from exc
-    vacancy_error = ""
+
+    # Similar vacancies are an optional, potentially multi-minute operation.
+    # They are loaded lazily by the regular account UI after verify.
     vacancies_count = 0
     try:
-        vacancies = client.collect_vacancies(tokens["access_token"], resumes)
-        vacancies_count = sum(len(v.get("items", [])) for v in vacancies["by_resume"].values())
-    except MobileAuthError as exc:
-        vacancy_error = str(exc)
-    browser_error = ""
-    browser_sessions = 0
-    try:
+        log_debug("mobile_auth verify: create_browser_cookies start")
         cookies = client.create_browser_cookies(tokens["access_token"], me)
+        log_debug(f"mobile_auth verify: create_browser_cookies done, cookies={len(cookies)}")
+        log_debug("mobile_auth verify: upsert_browser_sessions start")
         browser_sessions = upsert_browser_sessions(cookies, me, resumes)
+        log_debug(f"mobile_auth verify: upsert_browser_sessions done, sessions={browser_sessions}")
     except MobileAuthError as exc:
-        browser_error = str(exc)
+        log_debug(f"mobile_auth verify: browser session error: {type(exc).__name__}: {exc}")
+        raise MobileAuthError(
+            f"Вход выполнен, но аккаунт не добавлен: {exc}",
+            status_code=exc.status_code,
+        ) from exc
+    if browser_sessions <= 0:
+        log_debug("mobile_auth verify: upsert_browser_sessions returned zero")
+        raise MobileAuthError("Вход выполнен, но браузерная сессия не создана", status_code=500)
     clear_auth_state()
     return {
         "ok": True, "stage": "authenticated", "user": {
             "id": me.get("id"), "first_name": me.get("first_name"), "last_name": me.get("last_name"),
         },
         "resumes": len(resumes), "oauth_tokens_imported": imported,
-        "vacancies_count": vacancies_count, "vacancies_error": vacancy_error,
+        "vacancies_count": vacancies_count, "vacancies_deferred": True, "vacancies_error": "",
         "browser_session_created": browser_sessions > 0,
         "browser_sessions_updated": browser_sessions,
         "browser_session_note": (
             f"Обновлено браузерных сессий: {browser_sessions}."
-            if browser_sessions else f"OAuth работает, но браузерная сессия не создана: {browser_error}"
+            if browser_sessions else "Браузерная сессия не создана"
         ),
     }
 
