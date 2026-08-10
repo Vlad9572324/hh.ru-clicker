@@ -211,6 +211,30 @@ web-flow (cookies hh.ru + `chatik.hh.ru`) и новый **mobile API**
   `chatik.hh.ru/api/send`. ToS-compliant путь
 - `_oauth_apply` для откликов через official API (опц.)
 
+### 📱 Авторизация по телефону или email
+
+В разделе **Настройки → Авторизация по телефону / email** доступен штатный
+двухэтапный OTP-поток Android-клиента HH: отправка SMS/письма и подтверждение
+одноразовым кодом. Код отправляется только по нажатию кнопки. После входа токены
+сразу атомарно записываются в существующий `data/oauth_tokens.json` для найденных
+резюме.
+
+Расширенный блок позволяет менять пакет и версию приложения, модель устройства,
+Android release, стабильный UUID, шаблон User-Agent и client credentials. Приоритет
+источников: **web → environment → file → default**. Поддерживаются переменные
+`HH_APP_PACKAGE`, `HH_APP_VERSION_NAME`, `HH_APP_VERSION_CODE`,
+`HH_USER_AGENT_TEMPLATE`, `HH_APP_CLIENT_TOKEN`, `HH_OAUTH_CLIENT_ID`,
+`HH_OAUTH_CLIENT_SECRET`, `HH_DEVICE_MODEL`, `HH_ANDROID_RELEASE`,
+`HH_DEVICE_UUID`, `HH_API_BASE_URL`. Настройки сохраняются в namespaced-объекте
+`mobile_auth` основного `data/config.json`; секретные значения маскируются в API и UI.
+
+После OAuth-входа используется штатный Android-мост autologin:
+`GET /autologin_key/{hhid}` и переход на разрешённый HTTPS URL hh.ru с одноразовым
+`loginkey`. Cookies из ответа (`hhtoken`, `hhuid`, `_xsrf`) вместе с `crypted_id`
+из `/me` атомарно добавляются в `browser_sessions.json`. Переходы на внешние домены
+запрещены; если HH не выдаёт обязательные cookies, OAuth остаётся рабочим, а
+браузерная сессия не создаётся.
+
 ### 🛠 Инфраструктура
 
 - **Backup/restore** — единый JSON со всем (config + accounts +

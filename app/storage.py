@@ -364,8 +364,8 @@ def _strip_sensitive_session_fields(s: dict) -> dict:
     return out
 
 
-def save_browser_sessions(sessions: list):
-    """Сохранить браузерные сессии в файл (в фоновом потоке)."""
+def save_browser_sessions(sessions: list, *, wait: bool = False):
+    """Сохранить браузерные сессии; ``wait`` нужен для transactional flows."""
     snapshot = [_strip_sensitive_session_fields(copy.deepcopy(s)) for s in sessions]
     def _write():
         with _save_sessions_lock:
@@ -378,7 +378,12 @@ def save_browser_sessions(sessions: list):
             except Exception as e:
                 log_debug(f"save_browser_sessions error: {e}")
                 tmp.unlink(missing_ok=True)
-    _schedule_save(_write)
+                if wait:
+                    raise
+    if wait:
+        _write()
+    else:
+        _schedule_save(_write)
 
 
 def _restrict_perms(path):

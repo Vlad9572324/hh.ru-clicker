@@ -323,6 +323,14 @@ def save_config():
     _url_pages_map_cache = None
     def _write():
         with _config_write_lock:
+            # Mobile OTP settings live in the same config.json under a namespaced
+            # object. Preserve them when the legacy bot Config is saved.
+            try:
+                existing = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+                if isinstance(existing, dict) and isinstance(existing.get("mobile_auth"), dict):
+                    data["mobile_auth"] = existing["mobile_auth"]
+            except (OSError, json.JSONDecodeError):
+                pass
             tmp = CONFIG_FILE.with_suffix(".tmp")
             try:
                 with open(tmp, "w", encoding="utf-8") as f:

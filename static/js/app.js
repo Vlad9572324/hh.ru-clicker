@@ -2928,6 +2928,10 @@ function renderAll(snap) {
   syncScheduleSettings(snap);
   syncAuditSelector(snap);
   updateLlmStatusBar(snap);
+  // Sliders are built before the first WebSocket snapshot arrives. Without this
+  // sync they keep their HTML minimum and the value label stays as an em dash
+  // until the user switches away from Settings and back.
+  if (State.currentTab === 'settings') syncSettingsSliders(snap);
   updatePageTitle(snap);
   checkNotifications(snap);
   if (State.currentTab === 'main') renderMain(snap);
@@ -3217,7 +3221,7 @@ function buildCardHTML(acc) {
         onclick="llmToggleAccount(${acc.idx},this)" title="LLM авто-ответы на сообщения HR">💬 Ответы</button>
       <button class="btn-sm" style="font-size:9px;padding:1px 5px;color:var(--green);border-color:var(--green)"
         onclick="llmRunNow(this)" title="Проверить чаты и ответить прямо сейчас">🔄 Сейчас</button>
-      ${acc.temp && !acc.bot_active ? `<button class="btn-sm" style="color:var(--green);border-color:var(--green)" onclick="sessionActivate(${acc.idx})">${t('btn_launch')}</button>` : ''}
+      ${acc.temp && !acc.bot_active ? `<button class="btn-sm" style="color:var(--green);border-color:var(--green)" onclick="sessionActivate(${acc.idx}, this)">${t('btn_launch')}</button>` : ''}
       ${acc.temp && acc.bot_active ? `<button class="btn-sm" style="color:var(--orange);border-color:var(--orange)" onclick="sessionDeactivate(${acc.idx},this)" title="Остановить бот для этого аккаунта (сессия сохранится — можно запустить снова)">🛑 Стоп</button>` : ''}
       ${acc.temp ? `<button class="btn-sm" style="color:var(--red);border-color:var(--red)" onclick="sessionRemove(${acc.idx})">${t('btn_delete')}</button>` : ''}
     </div>
@@ -4620,11 +4624,24 @@ async function sessionRefresh(idx) {
   // snapshot will update via WS
 }
 
-async function sessionActivate(idx) {
-  const res = await fetch('/api/session/' + idx + '/activate', {method: 'POST'});
-  const data = await res.json();
-  if (data.status !== 'ok') {
-    alert('Ошибка: ' + data.message);
+async function sessionActivate(idx, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Запуск…'; }
+  try {
+    const res = await fetch('/api/session/' + idx + '/activate', {method: 'POST'});
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (_) {}
+    if (!res.ok || data.status !== 'ok') {
+      const reason = data.message || data.error || data.detail || text || `HTTP ${res.status}`;
+      alert('Ошибка: ' + reason);
+      if (btn) { btn.disabled = false; btn.textContent = '▶ Запустить'; }
+      return;
+    }
+    // Snapshot will redraw the card. Keep the button disabled meanwhile to
+    // prevent a second activation request racing the first one.
+  } catch (e) {
+    alert('Сетевая ошибка: ' + (e?.message || String(e)));
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Запустить'; }
   }
 }
 
@@ -6240,6 +6257,204 @@ function exportDbCSV() {
 
 // ── Keyboard shortcuts ─────────────────────────────────────────
 const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'hh','7':'views','8':'apply','9':'settings','0':'hedi'};
+
+// ── HH mobile OTP authentication ───────────────────────────
+const MOBILE_AUTH_FIELDS = [
+  ['app_package', 'APP_PACKAGE'], ['app_version_name', 'APP_VERSION_NAME'],
+  ['app_version_code', 'APP_VERSION_CODE'], ['device_model', 'Device model'],
+  ['android_release', 'Android release'], ['device_uuid', 'Device UUID'],
+  ['user_agent_template', 'DEFAULT_USER_AGENT'], ['base_url', 'API base URL'],
+  ['app_client_token', 'APP_CLIENT_TOKEN', true], ['oauth_client_id', 'OAUTH_CLIENT_ID'],
+  ['oauth_client_secret', 'OAUTH_CLIENT_SECRET', true],
+];
+let mobileAuthLoginType = 'email';
+let mobileAuthTimer = null;
+
+function mobileAuthType(kind) {
+  mobileAuthLoginType = kind;
+  const phone = document.getElementById('ma-type-phone');
+  const email = document.getElementById('ma-type-email');
+  if (!phone || !email) return;
+  phone.style.background = kind === 'phone' ? 'var(--cyan)' : 'transparent';
+  phone.style.color = kind === 'phone' ? '#000' : 'var(--dim)';
+  email.style.background = kind === 'email' ? 'var(--cyan)' : 'transparent';
+  email.style.color = kind === 'email' ? '#000' : 'var(--dim)';
+  const input = document.getElementById('ma-login');
+  input.type = kind === 'email' ? 'email' : 'tel';
+  input.placeholder = kind === 'email' ? 'name@example.com' : '+79991234567';
+}
+
+function mobileAuthFormValues() {
+  const values = {};
+  MOBILE_AUTH_FIELDS.forEach(([key]) => {
+    const el = document.getElementById('ma-cfg-' + key);
+    if (el) values[key] = key === 'app_version_code' ? Number(el.value) : el.value;
+  });
+  return values;
+}
+
+function mobileAuthRenderConfig(data) {
+  const grid = document.getElementById('ma-config-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  MOBILE_AUTH_FIELDS.forEach(([key, label, secret]) => {
+    const box = document.createElement('label');
+    box.style.cssText = 'display:grid;gap:3px;color:var(--dim);font-size:11px';
+    const source = data.sources?.[key] || 'default';
+    box.innerHTML = `<span>${label} <small style="color:var(--yellow)">[${source}]</small></span>`;
+    const input = document.createElement('input');
+    input.id = 'ma-cfg-' + key;
+    input.className = 'apply-input';
+    input.type = secret ? 'password' : (key === 'app_version_code' ? 'number' : 'text');
+    input.autocomplete = 'off';
+    input.value = data.values?.[key] ?? '';
+    input.addEventListener('input', mobileAuthPreview);
+    box.appendChild(input);
+    grid.appendChild(box);
+  });
+  document.getElementById('ma-user-agent').textContent = data.user_agent || '—';
+}
+
+async function mobileAuthLoad() {
+  try {
+    const [cfgResp, stateResp] = await Promise.all([
+      fetch('/api/mobile-auth/settings'), fetch('/api/mobile-auth/status')
+    ]);
+    const cfg = await cfgResp.json();
+    const state = await stateResp.json();
+    if (cfg.ok) mobileAuthRenderConfig(cfg);
+    if (state.stage === 'code_requested') {
+      mobileAuthType(state.login_type || 'phone');
+      document.getElementById('ma-code-row').style.display = 'flex';
+      document.getElementById('ma-status').textContent = `Код отправлен: ${state.login_masked}`;
+      mobileAuthCountdown(Math.max(0, Number(state.retry_after || 0) - Math.floor(Date.now()/1000 - Number(state.requested_at || 0))));
+    }
+  } catch (e) {
+    const st = document.getElementById('ma-config-status');
+    if (st) st.textContent = 'Не удалось загрузить настройки авторизации';
+  }
+  mobileAuthType(mobileAuthLoginType);
+}
+
+function mobileAuthCountdown(seconds) {
+  if (mobileAuthTimer) clearInterval(mobileAuthTimer);
+  const label = document.getElementById('ma-request-timer');
+  const button = document.getElementById('ma-request');
+  let left = Math.max(0, Number(seconds || 0));
+  const tick = () => {
+    if (label) label.textContent = left > 0 ? `Повтор через ${left} с` : '';
+    if (button) button.disabled = left > 0;
+    if (left-- <= 0 && mobileAuthTimer) { clearInterval(mobileAuthTimer); mobileAuthTimer = null; }
+  };
+  tick();
+  if (left >= 0) mobileAuthTimer = setInterval(tick, 1000);
+}
+
+function mobileAuthShowError(status, data, fallback) {
+  status.textContent = data?.error || fallback;
+  status.style.color = 'var(--red)';
+  if (data?.captcha_url) {
+    const link = document.createElement('a');
+    link.href = data.captcha_url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.className = 'btn-sm';
+    link.style.cssText = 'display:inline-block;margin-left:10px;color:var(--yellow);border-color:var(--yellow)';
+    link.textContent = '🧩 Пройти CAPTCHA';
+    status.appendChild(link);
+  }
+}
+
+async function mobileAuthRequestCode(button) {
+  const status = document.getElementById('ma-status');
+  const login = document.getElementById('ma-login').value.trim();
+  if (!login) { status.textContent = 'Введите телефон или email'; status.style.color = 'var(--red)'; return; }
+  button.disabled = true; status.textContent = 'Отправка кода…'; status.style.color = 'var(--dim)';
+  try {
+    const r = await fetch('/api/mobile-auth/request-code', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({login, login_type:mobileAuthLoginType})});
+    const d = await r.json();
+    if (!d.ok) {
+      mobileAuthShowError(status, d, 'Не удалось отправить код');
+      button.disabled = false;
+      return;
+    }
+    document.getElementById('ma-code-row').style.display = 'flex';
+    status.textContent = `Код отправлен: ${d.login_masked}`; status.style.color = 'var(--green)';
+    mobileAuthCountdown(d.can_request_code_again_in || d.retry_after || 0);
+  } catch (e) { mobileAuthShowError(status, null, e.message); button.disabled = false; }
+}
+
+async function mobileAuthVerify(button) {
+  const status = document.getElementById('ma-status');
+  const code = document.getElementById('ma-code').value.trim();
+  button.disabled = true; status.textContent = 'Проверка кода…'; status.style.color = 'var(--dim)';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  const progress = [
+    setTimeout(() => { status.textContent = 'Импорт токенов…'; }, 1000),
+    setTimeout(() => { status.textContent = 'Создание сессии…'; }, 2500),
+    setTimeout(() => { status.textContent = 'Загрузка аккаунта…'; }, 5000),
+  ];
+  try {
+    const r = await fetch('/api/mobile-auth/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code}), signal:controller.signal});
+    const d = await r.json();
+    if (!d.ok) {
+      mobileAuthShowError(status, d, 'Авторизация не удалась');
+      return;
+    }
+    const who = [d.user?.first_name, d.user?.last_name].filter(Boolean).join(' ');
+    status.textContent = `✅ Авторизация успешна${who ? ': '+who : ''}\nРезюме: ${d.resumes}. ${d.browser_session_note}`;
+    status.style.color = 'var(--green)'; document.getElementById('ma-code-row').style.display = 'none';
+  } catch (e) { mobileAuthShowError(status, null, e.name === 'AbortError' ? 'Проверка заняла больше 5 минут. Попробуйте ещё раз.' : e.message); }
+  finally { clearTimeout(timeout); progress.forEach(clearTimeout); button.disabled = false; }
+}
+
+async function mobileAuthLogout() {
+  await fetch('/api/mobile-auth/logout', {method:'POST'});
+  document.getElementById('ma-code-row').style.display = 'none';
+  document.getElementById('ma-code').value = '';
+  document.getElementById('ma-status').textContent = 'Локальное состояние входа очищено';
+}
+
+async function mobileAuthPreview() {
+  const st = document.getElementById('ma-config-status');
+  try {
+    const r = await fetch('/api/mobile-auth/settings/validate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({values:mobileAuthFormValues()})});
+    const d = await r.json();
+    if (d.ok) { document.getElementById('ma-user-agent').textContent = d.user_agent; if (st) st.textContent = ''; }
+    else if (st) st.textContent = d.error;
+  } catch (_) {}
+}
+
+async function mobileAuthSaveSettings(button) {
+  const st = document.getElementById('ma-config-status'); button.disabled = true;
+  try {
+    const r = await fetch('/api/mobile-auth/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({values:mobileAuthFormValues()})});
+    const d = await r.json(); if (!d.ok) throw new Error(d.error || 'Ошибка сохранения');
+    mobileAuthRenderConfig(d); st.textContent = '✅ Настройки сохранены и применятся к новым запросам'; st.style.color = 'var(--green)';
+  } catch(e) { st.textContent = e.message; st.style.color = 'var(--red)'; }
+  finally { button.disabled = false; }
+}
+
+async function mobileAuthValidate(button) {
+  button.disabled = true; await mobileAuthPreview(); button.disabled = false;
+  const st = document.getElementById('ma-config-status');
+  if (!st.textContent) { st.textContent = '✅ Настройки корректны; запрос к HH не выполнялся'; st.style.color = 'var(--green)'; }
+}
+
+async function mobileAuthNewUuid() {
+  const d = await (await fetch('/api/mobile-auth/settings/uuid', {method:'POST'})).json();
+  if (d.ok) { document.getElementById('ma-cfg-device_uuid').value = d.device_uuid; mobileAuthPreview(); }
+}
+
+async function mobileAuthResetSettings() {
+  if (!confirm('Восстановить штатные настройки мобильного клиента?')) return;
+  const d = await (await fetch('/api/mobile-auth/settings/reset', {method:'POST'})).json();
+  if (d.ok) { mobileAuthRenderConfig(d); document.getElementById('ma-config-status').textContent = 'Значения восстановлены'; }
+}
+
+document.addEventListener('DOMContentLoaded', mobileAuthLoad);
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
