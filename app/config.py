@@ -90,6 +90,9 @@ class Config:
     # Phase 0: mobile-skeleton не готов, поэтому дефолт "web", а "auto" резолвится
     # в web до Phase 2; mobile выбирается только явным mode аккаунта.
     default_client_mode: str = "web"
+    # WebSocket realtime updates от chatik.hh.ru (Phase 1). Off by default —
+    # legacy polling loop продолжает работать. Включать per-account через /api/ws/{idx}/enable.
+    use_websocket_realtime: bool = False
     daily_apply_limit: int = 0  # Жёсткий лимит откликов в день (0 = без ограничения)
     stop_on_hh_limit: bool = True  # Полная остановка при HH лимите (не перепроверять)
     # Фильтр по формату работы (пустой = без фильтра, все форматы)
@@ -263,7 +266,7 @@ _CONFIG_KEYS = [
     "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
     "hh_daily_limit",
     "hh_region", "llm_applicant_gender", "llm_auto_send", "llm_enabled",
-    "llm_ws_push_enabled", "chat_use_oauth", "llm_use_quick_replies",
+    "llm_ws_push_enabled", "use_websocket_realtime", "chat_use_oauth", "llm_use_quick_replies",
     "hh_ai_letter_first_try", "related_vacancies_enabled", "hh_proxy_url",
 ]
 
