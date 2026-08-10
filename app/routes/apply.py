@@ -13,6 +13,8 @@ from app.logging_utils import _is_login_page
 from app.config import hh_base
 from app.storage import add_applied
 from app.hh_api import get_headers
+from app.hh_client_factory import get_client
+from app.hh_client_fallback import FallbackHHClient
 from app.questionnaire import get_questionnaire_answer
 from app.instances import bot
 from app.user_agent import webview_user_agent
@@ -126,6 +128,69 @@ async def _fetch_questionnaire_data(acc: dict, vid: str) -> dict:
     return {"questions": questions, "hidden": hidden, "url_form": url_form}
 
 
+def _result_to_response(result: str, info: dict, vid: str,
+                        questions: list = None, letter: str = "") -> dict:
+    """
+    Чистый маппинг tuple (result, info) из client.submit_response() в ответ
+    /api/apply/submit. Без I/O и bookkeeping — unit-тестируемо.
+
+    Для result="test" вопросы/letter передаёт вызывающий: их сбор требует
+    async-запроса (_fetch_questionnaire_data) и в чистую функцию не входит.
+    """
+    if result == "sent":
+        return {"status": "sent", "vacancy_id": vid, "message": "Отклик успешно отправлен ✅"}
+    if result == "limit":
+        return {"status": "limit", "vacancy_id": vid, "message": "Достигнут дневной лимит откликов"}
+    if result == "already":
+        return {"status": "already", "vacancy_id": vid, "message": "Отклик на эту вакансию уже был отправлен"}
+    if result == "test":
+        questions = questions if questions is not None else []
+        return {
+            "status": "test_required",
+            "vacancy_id": vid,
+            "questions": questions,
+            "letter": letter,
+            "message": f"Вакансия требует опрос ({len(questions)} вопросов)",
+        }
+    if result == "auth_error":
+        return {"status": "error", "vacancy_id": vid, "message": "⚠️ Куки протухли — обновите в настройках"}
+    # "error" и любые неизвестные result'ы
+    message = str(info.get("error_type") or info.get("exception") or info.get("raw") or "Ошибка отклика")
+    return {"status": "error", "vacancy_id": vid, "message": message}
+
+
+async def _mobile_submit_response(acc_idx: int, acc: dict, vid: str, client) -> dict:
+    """
+    Отклик БЕЗ анкеты через HHClient-фабрику (mobile-ветка /api/apply/submit).
+
+    client.submit_response() — async-метод, поэтому await'ится НАПРЯМУЮ:
+    run_in_executor неприменим к корутинам (осознанное отклонение от паттерна
+    routes/debug.py, где sync-методы клиента гоняются в executor'е).
+
+    Bookkeeping повторяет success-ветку web-flow, КРОМЕ state.questionnaire_sent
+    (анкеты не было). result="test" → добираем вопросы существующим
+    _fetch_questionnaire_data, чтобы UI перезапустил check/submit с ответами.
+    """
+    result, info = await client.submit_response(vid)
+
+    if result == "sent":
+        state = bot._get_apply_state(acc_idx)
+        if state:
+            state.sent += 1
+            # state.questionnaire_sent НЕ инкрементируем — анкеты не было
+        add_applied(acc["name"], vid)
+        short = state.short if state else acc.get("name", "?")
+        color = state.color if state else ""
+        bot._add_log(short, color, f"\U0001f4dd Ручной отклик (mobile): {vid}", "success")
+
+    questions = None
+    if result == "test":
+        qdata = await _fetch_questionnaire_data(acc, vid)
+        questions = qdata["questions"]
+
+    return _result_to_response(result, info, vid, questions=questions, letter=acc["letter"])
+
+
 @router.post("/api/apply/check")
 async def api_apply_check(body: dict):
     """
@@ -224,6 +289,20 @@ async def api_apply_submit(body: dict):
         return {"status": "error", "message": "Неверный аккаунт"}
     if letter:
         acc = {**acc, "letter": letter}
+
+    # Phase 3: mobile-ветка — отклик БЕЗ анкеты через HHClient-фабрику.
+    # Маркер mobile-режима: isinstance(client, FallbackHHClient) — фабрика
+    # возвращает её только при mode="mobile" (выбрано перед
+    # getattr(client, "mode", "") == "mobile": тип строже duck-typed атрибута).
+    # Если user_answers непустой (анкета) или режим web — НИЧЕГО не меняется:
+    # анкеты — территория web-flow (официальное приложение тоже ходит в них
+    # через webview), поэтому web-form flow ниже сохраняется байт-в-байт.
+    client = get_client(acc)
+    if isinstance(client, FallbackHHClient) and not user_answers:
+        try:
+            return await _mobile_submit_response(acc_idx, acc, vid, client)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     url_form = f"{hh_base()}/applicant/vacancy_response?vacancyId={vid}&withoutTest=no"
 

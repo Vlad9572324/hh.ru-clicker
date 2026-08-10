@@ -6,13 +6,16 @@
 - конкретные клиенты инстанцируются и не имеют абстрактных методов;
 - isinstance-проверки по capability-слоям соответствуют выбранным базам;
 - web-клиент не имеет аналога GET /me, а fill_questionnaire присутствует
-  у обоих (mobile-семантика TBD — NotImplementedError-заглушка).
+  у обоих (решение Phase 3: mobile делегирует в web-flow — нативного
+  endpoint'а анкет в APK нет, официальное приложение открывает web-анкету
+  в webview).
 """
 import asyncio
 import concurrent.futures
 
 import pytest
 
+from app import hh_apply
 from app.hh_client import HHClient, HHClientBase, MobileOnlyOps, WebOnlyOps
 from app.hh_client_mobile import MobileHHClient
 from app.hh_client_web import WebHHClient
@@ -152,11 +155,28 @@ def test_web_client_fetch_counters_not_implemented():
         WebHHClient(ACC).fetch_counters()
 
 
-def test_fill_questionnaire_present_on_both_clients():
+def test_fill_questionnaire_present_on_both_clients(monkeypatch):
     web = WebHHClient(ACC)
     mobile = MobileHHClient(ACC)
     assert callable(web.fill_questionnaire)
     assert callable(mobile.fill_questionnaire)
-    # Mobile-семантика TBD: метод присутствует (capability), но пока заглушка.
-    with pytest.raises(NotImplementedError):
-        _run_coro(mobile.fill_questionnaire("v1"))
+    # Решение Phase 3: mobile делегирует в web-flow hh_apply (в APK нет
+    # нативного endpoint'а анкет — официальное приложение открывает
+    # web-анкету в webview), NotImplementedError больше не кидается.
+    sentinel = ("sent", {})
+    calls = []
+
+    async def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sentinel
+
+    monkeypatch.setattr(hh_apply, "fill_and_submit_questionnaire", fake)
+
+    result = _run_coro(mobile.fill_questionnaire("v1", "T", "C"))
+
+    assert result is sentinel
+    assert len(calls) == 1
+    fwd_args, fwd_kwargs = calls[0]
+    assert fwd_args == (ACC, "v1", "T", "C")
+    assert fwd_args[0] is ACC  # тот же объект, не копия
+    assert fwd_kwargs == {}

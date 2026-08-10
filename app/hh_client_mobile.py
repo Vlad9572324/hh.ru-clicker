@@ -21,18 +21,27 @@ MobileHHClient — mobile-клиент hh.ru (api.hh.ru, OAuth Bearer).
   - phase 4: резюме/статистика.
 """
 
+import asyncio
+
 import requests
 
 from app import (
+    mobile_apply,
     mobile_chat_actions,
     mobile_chat_list,
     mobile_chat_thread,
+    mobile_check_limit,
     mobile_neg_meta,
     mobile_negotiations,
+    mobile_precheck,
+    mobile_questionnaire,
+    mobile_related,
     mobile_send_message,
+    mobile_touch_resume,
     oauth,
 )
 from app.hh_client import HHClient
+from app.llm import _randomize_text
 
 
 class MobileHHClient(HHClient):
@@ -115,34 +124,104 @@ class MobileHHClient(HHClient):
     # ── Phase 3: отклики и vacancy-метаданные ─────────────────────────────────
 
     async def submit_response(self, vid: str, letter_max_length: int | None = None) -> tuple:
-        """Отклик на вакансию (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile submit_response")
+        """Отклик на вакансию: POST api.hh.ru/negotiations form-urlencoded
+        (vacancy_id, resume_id, with_chat_info=true, [message]; tracking
+        query hhtmSource/hhtmFrom — контракт APK NegotiationApi).
+
+        letter: шаблон acc["letter"] через _randomize_text (как web
+        send_response_async); letter_max_length — hard-cap, обрезаем чтобы
+        HH не отказал 400. Вызов мобильной функции — синхронный requests
+        внутри, поэтому крутим в executor'е чтобы не блокировать loop.
+
+        Бизнес-ошибки (не-2xx, не fallback) маппятся в web-совместимый
+        tuple как classify_apply_response: ok → ("sent",
+        {"negotiation_id"}); limit_exceeded → ("limit", info);
+        test_required → ("test", info); already_applied → ("already",
+        info); прочее → ("error", info). info всегда содержит error_type
+        и http_status. Fallback-статусы (0/401/403/5xx) — MobileAPIError
+        поднимается наверх без обработки (FallbackHHClient повторит через
+        web-flow)."""
+        letter = ""
+        if self.acc.get("letter", ""):
+            letter = _randomize_text(self.acc.get("letter", ""))
+        if letter_max_length and len(letter) > letter_max_length:
+            letter = letter[:letter_max_length].rstrip()
+        resume_id = self.acc.get("resume_hash", "")
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: mobile_apply.submit_response(
+                self.acc, vid, resume_id=resume_id, message=letter),
+        )
+        if result.get("ok"):
+            return "sent", {"negotiation_id": result.get("negotiation_id", "")}
+        info = {
+            "error_type": result.get("error_type", ""),
+            "http_status": result.get("http_status"),
+        }
+        error_type = info["error_type"]
+        if error_type == "limit_exceeded":
+            return "limit", info
+        if error_type == "test_required":
+            return "test", info
+        if error_type == "already_applied":
+            return "already", info
+        return "error", info
 
     async def fill_questionnaire(self, vid: str, vacancy_title: str = "", company: str = "") -> tuple:
-        """Заполнение анкеты при отклике (phase 3).
+        """Заполнение анкеты при отклике (Phase 3: делегирование в web-flow).
 
-        web-only: в ABC метод помечен как web-only (web:
-        hh_apply.fill_and_submit_questionnaire), мобильной реализации пока не
-        планируется. Fallback-политика для mobile-аккаунтов (делегировать в
-        web-flow или оставить NotImplementedError) будет решена в Phase 3.
+        Решение Phase 3 (разбор APK ru.hh.android v26.28.1): нативного
+        mobile-endpoint'а для анкет НЕТ — официальное приложение при
+        error_type=test_required показывает alert и открывает WEB-страницу
+        анкеты (applicant/vacancy_response) в webview. Поэтому mobile-клиент
+        делегирует в web-flow: app/mobile_questionnaire.py →
+        hh_apply.fill_and_submit_questionnaire (cookies hh.ru в acc те же).
         """
-        raise NotImplementedError("phase 3: TODO mobile fill_questionnaire")
+        return await mobile_questionnaire.fill_questionnaire(
+            self.acc, vid, vacancy_title, company)
 
     def check_vacancy_before_apply(self, vid: str) -> dict:
-        """Пре-проверка вакансии перед откликом (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile check_vacancy_before_apply")
+        """Пре-проверка вакансии перед откликом: GET
+        api.hh.ru/resume_profile/data_inconsistency?vacancy_id&resume_id&
+        flow=vacancy_response&auto_seen=true — каких элементов резюме не
+        хватает для отклика (пустой список = всё в порядке). Fail-closed:
+        пустое тело → reason=empty_response, прочие не-fallback не-2xx →
+        reason=http_<status> (лучше пропустить вакансию, чем тратить лимит);
+        fallback-статусы (0/401/403/5xx) — MobileAPIError наверх для
+        повтора через web-flow."""
+        return mobile_precheck.check_vacancy_before_apply(
+            self.acc, vid, resume_id=self.acc.get("resume_hash", ""))
 
     def check_limit(self) -> bool:
-        """Проверка дневного лимита откликов (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile check_limit")
+        """Дневной лимит откликов: мобильная эвристика по
+        GET api.hh.ru/negotiations_statistic/mine (streak-статистика
+        applicant_statistic.responses_streak.{responses_count,
+        responses_required}). True = лимит активен (can_apply False) —
+        семантика web hh_apply.check_limit. MobileAPIError на
+        fallback-статусах (0/401/403/5xx) поднимается наверх —
+        FallbackHHClient прозрачно повторит проверку через web
+        check_limit."""
+        data = mobile_check_limit.check_limit(self.acc)
+        return not data.get("can_apply", True)
 
     def touch_resume(self) -> tuple:
-        """Поднять резюме (touch) (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile touch_resume")
+        """Поднять резюме в поиске: POST
+        api.hh.ru/resumes/{resume_id}/publish?with_professional_roles=true
+        (контракт APK, тела нет; 429 → паритетное с web сообщение о кулдауне).
+        Прочие 4xx → NotImplementedError — FallbackHHClient прозрачно
+        повторит через web hh_apply.touch_resume."""
+        return mobile_touch_resume.touch_resume(
+            self.acc, self.acc.get("resume_hash", ""))
 
     def fetch_related_vacancies(self, seed_vid: str, max_pages: int = 1) -> list:
-        """Похожие вакансии для расширения пула (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile fetch_related_vacancies")
+        """Похожие вакансии для расширения пула: GET
+        api.hh.ru/vacancies/possible_job_offers → уникальные vacancy_id
+        (строки). Отличие от web /shards/vacancy/related_vacancies: в
+        mobile-API нет seed-based ранжирования — источник не персонализирован
+        под seed. max_pages игнорируется (у эндпоинта нет пагинации).
+        GET /vacancies/{seed}/suitable_resumes — только диагностика
+        (возвращает резюме, не вакансии)."""
+        return mobile_related.fetch_related_vacancies(self.acc, seed_vid, max_pages)
 
     def fetch_employer_rating(self, employer_id) -> dict | None:
         """Рейтинг работодателя (phase 3, vacancy-метаданные)."""
