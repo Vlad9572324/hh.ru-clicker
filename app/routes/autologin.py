@@ -19,6 +19,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.logging_utils import log_debug
 from app.oauth import _obtain_oauth_token
@@ -71,7 +72,8 @@ def _fetch_hhid(token: str, cache_key: str):
     if cached and cached[1] > now:
         return cached[0], None
     try:
-        r = requests.get(f"{_HH_API}/me", headers=_auth_headers(token), timeout=_TIMEOUT)
+        r = requests.get(f"{_HH_API}/me", headers=_auth_headers(token), timeout=_TIMEOUT,
+                         proxies=egress_proxies())
     except requests.RequestException as e:
         log_debug(f"autologin: /me request error: {type(e).__name__}")
         return None, "me_request_failed"
@@ -95,7 +97,8 @@ def _fetch_autologin_key(token: str, hhid: str):
     Возвращает (key|None, error|None)."""
     url = f"{_HH_API}/autologin_key/{hhid}"
     try:
-        r = requests.get(url, headers=_auth_headers(token), timeout=_TIMEOUT)
+        r = requests.get(url, headers=_auth_headers(token), timeout=_TIMEOUT,
+                         proxies=egress_proxies())
     except requests.RequestException as e:
         log_debug(f"autologin: autologin_key request error: {type(e).__name__}")
         return None, "autologin_request_failed"

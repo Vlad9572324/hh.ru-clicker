@@ -58,6 +58,7 @@ from app import (
     oauth,
 )
 from app.hh_client import HHClient
+from app.hh_http import egress_proxies
 from app.llm import _randomize_text
 
 
@@ -277,7 +278,8 @@ class MobileHHClient(HHClient):
         (конвенция app/oauth.py).
 
         HTTP ходит через библиотеку `requests` (не curl_cffi-обёртку HH),
-        чтобы тесты могли mock'ать его через `responses`.
+        чтобы тесты могли mock'ать его через `responses`; прокси инжектится
+        из HH_PROXY через egress_proxies() — как и весь hh.ru egress.
         """
         token = oauth._obtain_oauth_token(self.acc)
         if not token:
@@ -292,6 +294,8 @@ class MobileHHClient(HHClient):
                     "User-Agent": "hh-clicker/1.0",
                     "Authorization": f"Bearer {token}",
                 },
+                # split-egress: api.hh.ru тоже обязан идти через HH_PROXY.
+                proxies=egress_proxies(),
                 timeout=15,
             )
             if r.status_code != 200:

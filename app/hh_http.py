@@ -279,6 +279,69 @@ def egress_proxy() -> str:
     return _PROXY
 
 
+def egress_proxies() -> dict | None:
+    """proxies-dict для requests-основанных egress-клиентов (mobile API,
+    OTP-авторизация, WS-handshake): `{"http": HH_PROXY, "https": HH_PROXY}`
+    или None когда прокси не задан (прямой egress).
+    Читает модульный _PROXY в момент вызова — runtime-смена через set_proxy()
+    подхватывается без рестарта.
+    Каждый раз возвращаем НОВЫЙ dict: requests.merge_environment_settings
+    мутирует переданный dict (setdefault при подмешивании env-прокси)."""
+    p = egress_proxy()
+    return {"http": p, "https": p} if p else None
+
+
+# ── Egress-kwargs для aiohttp (security fix: split-egress) ──────────────────
+# aiohttp не знает про HH_PROXY сам по себе: ClientSession без этих kwargs
+# ходит НАПРЯМУЮ, минуя синглтон HH — засвет реального IP сервера,
+# обесценивающий всю anti-ban архитектуру (audit HIGH #5).
+
+def _aio_proxy() -> str | None:
+    """Текущий HH_PROXY для aiohttp-запросов. None = без прокси (прямой egress).
+    Читается runtime — подхватывает set_proxy() без рестарта."""
+    p = (egress_proxy() or "").strip()
+    return p or None
+
+
+def _aio_session_connector(proxy: str | None, *, limit: int | None = None):
+    """Connector для ClientSession под socks-прокси: aiohttp нативно socks НЕ
+    умеет, нужен aiohttp-socks (ProxyConnector.from_url). Для http(s)-прокси
+    возвращает None — там достаточно proxy=... на каждый запрос.
+    limit — потолок конкурентных соединений (параллельный collect в manager).
+    КРИТИЧНО (fail-closed): если socks-прокси задан, но aiohttp_socks недоступен —
+    поднимаем RuntimeError: запрос НЕ ДОЛЖЕН идти напрямую (засвет реального IP)."""
+    if not proxy:
+        return None
+    scheme = urllib.parse.urlparse(proxy).scheme.lower()
+    if not scheme.startswith("socks"):
+        return None
+    try:
+        from aiohttp_socks import ProxyConnector
+    except ImportError as exc:
+        raise RuntimeError(
+            "HH_PROXY задаёт socks-прокси, но aiohttp-socks не установлен — "
+            "aiohttp не умеет socks нативно. Прямой egress запрещён (засвет "
+            "реального IP); добавьте aiohttp-socks в окружение."
+        ) from exc
+    if limit:
+        return ProxyConnector.from_url(proxy, limit=limit)
+    return ProxyConnector.from_url(proxy)
+
+
+def _aio_egress_kwargs(*, limit: int | None = None) -> tuple[dict, dict]:
+    """Разложить HH_PROXY на две пачки kwargs:
+    (для aiohttp.ClientSession, для каждого session.get/post-вызова).
+    socks-прокси → ProxyConnector на сессию (запросы без proxy=);
+    http(s)-прокси → proxy= на каждый запрос; пусто → оба пустые (как раньше)."""
+    proxy = _aio_proxy()
+    connector = _aio_session_connector(proxy, limit=limit)
+    if connector is not None:
+        return {"connector": connector}, {}
+    if proxy:
+        return {}, {"proxy": proxy}
+    return {}, {}
+
+
 def set_proxy(url: str) -> str:
     """Заменить прокси runtime (без рестарта контейнера). Приниает пустую строку
     для отключения. Возвращает актуальный URL после смены.

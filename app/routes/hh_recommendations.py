@@ -14,6 +14,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.oauth import _obtain_oauth_token
 
@@ -36,7 +37,8 @@ def _fetch_offers(token: str):
     Сетевые ошибки пробрасываются наверх как requests.RequestException.
     """
     headers = {**_HH_HEADERS, "Authorization": f"Bearer {token}"}
-    r = requests.get(HH_OFFERS_URL, headers=headers, timeout=20)
+    r = requests.get(HH_OFFERS_URL, headers=headers, timeout=20,
+                     proxies=egress_proxies())
     if r.status_code != 200:
         return r.status_code, None
     try:

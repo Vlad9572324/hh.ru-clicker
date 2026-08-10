@@ -17,6 +17,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.oauth import _obtain_oauth_token
 
@@ -81,6 +82,7 @@ def _fetch_data_inconsistency(token: str, vacancy_id: str, resume_id: str):
                 "x-force-app-access": "true",
             },
             timeout=15,
+            proxies=egress_proxies(),
         )
     except requests.RequestException as e:
         return None, f"request error: {e}"

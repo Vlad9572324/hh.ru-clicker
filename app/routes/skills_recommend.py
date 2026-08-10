@@ -17,6 +17,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.oauth import _obtain_oauth_token
 
@@ -75,6 +76,7 @@ def _fetch_recommended(token: str, resume_hash: str) -> tuple:
         resp = requests.post(
             _PREDICT_URL, headers=_headers(token), json=body,
             timeout=_PREDICT_TIMEOUT,
+            proxies=egress_proxies(),
         )
         if resp.status_code in (400, 422):
             last_status = resp.status_code
@@ -101,6 +103,7 @@ def _fetch_profile_skills(token: str) -> list:
             params={"profession_description": "true"},
             headers=_headers(token),
             timeout=_PROFILE_TIMEOUT,
+            proxies=egress_proxies(),
         )
         if resp.status_code != 200:
             return []

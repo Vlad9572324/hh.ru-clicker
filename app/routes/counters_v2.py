@@ -26,6 +26,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.logging_utils import log_debug
 from app.oauth import _obtain_oauth_token
@@ -88,7 +89,8 @@ def _fetch_counters_v2(idx: int, acc: dict, token: str) -> dict:
     uuid = _get_cached_uuid(key)
     if uuid is None:
         try:
-            r = requests.get(f"{_HH_API}/me", headers=headers, timeout=15)
+            r = requests.get(f"{_HH_API}/me", headers=headers, timeout=15,
+                             proxies=egress_proxies())
         except requests.RequestException as e:
             log_debug(f"counters_v2: /me request error: {e}")
             return {"error": "me_http_0"}
@@ -109,6 +111,7 @@ def _fetch_counters_v2(idx: int, acc: dict, token: str) -> dict:
             params={"uuid": uuid},
             headers=headers,
             timeout=15,
+            proxies=egress_proxies(),
         )
     except requests.RequestException as e:
         log_debug(f"counters_v2: /counters/user request error: {e}")

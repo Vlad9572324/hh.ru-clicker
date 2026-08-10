@@ -368,10 +368,25 @@ class HHMobileClient:
                 "Authorization": f"Bearer {self.config.app_client_token}",
                 "X-Force-App-Access": "true",
             })
+        # Per-request прокси: egress читается в момент запроса, а не один раз в
+        # __init__, чтобы runtime-смена HH_PROXY через app.hh_http.set_proxy()
+        # подхватывалась долгоживущими клиентами без пересоздания. Когда прокси
+        # не задан — kwarg не передаём вовсе: session.proxies из __init__
+        # продолжает действовать (в т.ч. у injected sessions со своими настройками).
+        try:
+            from app.hh_http import egress_proxies
+            _runtime_proxies = egress_proxies()
+        except Exception:
+            # Конфиг egress недоступен — остаёмся на session-level прокси из
+            # __init__, где fail-closed проверка уже прошла.
+            _runtime_proxies = None
+        kwargs: dict[str, Any] = dict(data=data, params=params, headers=headers, timeout=20)
+        if _runtime_proxies is not None:
+            kwargs["proxies"] = _runtime_proxies
         try:
             response = self.session.request(
                 method, self.config.base_url + "/" + path.lstrip("/"),
-                data=data, params=params, headers=headers, timeout=20,
+                **kwargs,
             )
         except requests.RequestException as exc:
             raise MobileAuthError("Не удалось соединиться с HH") from exc

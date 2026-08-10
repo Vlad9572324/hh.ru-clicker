@@ -2156,36 +2156,22 @@ class BotManager:
         sem = asyncio.Semaphore(CONFIG.max_concurrent * 3)
 
         # Единый egress: collect тоже идёт через HH_PROXY, если задан (audit HIGH #5).
-        # socks → aiohttp-socks ProxyConnector; http(s) → proxy= на каждый запрос.
-        from app.hh_http import egress_proxy
-        proxy = (egress_proxy() or "").strip()
+        # Общие helpers из app.hh_http (split-egress): socks → ProxyConnector,
+        # http(s) → proxy= на каждый запрос.
+        from app.hh_http import _aio_proxy, _aio_session_connector
+        proxy = _aio_proxy()
+        # socks → ProxyConnector(limit=...); http(s)/пусто → None
+        connector = _aio_session_connector(proxy, limit=CONFIG.max_concurrent * 3)
         collect_req_kw: dict = {}
-        if proxy:
-            import urllib.parse as _urlparse
-            if _urlparse.urlparse(proxy).scheme.lower().startswith("socks"):
-                try:
-                    from aiohttp_socks import ProxyConnector
-                except ImportError as _e:
-                    raise RuntimeError(
-                        "HH_PROXY задаёт socks-прокси, но aiohttp-socks не установлен — "
-                        "прямой egress запрещён (засвет реального IP)"
-                    ) from _e
-                connector = ProxyConnector.from_url(proxy, limit=CONFIG.max_concurrent * 3)
-            else:
-                collect_req_kw = {"proxy": proxy}
-                # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
-                # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
-                connector = aiohttp.TCPConnector(
-                    limit=CONFIG.max_concurrent * 3,
-                    enable_cleanup_closed=True,
-                )
-        else:
+        if connector is None:
             # enable_cleanup_closed=True — закрывает половинно-закрытые TCP keep-alive
             # подключения (HH иногда дропает их), иначе fetch падает с ServerDisconnectedError.
             connector = aiohttp.TCPConnector(
                 limit=CONFIG.max_concurrent * 3,
                 enable_cleanup_closed=True,
             )
+            if proxy:
+                collect_req_kw = {"proxy": proxy}
 
         all_tasks = []
         url_pages = _url_pages_map()

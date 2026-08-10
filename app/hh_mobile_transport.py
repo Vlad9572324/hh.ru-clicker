@@ -4,6 +4,8 @@
 
 - HTTP через библиотеку `requests` (не curl_cffi-обёртку HH) — тесты
   mock'ают вызовы через `responses` (конвенция MobileHHClient.fetch_counters);
+  прокси инжектится из HH_PROXY через egress_proxies() (split-egress:
+  весь hh.ru egress обязан идти через прокси, см. app/hh_http.py);
 - Bearer-токен добывается через app.oauth._obtain_oauth_token;
 - заголовки: Authorization Bearer + User-Agent ru.hh.android/26.28.1 +
   x-force-app-access: true (контракт APK, см.
@@ -21,6 +23,7 @@ app/hh_client_fallback.py.
 import requests
 
 from app import oauth
+from app.hh_http import egress_proxies
 from app.logging_utils import log_debug
 
 MOBILE_BASE = "https://api.hh.ru"
@@ -66,6 +69,7 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
     json_body — JSON-тело; form — form-urlencoded поля (data=...).
     Возвращает распарсенный JSON (None при пустом теле) на 2xx.
     Любая ошибка — MobileAPIError (см. докстринг модуля).
+    Прокси инжектится из HH_PROXY (egress_proxies()); None = без прокси.
     """
     url = path if str(path).startswith("http") else MOBILE_BASE + path
     token = oauth._obtain_oauth_token(acc)
@@ -77,7 +81,10 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
         r = requests.request(
             method, url,
             params=params, json=json_body, data=form,
-            headers=mobile_headers(token), timeout=timeout,
+            headers=mobile_headers(token),
+            # split-egress: api.hh.ru тоже обязан идти через HH_PROXY.
+            proxies=egress_proxies(),
+            timeout=timeout,
         )
     except requests.RequestException as e:
         log_debug(f"mobile_request {method} {url}: network error {e}")

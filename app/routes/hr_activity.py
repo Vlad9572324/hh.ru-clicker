@@ -26,6 +26,7 @@ import requests
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.hh_http import egress_proxies
 from app.instances import bot
 from app.oauth import _obtain_oauth_token
 
@@ -69,7 +70,8 @@ def _fetch_employer_stats(token: str, vid: str):
         "x-force-app-access": "true",
     }
     try:
-        r = requests.get(url, headers=headers, timeout=HH_TIMEOUT_SEC)
+        r = requests.get(url, headers=headers, timeout=HH_TIMEOUT_SEC,
+                         proxies=egress_proxies())
     except requests.RequestException as e:
         return None, f"network: {e}"
     if r.status_code != 200:

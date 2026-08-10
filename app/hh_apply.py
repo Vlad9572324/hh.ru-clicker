@@ -5,7 +5,6 @@ HH.ru apply functions: send response, fill questionnaire, check vacancy, check l
 import re
 import json
 import time
-import urllib.parse
 import requests
 import aiohttp
 
@@ -13,7 +12,10 @@ from glom import glom
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
-from app.hh_http import HH, egress_proxy
+from app.hh_http import HH
+# Egress-helpers aiohttp переехали в app/hh_http.py (единая точка egress);
+# реэкспорт для совместимости — routes/apply.py и тесты импортируют отсюда.
+from app.hh_http import _aio_proxy, _aio_session_connector, _aio_egress_kwargs  # noqa: F401
 from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
 from app.oauth import _oauth_touch_resume, _token_key
@@ -22,53 +24,6 @@ from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm
 from app.hh_resume import fetch_resume_text
 
 _HH_DEFAULT_TIMEOUT = 15
-
-
-# ── Egress через HH_PROXY для aiohttp-запросов ─────────────────────────────
-# Иначе отклики/анкеты ходят НАПРЯМУЮ, минуя HH_PROXY синглтона HH — засвет
-# реального IP сервера, обесценивающий всю anti-ban архитектуру (audit HIGH #5).
-
-def _aio_proxy() -> str | None:
-    """Текущий HH_PROXY для aiohttp-запросов. None = без прокси (прямой egress).
-    Читается runtime — подхватывает set_proxy() без рестарта."""
-    p = (egress_proxy() or "").strip()
-    return p or None
-
-
-def _aio_session_connector(proxy: str | None):
-    """Connector для ClientSession под socks-прокси: aiohttp нативно socks НЕ
-    умеет, нужен aiohttp-socks (ProxyConnector.from_url). Для http(s)-прокси
-    возвращает None — там достаточно proxy=... на каждый запрос.
-    КРИТИЧНО (fail-closed): если socks-прокси задан, но aiohttp_socks недоступен —
-    поднимаем RuntimeError: запрос НЕ ДОЛЖЕН идти напрямую (засвет реального IP)."""
-    if not proxy:
-        return None
-    scheme = urllib.parse.urlparse(proxy).scheme.lower()
-    if not scheme.startswith("socks"):
-        return None
-    try:
-        from aiohttp_socks import ProxyConnector
-    except ImportError as exc:
-        raise RuntimeError(
-            "HH_PROXY задаёт socks-прокси, но aiohttp-socks не установлен — "
-            "aiohttp не умеет socks нативно. Прямой egress запрещён (засвет "
-            "реального IP); добавьте aiohttp-socks в окружение."
-        ) from exc
-    return ProxyConnector.from_url(proxy)
-
-
-def _aio_egress_kwargs() -> tuple[dict, dict]:
-    """Разложить HH_PROXY на две пачки kwargs:
-    (для aiohttp.ClientSession, для каждого session.get/post-вызова).
-    socks-прокси → ProxyConnector на сессию (запросы без proxy=);
-    http(s)-прокси → proxy= на каждый запрос; пусто → оба пустые (как раньше)."""
-    proxy = _aio_proxy()
-    connector = _aio_session_connector(proxy)
-    if connector is not None:
-        return {"connector": connector}, {}
-    if proxy:
-        return {}, {"proxy": proxy}
-    return {}, {}
 
 
 def _parse_retry_after(value: str) -> int | None:
