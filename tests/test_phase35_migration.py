@@ -108,6 +108,12 @@ EXCLUDED_FILES = {
     "app/hh_client_mobile.py",
     "app/hh_client_fallback.py",
     "app/hh_client_factory.py",
+    # Mobile-flow модули: делегируют в web-функции как fallback (legitimate).
+    # Phase 3 mobile_questionnaire → hh_apply.fill_and_submit_questionnaire.
+    "app/mobile_questionnaire.py",
+    # Security fix: routes/apply.py импортирует _aio_egress_kwargs (private
+    # helper для правильного proxy в aiohttp — не hot-path caller).
+    "app/routes/apply.py",
 }
 
 # Файлы, чьи hot-path call-site мигрированы на get_client(acc).
