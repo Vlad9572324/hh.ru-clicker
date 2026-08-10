@@ -1,0 +1,89 @@
+/* feat3_skills.css — секция «Skills gap» в карточке аккаунта (feat3).
+   Все классы с префиксом feat3-. Цвета — общие переменные style.css. */
+
+.feat3-skills {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  font-size: 11px;
+}
+
+.feat3-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--cyan);
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+.feat3-btn:hover {
+  background: rgba(57, 208, 216, 0.08);
+}
+
+.feat3-result {
+  margin-top: 4px;
+}
+
+.feat3-line {
+  margin-top: 4px;
+  line-height: 1.7;
+}
+
+.feat3-label {
+  color: var(--yellow);
+  font-weight: 600;
+}
+
+.feat3-dim {
+  color: var(--dim);
+}
+
+.feat3-ok {
+  color: var(--green);
+}
+
+.feat3-error {
+  color: var(--red, #f85149);
+}
+
+.feat3-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  margin: 1px 2px;
+  border-radius: 10px;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.feat3-chip-gap {
+  border: 1px solid var(--green);
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.feat3-chip-have {
+  border: 1px solid var(--border);
+  color: var(--dim);
+  background: transparent;
+  opacity: 0.8;
+}
+
+.feat3-editor-btn {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border: 1px solid var(--cyan);
+  border-radius: 4px;
+  color: var(--cyan);
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.feat3-editor-btn:hover {
+  background: rgba(57, 208, 216, 0.08);
+}

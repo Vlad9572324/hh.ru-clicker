@@ -175,6 +175,14 @@ from app.routes.llm import router as llm_router            # noqa: E402
 from app.routes.debug import router as debug_router        # noqa: E402
 from app.routes.mobile_auth import router as mobile_auth_router  # noqa: E402
 from app.routes.ws import router as ws_router              # noqa: E402
+# UI-integrations (прототипы mobile API → REST routes для dashboard)
+from app.routes.hr_activity import router as hr_activity_router            # noqa: E402
+from app.routes.preflight import router as preflight_router                # noqa: E402
+from app.routes.skills_recommend import router as skills_recommend_router  # noqa: E402
+from app.routes.counters_v2 import router as counters_v2_router            # noqa: E402
+from app.routes.hh_recommendations import router as hh_recommendations_router  # noqa: E402
+from app.routes.autologin import router as autologin_router                # noqa: E402
+from app.routes.account_mode import router as account_mode_router          # noqa: E402
 
 app.include_router(core_router)
 app.include_router(accounts_router)
@@ -186,3 +194,10 @@ app.include_router(llm_router)
 app.include_router(debug_router)
 app.include_router(mobile_auth_router)
 app.include_router(ws_router)
+app.include_router(hr_activity_router)
+app.include_router(preflight_router)
+app.include_router(skills_recommend_router)
+app.include_router(counters_v2_router)
+app.include_router(hh_recommendations_router)
+app.include_router(autologin_router)
+app.include_router(account_mode_router)

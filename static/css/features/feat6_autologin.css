@@ -1,0 +1,66 @@
+/* feat6_autologin.css — стили autologin-кнопки в блоках браузерных сессий.
+   Все классы с префиксом feat6-. Использует CSS-переменные темы app
+   (--bg/--border/--dim/--text/--green/--red) с fallback. */
+
+.feat6-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.feat6-btn {
+  color: var(--cyan, #4dd0e1);
+  border-color: var(--cyan, #4dd0e1);
+  white-space: nowrap;
+}
+
+.feat6-btn:hover:not(:disabled) {
+  color: var(--text, #eee);
+  border-color: var(--text, #eee);
+}
+
+.feat6-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.feat6-status {
+  font-size: 11px;
+  color: var(--dim, #888);
+  word-break: break-word;
+}
+
+.feat6-result {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #444);
+  border-radius: 6px;
+  background: var(--bg, #1c1c1c);
+  font-size: 11px;
+}
+
+.feat6-note {
+  color: var(--dim, #888);
+  margin-bottom: 6px;
+}
+
+.feat6-url {
+  display: block;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text, #eee);
+  word-break: break-all;
+  padding: 4px 6px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.feat6-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

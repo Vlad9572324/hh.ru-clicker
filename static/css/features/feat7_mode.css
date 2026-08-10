@@ -1,0 +1,66 @@
+/*
+ * feat7_mode.css — per-account mode selector (auto/web/mobile) + badge effective-mode.
+ * Все классы с префиксом feat7- (см. static/js/features/feat7_mode.js).
+ */
+
+/* ── Badge effective-mode на карточке аккаунта (.acc-header) ─────── */
+.feat7-mode-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--dim);
+  white-space: nowrap;
+  cursor: default;
+  line-height: 1.6;
+}
+
+/* web → синяя рамка */
+.feat7-mode-badge.feat7-mode-web {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+/* mobile → зелёная рамка */
+.feat7-mode-badge.feat7-mode-mobile {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+/* auto → приглушённо (effective mode раскрывается в title) */
+.feat7-mode-badge.feat7-mode-auto {
+  color: var(--dim);
+  border-color: var(--border);
+  opacity: 0.75;
+}
+
+/* ── Mode selector row в блоках сессий (Настройки → 🌐 Браузерные сессии) ── */
+.feat7-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+}
+
+.feat7-mode-row-label {
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.feat7-mode-select {
+  font-size: 11px;
+  padding: 3px 6px;
+  font-family: inherit;
+}
+
+.feat7-mode-st {
+  font-size: 11px;
+  color: var(--dim);
+}

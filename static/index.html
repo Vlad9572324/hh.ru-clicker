@@ -6,6 +6,15 @@
 <title>HH Bot Dashboard</title>
 <link rel="stylesheet" href="/static/css/style.css">
 <link rel="stylesheet" href="/static/css/theme-autoclicker.css">
+<!-- UI integrations (feat1..feat8) -->
+<link rel="stylesheet" href="/static/css/features/feat1_hr_badge.css">
+<link rel="stylesheet" href="/static/css/features/feat2_preflight.css">
+<link rel="stylesheet" href="/static/css/features/feat3_skills.css">
+<link rel="stylesheet" href="/static/css/features/feat4_counters.css">
+<link rel="stylesheet" href="/static/css/features/feat5_recommendations.css">
+<link rel="stylesheet" href="/static/css/features/feat6_autologin.css">
+<link rel="stylesheet" href="/static/css/features/feat7_mode.css">
+<link rel="stylesheet" href="/static/css/features/feat8_ws_toggle.css">
 </head>
 <body>
 
@@ -1159,5 +1168,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 15000);
 });
 </script>
+<!-- UI integrations (feat1..feat8): грузятся после app.js и inline WS-скрипта.
+     Каждая фича самодостаточна: обёртки глобальных функций app.js + динамический
+     DOM-инжект, guard'ы от двойного оборачивания. -->
+<script src="/static/js/features/feat1_hr_badge.js?v=1"></script>
+<script src="/static/js/features/feat2_preflight.js?v=1"></script>
+<script src="/static/js/features/feat3_skills.js?v=1"></script>
+<script src="/static/js/features/feat4_counters.js?v=1"></script>
+<script src="/static/js/features/feat5_recommendations.js?v=1"></script>
+<script src="/static/js/features/feat6_autologin.js?v=1"></script>
+<script src="/static/js/features/feat7_mode.js?v=1"></script>
+<script src="/static/js/features/feat8_ws_toggle.js?v=1"></script>
 </body>
 </html>
