@@ -25,6 +25,7 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 | **2** | Переговоры / чаты (группа A без vacancy/employer-метаданных) |
 | **3** | Отклики (группа B) + vacancy/employer-метаданные (см. §5) |
 | **3.5** | Без новых реализаций: внешние hot-path callers переводятся на фабрику `get_client(acc)` |
+| **3.6** | Аудит оставшихся route/API caller-файлов и расширение AST-guard |
 | **4** | Резюме / статистика (группа C) |
 
 **Capability-слои интерфейса.** После fix P2 интерфейс разложен на слои
@@ -256,6 +257,13 @@ capability-слои (`HHClientBase` / `WebOnlyOps` / `MobileOnlyOps`, см. §1)
   импорт `fetch_rating_by_vacancy` удалён. OAuth-функции `app/oauth.py`
   вне scope фазы. Миграция зафиксирована AST-guard'ом
   `tests/test_phase35_migration.py`.
+- **Phase 3.6 — оставшиеся callers (выполнено в ветке
+  `feat/phase3.6-remaining-callers`).** Проверены `routes/settings.py`,
+  `routes/llm.py`, `routes/data.py`, `routes/core.py`, `routes/sessions.py`,
+  `routes/apply.py` и `hh_api.py`. Account-bound web-flow caller найден
+  только уже мигрированным в `routes/apply.py`; вызовы `parse_hh_lux_ssr`
+  в `routes/sessions.py` и `hh_api.py` остаются прямыми как чистый parser
+  без `acc`. Все перечисленные файлы добавлены в покрытие AST-guard.
 - **Phase 4 — резюме/статистика (группа C).** Текст резюме, статистика,
   история/агрегаты просмотров, аудит, редактирование полей, статус поиска,
   диагностика аккаунта.
