@@ -90,6 +90,7 @@ def _parse_simple_message(msg: dict) -> dict | None:
         "msg_id": str(msg.get("id", "")),
         "is_bot": _is_bot(msg),
         "actions": body.get("actions") or {},
+        "timestamp": str(msg.get("created_at") or msg.get("creation_time") or ""),
     }
 
 
@@ -163,6 +164,7 @@ def fetch_thread(acc: dict, neg_id: str, limit: int = 50) -> dict:
             "text": parsed["text"],
             "msg_id": parsed["msg_id"],
             "is_bot": parsed["is_bot"],
+            "timestamp": parsed["timestamp"],
         })
         if parsed["sender"] == "employer":
             last_employer_msg = parsed["text"]
@@ -220,6 +222,7 @@ def fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list:
             "msg_id": parsed["msg_id"],
             "actions": parsed["actions"],
             "is_bot": parsed["is_bot"],
+            "timestamp": parsed["timestamp"],
         })
     # Последние max_messages записей (самый свежий контекст)
     return conversation[-max_messages:]
