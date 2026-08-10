@@ -540,6 +540,25 @@
       </div>
     </details>
 
+    <!-- WebSocket realtime (Phase 1): read-only слушатель websocket.hh.ru -->
+    <details class="q-section prio-medium" id="ws-realtime-section">
+      <summary class="q-section-title">📡 WebSocket (realtime, Phase 1)</summary>
+      <div class="q-section-body">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:10px;line-height:1.7">
+          Read-only слушатель <b>websocket.hh.ru</b>: пуш-события HH (просмотры резюме, приглашения, сообщения)
+          без дополнительного опроса. Управление per-account; глобальный флаг задаётся в config.json.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <span style="color:var(--dim)">Глобальный флаг <code>use_websocket_realtime</code>:</span>
+          <span id="ws-global-flag" style="font-weight:600;color:var(--dim)">—</span>
+          <span id="ws-global-hint" style="font-size:11px;color:var(--dim)"></span>
+          <button class="btn-sm" style="margin-left:auto" onclick="wsRefresh(this)">↻ Обновить</button>
+          <span id="ws-refresh-st" style="font-size:11px;color:var(--dim)"></span>
+        </div>
+        <div id="ws-acc-list"></div>
+      </div>
+    </details>
+
     <!-- ═══════ ГРУППА 2: Поиск и отклики ═══════ -->
     <div class="settings-group-header">🎯 Поиск и отклики</div>
 
@@ -963,5 +982,136 @@
 </div>
 
 <script src="/static/js/app.js?v=5"></script>
+<script>
+// ── WebSocket (realtime, Phase 1): управление per-account WS-слушателем ──
+// Рендерит блок #ws-realtime-section (Настройки → Подключение). Использует
+// глобальные helper'ы app.js (State, esc, colorVar) и глобально пропатченный
+// fetch (X-API-Key). Существующую разметку/скрипты не трогает.
+
+// Цвета бейджа по статусу слушателя (статусы приходят из /api/ws/status)
+const WS_BADGE_COLORS = {
+  connected: 'var(--green)',
+  connecting: 'var(--yellow)',
+  reconnecting: 'var(--yellow)',
+  no_token: 'var(--red)',
+  error: 'var(--red)',
+  disabled: 'var(--dim)',
+  disabled_global: 'var(--dim)',
+};
+
+function wsBadgeStyle(status) {
+  const color = WS_BADGE_COLORS[status] || 'var(--cyan)';
+  return `color:${color};border-color:${color}`;
+}
+
+async function wsFetchStatus() {
+  try {
+    const res = await fetch('/api/ws/status');
+    return await res.json();
+  } catch (e) {
+    return {ok: false, error: String(e)};
+  }
+}
+
+// Перерисовка блока: глобальный флаг + строки аккаунтов с бейджами
+async function wsRender() {
+  const data = await wsFetchStatus();
+  // Глобальный флаг (read-only): из ответа статуса, fallback — snapshot конфига
+  const flagEl = document.getElementById('ws-global-flag');
+  const hintEl = document.getElementById('ws-global-hint');
+  let globalOn = data.use_websocket_realtime;
+  if (typeof globalOn !== 'boolean') globalOn = State?.lastSnapshot?.config?.use_websocket_realtime;
+  if (flagEl) {
+    if (typeof globalOn === 'boolean') {
+      flagEl.textContent = globalOn ? '✅ включён' : '⛔ выключен';
+      flagEl.style.color = globalOn ? 'var(--green)' : 'var(--red)';
+      if (hintEl) hintEl.textContent = globalOn ? '' : '— слушатели не стартуют (статус disabled_global)';
+    } else {
+      flagEl.textContent = '—';
+      flagEl.style.color = 'var(--dim)';
+      if (hintEl) hintEl.textContent = '';
+    }
+  }
+  const list = document.getElementById('ws-acc-list');
+  if (!list) return;
+  if (!data.ok) {
+    // Например ws_manager ещё не готов (503) — показываем честно, без падения
+    list.innerHTML = `<div style="font-size:12px;color:var(--red)">❌ ${esc(data.error || 'Ошибка')}</div>`;
+    return;
+  }
+  // Основные аккаунты из snapshot'а (temp-сессии WS-слушатель не поддерживает)
+  const accs = ((State?.lastSnapshot?.accounts) || []).filter(a => !a.temp);
+  const wsAccs = data.accounts || {};
+  if (!accs.length) {
+    list.innerHTML = '<div class="c-dim" style="font-size:12px">Нет аккаунтов</div>';
+    return;
+  }
+  list.innerHTML = '';
+  accs.forEach(acc => {
+    const info = wsAccs[acc.idx] || {};
+    const status = info.status || (info.enabled ? 'starting' : 'disabled');
+    const enabled = !!info.enabled;
+    const extra = [];
+    if (info.events_total != null) extra.push(`📨 ${esc(info.events_total)}`);
+    if (info.last_event_type) extra.push(esc(info.last_event_type));
+    if (info.last_event_at) extra.push(esc(info.last_event_at));
+    const div = document.createElement('div');
+    div.style.cssText = 'margin-bottom:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+    div.innerHTML =
+      `<span style="font-size:12px;font-weight:600;color:${colorVar(acc.color || 'text')}">${esc(acc.name || acc.short || ('#' + acc.idx))}</span>` +
+      `<span id="ws-badge-${acc.idx}" title="Статус WS-слушателя" style="font-size:10px;font-weight:600;padding:2px 8px;border:1px solid;border-radius:10px;${wsBadgeStyle(status)}">${esc(status)}</span>` +
+      (extra.length ? `<span style="font-size:10px;color:var(--dim)" title="Событий всего / последнее событие">${extra.join(' · ')}</span>` : '') +
+      `<span style="margin-left:auto;display:flex;gap:6px">` +
+        `<button class="btn-sm" style="${enabled ? 'background:var(--green);color:#000;border-color:var(--green)' : ''}" onclick="wsToggle(${acc.idx}, true, this)">▶ Вкл</button>` +
+        `<button class="btn-sm" style="${!enabled ? 'background:var(--red);color:#fff;border-color:var(--red)' : ''}" onclick="wsToggle(${acc.idx}, false, this)">⏹ Выкл</button>` +
+      `</span>`;
+    list.appendChild(div);
+  });
+}
+
+// Вкл/выкл слушателя для аккаунта → после клика перерисовываем статусы
+async function wsToggle(idx, enable, btn) {
+  if (btn) btn.disabled = true;
+  const st = document.getElementById('ws-refresh-st');
+  try {
+    const res = await fetch(`/api/ws/${idx}/${enable ? 'enable' : 'disable'}`, {method: 'POST'});
+    const data = await res.json();
+    if (!data.ok && data.error && st) {
+      st.textContent = '❌ ' + data.error;
+      st.style.color = 'var(--red)';
+      setTimeout(() => { st.textContent = ''; }, 4000);
+    }
+  } catch (e) {
+    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+  }
+  if (btn) btn.disabled = false;
+  await wsRender();
+}
+
+// Ручное обновление статусов
+async function wsRefresh(btn) {
+  const st = document.getElementById('ws-refresh-st');
+  if (st) { st.textContent = '⏳ обновляю...'; st.style.color = 'var(--dim)'; }
+  await wsRender();
+  if (st) { st.textContent = '✅'; st.style.color = 'var(--green)'; setTimeout(() => { st.textContent = ''; }, 2000); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Snapshot аккаунтов приходит асинхронно по WS: пока его нет, повторяем
+  // рендер коротким retry (до ~30с), чтобы не показывать «Нет аккаунтов»
+  // до первого 15-сек polling'а.
+  let wsInitTries = 0;
+  (function wsInit() {
+    wsRender();
+    if (!State?.lastSnapshot && document.getElementById('ws-realtime-section') && wsInitTries++ < 15) {
+      setTimeout(wsInit, 2000);
+    }
+  })();
+  // Лёгкий polling — чтобы reconnecting/no_token было видно без F5
+  setInterval(() => {
+    if (document.getElementById('ws-realtime-section')) wsRender();
+  }, 15000);
+});
+</script>
 </body>
 </html>

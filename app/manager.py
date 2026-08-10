@@ -323,6 +323,51 @@ class BotManager:
         state._ws_client = ChatikWSClient(state.acc, _on_event, label=state.short)
         state._ws_client.start()
 
+    def on_realtime_event(self, acc: dict, event) -> None:
+        """Realtime-событие websocket.hh.ru (Phase 1, mobile push-канал).
+
+        Вызывается из WS-треда ws_manager. Не должен кидать/блокировать.
+        Активен только при CONFIG.use_websocket_realtime (иначе no-op)."""
+        try:
+            if not getattr(CONFIG, "use_websocket_realtime", False):
+                return
+            state = next((st for st in self.account_states if st.acc is acc), None)
+            if state is None:
+                return
+            etype = getattr(event, "type", "") or ""
+            if etype == "chat_message_create":
+                import time as _t
+                now = _t.time()
+                if now - getattr(state, "_ws_realtime_last_trigger", 0.0) < 10:
+                    return  # debounce: HH может прислать пачку событий
+                state._ws_realtime_last_trigger = now
+                _is_blocking_pause = self.paused or (state.paused and state.paused_reason in ("manual", "auth"))
+                if not CONFIG.llm_enabled or not state.llm_enabled or _is_blocking_pause:
+                    return
+                log_debug(f"WS realtime [{state.short}] {etype} → триггерим LLM")
+                self._add_log(state.short, state.color, "\U0001f4ac Новое сообщение HR (WS realtime)", "info")
+                threading.Thread(
+                    target=self._process_llm_replies, args=(state,),
+                    daemon=True, name=f"ws-realtime-llm-{state.short}",
+                ).start()
+            elif etype == "chat_message_edited":
+                payload = getattr(event, "event_data", {}) or {}
+                # _handle_edited_event читает только chatId/chat_id, но push-канал
+                # может нести id чата в другом ключе (ws_events нормализует его в
+                # event.chat_id). Докинем chatId, иначе сброс устаревших черновиков
+                # молча пропустится и LLM ответит на отредактированный текст старым.
+                if getattr(event, "chat_id", None) and not payload.get("chatId") and not payload.get("chat_id"):
+                    payload = {**payload, "chatId": event.chat_id}
+                _handle_edited_event(state, payload)
+            elif etype == "last_viewed_message_change":
+                chat_id = str((getattr(event, "event_data", {}) or {}).get("chatId") or getattr(event, "chat_id", "") or "")
+                if chat_id:
+                    self._add_log(state.short, state.color, f"\U0001f441 HR прочитал (WS, {chat_id})", "info", neg_id=chat_id)
+            else:
+                log_debug(f"WS realtime [{state.short}] {etype}")
+        except Exception as e:
+            log_debug(f"on_realtime_event error: {e}")
+
     def start(self):
         _load_cache()
         load_config()
@@ -374,6 +419,14 @@ class BotManager:
                 self._start_ws_push(state)
             except Exception as e:
                 log_debug(f"_start_ws_push({state.short}): {e}")
+        # Phase 1: mobile WS-слушатель websocket.hh.ru (read-only push).
+        # Стартуем только при явно включённом флаге — иначе поведение бота не меняется.
+        if getattr(CONFIG, "use_websocket_realtime", False):
+            try:
+                from app.ws_manager import ws_manager
+                ws_manager.auto_start_enabled()
+            except Exception as e:
+                log_debug(f"ws_manager auto_start error: {e}")
         # Proactive OAuth refresh — раз в 6 часов обновляет токены,
         # у которых TTL < 48ч, чтобы refresh_token не успел истечь когда
         # аккаунт долго на паузе (лимит HH, ручная пауза).
@@ -412,12 +465,27 @@ class BotManager:
                     ws.stop()
                 except Exception:
                     pass
+        # Phase 1: глушим mobile WS-слушатель ws_manager (no-op если не стартовал).
+        try:
+            from app.ws_manager import ws_manager
+            ws_manager.stop_all()
+        except Exception:
+            pass
 
     def toggle_pause(self):
         self.paused = not self.paused
         msg = "⏸️ Пауза" if self.paused else "▶️ Продолжение"
         level = "warning" if self.paused else "success"
         self._add_log("", "", msg, level)
+        # Phase 1: глобальная пауза приостанавливает и mobile WS-слушатели.
+        try:
+            from app.ws_manager import ws_manager
+            if self.paused:
+                ws_manager.suspend()
+            else:
+                ws_manager.resume()
+        except Exception:
+            pass
 
     def toggle_account_pause(self, idx: int):
         state = None
@@ -446,6 +514,17 @@ class BotManager:
             else f"▶️ Аккаунт {state.short} возобновлён"
         )
         self._add_log(state.short, state.color, msg, "warning" if state.paused else "success")
+        # Phase 1: пауза regular-аккаунта приостанавливает его mobile WS-слушатель.
+        # temp-сессии (browser) в ws_manager не обслуживаются — только regular idx.
+        if 0 <= idx < len(self.account_states):
+            try:
+                from app.ws_manager import ws_manager
+                if state.paused:
+                    ws_manager.suspend_account(idx)
+                else:
+                    ws_manager.resume_account(idx)
+            except Exception:
+                pass
 
     def toggle_account_llm(self, idx: int):
         state = None

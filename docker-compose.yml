@@ -20,6 +20,9 @@ services:
       HH_BOT_UNSAFE_EXPOSE: "1"
       # Весь исходящий hh.ru-трафик идёт через sing-box-sidecar (VLESS+Reality → MSK IP).
       HH_PROXY: "socks5h://singbox:1080"
+      # Phase 1 WS realtime (websocket.hh.ru): ходим НАПРЯМУЮ, не через singbox-цепочку.
+      # "0" = direct (дефолт); "1" = WS тоже через HH_PROXY. singbox-сервис не трогаем.
+      HH_WS_USE_PROXY: "0"
     volumes:
       - ./data:/app/data
       - ./web_app.py:/app/web_app.py

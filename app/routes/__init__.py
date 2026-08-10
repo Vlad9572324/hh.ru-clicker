@@ -152,6 +152,7 @@ from app.routes.apply import router as apply_router        # noqa: E402
 from app.routes.settings import router as settings_router  # noqa: E402
 from app.routes.llm import router as llm_router            # noqa: E402
 from app.routes.debug import router as debug_router        # noqa: E402
+from app.routes.ws import router as ws_router              # noqa: E402
 
 app.include_router(core_router)
 app.include_router(accounts_router)
@@ -161,3 +162,4 @@ app.include_router(apply_router)
 app.include_router(settings_router)
 app.include_router(llm_router)
 app.include_router(debug_router)
+app.include_router(ws_router)
