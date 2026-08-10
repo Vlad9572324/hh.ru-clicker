@@ -2,7 +2,9 @@
 
 [![Theme: autoclicker](https://img.shields.io/badge/UI-autoclicker_neon-00f0ff?style=flat-square)](static/css/theme-autoclicker.css)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-39d0d8?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
-[![Tests](https://img.shields.io/badge/tests-138_passed-3fb950?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/tests-161_passed-3fb950?style=flat-square)](tests/)
+[![Docker](https://img.shields.io/badge/docker-python_3.11--slim-0db7ed?style=flat-square&logo=docker&logoColor=white)](Dockerfile)
+[![HH clients](https://img.shields.io/badge/clients-web_%2B_mobile-b967ff?style=flat-square)](app/hh_client_factory.py)
 
 Веб-дашборд для автоматизации hh.ru: массовые отклики, мгновенные LLM-ответы
 HR через **WebSocket push** (websocket.hh.ru), заполнение опросников
@@ -12,6 +14,32 @@ politeness-индексом + онлайн-статусом HR, smart-фильт
 
 Cyberpunk-интерфейс с моноширинным шрифтом, сканлайнами и неоновыми
 HUD-карточками. Реалтайм через WebSocket (300мс tick).
+
+---
+
+## Что нового в refactor/mobile-api
+
+Бот теперь умеет общаться с hh.ru **двумя каналами**: классический
+web-flow (cookies hh.ru + `chatik.hh.ru`) и новый **mobile API**
+(OAuth Bearer `api.hh.ru`). Что изменилось в ветке `refactor/mobile-api`:
+
+- **Mobile OTP-аутентификация по SMS** — аккаунт подключается через
+  официальный мобильный OAuth-флоу (код из SMS), без вытаскивания cookies
+  из браузера.
+- **Мобильные User-Agent'ы + Android resume endpoint** — запросы в
+  OAuth-канале идут с мобильными заголовками, статус резюме читается через
+  Android-endpoint.
+- **OAuth publishability** — управление видимостью резюме через official API.
+- **Phase-0 абстракция `HHClient`** — единый интерфейс клиента
+  (`app/hh_client.py`) с двумя реализациями: `WebHHClient` (адаптер поверх
+  существующего web-flow) и `MobileHHClient` (OAuth Bearer); выбор —
+  `app/hh_client_factory.py::get_client()`.
+- **Поле `mode` у аккаунта + `Config.default_client_mode`** —
+  `"web" | "mobile" | "auto"` (`auto` = mobile, если есть живой OAuth-токен,
+  иначе web).
+
+📖 Как перевести аккаунт на mobile OTP — [`docs/MOBILE_MIGRATION_GUIDE.md`](docs/MOBILE_MIGRATION_GUIDE.md).
+Общая схема двух каналов и абстракции — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -215,7 +243,7 @@ Android release, стабильный UUID, шаблон User-Agent и client cr
 - **Региональный поддомен** — `<region>.hh.ru` для поиска/откликов
   (SSRF-защита regex'ом)
 - **JSON-редактор** — прямая правка raw config через UI
-- **138+ unit-тестов**, atomic-writes через filelock
+- **161 unit-тест**, atomic-writes через filelock
 
 ---
 
@@ -230,6 +258,12 @@ docker-compose up -d
 ```
 
 → открыть http://localhost:8000
+
+Compose поднимает два сервиса: `hh-bot` (сам бот, `build: .`, точка входа
+`python web_app.py`) и `singbox` — sidecar-прокси (VLESS+Reality → MSK IP),
+в который заворачивается весь hh.ru-трафик (`HH_PROXY`). Для прокси нужен
+конфиг `data/singbox/config.json`; если его нет, бот стартует, но hh.ru
+запросы пойдут через нерабочий прокси.
 
 ### Локально (Python)
 
@@ -348,6 +382,10 @@ hh.ru-clicker/
 │   ├── llm.py              # OpenAI-compat клиент, robot button picker
 │   ├── questionnaire.py    # парсинг и заполнение анкет
 │   ├── oauth.py            # HH OAuth токены, send_chat_message_oauth
+│   ├── hh_client.py        # HHClient — абстрактный интерфейс (Phase 0)
+│   ├── hh_client_web.py    # WebHHClient — web-flow (cookies) адаптер
+│   ├── hh_client_mobile.py # MobileHHClient — mobile-flow (OAuth Bearer)
+│   ├── hh_client_factory.py # get_client(): выбор web/mobile по mode
 │   ├── logging_utils.py    # log_debug, _is_login_page
 │   ├── instances.py        # singleton bot
 │   └── routes/
@@ -379,7 +417,7 @@ hh.ru-clicker/
 │   ├── oauth_tokens.json
 │   ├── llm_log.jsonl
 │   └── debug.log
-├── tests/                  # pytest, 138+ тестов
+├── tests/                  # pytest, 161 тест
 ├── images/                 # README screenshots (replayed via Playwright)
 ├── Dockerfile
 ├── docker-compose.yml
@@ -397,7 +435,7 @@ hh.ru-clicker/
 | LLM | OpenAI SDK + httpx (optional proxy) |
 | HH API | reverse-engineered `chatik.hh.ru` + `websocket.hh.ru` WS push + 106-path public OpenAPI |
 | OAuth | hh.ru OAuth2 (Android-app credentials) |
-| Тесты | pytest, 138+ unit-тестов |
+| Тесты | pytest, 161 unit-тест |
 | Деплой | Docker + docker-compose |
 
 ---
@@ -423,6 +461,26 @@ hh.ru-clicker/
 - Скриншоты в `images/` сгенерированы Playwright'ом с агрессивной
   PII-маскировкой (имена → рандом-пул фейков, телефоны → `•••`,
   чаты blur 4px, raw config-textareas замаскированы)
+
+---
+
+## Документация
+
+Документация по рефакторингу и эксплуатации — в `docs/`:
+
+- [`docs/MOBILE_MIGRATION_GUIDE.md`](docs/MOBILE_MIGRATION_GUIDE.md) — как
+  перевести аккаунт с cookies на mobile OTP-аутентификацию (пошагово).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — устройство бота: два
+  канала (web/mobile), абстракция `HHClient`, workers, realtime.
+- [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — REST/WS endpoint'ы
+  дашборда (`/api/*`, `/ws`).
+- [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md) — справочник
+  `data/config.json`, env-переменных и поля `mode` у аккаунтов.
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — типовые проблемы:
+  лимиты HH, captcha, OAuth, прокси.
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — как вносить изменения:
+  тесты, стиль, процесс.
+- [`CHANGELOG.md`](CHANGELOG.md) — история изменений по версиям.
 
 ---
 

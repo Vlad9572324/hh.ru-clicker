@@ -3,18 +3,16 @@ Debug endpoints for inspecting HH SSR, chats, and account state.
 """
 
 import asyncio
-import json
-import re
 
 import requests
 from app.config import hh_base
 from fastapi import APIRouter, Request
 
 from app.hh_chat import fetch_negotiation_thread
+from app.hh_client_factory import get_client
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
 from app.hh_http import is_impersonating, impersonate_version
-from app.user_agent import webview_user_agent
 from fastapi.responses import PlainTextResponse
 from pathlib import Path
 
@@ -74,7 +72,7 @@ async def api_debug_session(idx: int):
     if not raw_line:
         raw_line = "; ".join(f"{k}={v}" for k, v in ts.get("cookies", {}).items())
     headers = {
-        "User-Agent": webview_user_agent(),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Cookie": raw_line,
     }
@@ -156,7 +154,14 @@ async def api_debug():
 
 @router.get("/api/debug/neg_ids/{idx}")
 async def api_debug_neg_ids(idx: int):
-    """Принудительно вызвать fetch_hh_negotiations_stats для аккаунта и вернуть neg_ids + sample hrefs."""
+    """Принудительно получить negotiations аккаунта через HHClient-factory.
+
+    Клиент выбирается по acc["mode"] (web/mobile/auto); web-реализация
+    делегирует в hh_negotiations.fetch_hh_negotiations_stats.
+    В ответе mode — сырое поле аккаунта ("" если поля нет; нормализацию и
+    резолв "auto" делает фабрика, а выбранный клиент виден в backend),
+    backend — класс выбранного клиента.
+    """
     if idx < len(bot.account_states):
         state = bot.account_states[idx]
     elif idx - len(bot.account_states) in bot.temp_states:
@@ -165,53 +170,19 @@ async def api_debug_neg_ids(idx: int):
         return {"ok": False, "error": "account not found"}
 
     acc = state.acc
-    cookies = acc["cookies"]
-    headers_req = {
-        "User-Agent": webview_user_agent(),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
+    client = get_client(acc)  # до executor: выбор клиента синхронный
     try:
-        resp = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: requests.get(
-                hh_base() + "/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
-                cookies=cookies, headers=headers_req, timeout=15,
-            )
+        data = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: client.fetch_negotiations()
         )
-    except requests.RequestException as e:
+    except Exception as e:
         return {"ok": False, "error": str(e)[:100]}
-    body = resp.text
-    parts = re.split(r'data-qa="negotiations-item"', body)
-    first_item_html = parts[1][:3000] if len(parts) > 1 else "NO ITEMS FOUND"
-    all_numbers = re.findall(r'\b\d{6,}\b', body[:80000])[:30]
-    data_attrs = re.findall(r'data-[\w-]+="\d{4,}"', body[:80000])[:20]
-    neg_ids_from_json = re.findall(r'"chatId"\s*:\s*(\d+)', body)
-    chat_ids_any = re.findall(r'"(?:chatId|chat_id|topicId|topic_id|negotiationId|id)"\s*:\s*(\d{8,})', body)
-    initial_state_match = re.search(r'window\.__(?:INITIAL_STATE|REDUX_STATE|DATA)__\s*=\s*(\{.*?\});', body[:200000], re.DOTALL)
-    initial_state_keys = []
-    if initial_state_match:
-        try:
-            _data = json.loads(initial_state_match.group(1))
-            initial_state_keys = list(_data.keys())[:20]
-        except Exception:
-            initial_state_keys = ["parse_error"]
-    script_jsons = re.findall(r'<script[^>]*>\s*(?:var|const|window\.\w+)\s*=\s*(\{[^<]{100,})', body[:200000])
-    script_json_keys = []
-    for sj in script_jsons[:3]:
-        try:
-            _d = json.loads(sj)
-            script_json_keys.append(list(_d.keys())[:10])
-        except Exception:
-            script_json_keys.append(["parse_error", sj[:50]])
     return {
-        "status_code": resp.status_code,
-        "items_count": len(parts) - 1,
-        "first_item_html": first_item_html,
-        "all_long_numbers_in_page": all_numbers,
-        "data_attrs_with_numbers": data_attrs,
-        "chatid_from_json": neg_ids_from_json[:20],
-        "any_id_fields_8plus_digits": chat_ids_any[:20],
-        "initial_state_keys": initial_state_keys,
-        "script_json_keys": script_json_keys,
+        "ok": True,
+        "account": acc.get("name", ""),
+        "mode": acc.get("mode", ""),
+        "backend": type(client).__name__,
+        "negotiations": data,
     }
 
 
@@ -242,7 +213,7 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
     acc = state.acc
     def _fetch():
         headers = {
-            "User-Agent": webview_user_agent(),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, */*",
             "Referer": hh_base() + "/applicant/negotiations",
         }

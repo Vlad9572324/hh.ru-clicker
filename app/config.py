@@ -1,5 +1,38 @@
 """
 Configuration: Config class, accounts_data, save/load functions, URL helpers.
+
+Схема данных — поле mode (Phase 0 HHClient-абстракции)
+======================================================
+
+Каждый аккаунт в data/accounts.json и каждая temp-сессия в
+data/browser_sessions.json принимают OPTIONAL поле `mode`:
+"web" | "mobile" | "auto". Если поле отсутствует — используется
+CONFIG.default_client_mode (дефолт "web").
+
+1. data/accounts.json (load_accounts()/save_accounts() в этом модуле):
+   список account-dict'ов. Поле `mode` сохраняется автоматически:
+   save_accounts() при записи отбрасывает только ключи с префиксом "_"
+   (runtime-объекты вроде "_cookies_lock"), все остальные ключи — включая
+   `mode` — попадают на диск как есть.
+
+2. data/browser_sessions.json (app/storage.py: load_browser_sessions()/
+   save_browser_sessions()): temp-сессии — такие же account-подобные dict'ы
+   с cookies, принимают то же optional поле `mode` с тем же смыслом
+   (сохраняется автоматически: при записи удаляются только
+   "_raw_cookie_line"/"raw_cookie_line"). get_client() работает с любым
+   account-подобным dict'ом, различий между аккаунтом и temp-сессией нет.
+
+3. Семантика значений:
+   - "web"    → WebHHClient (app/hh_client_web.py): cookies hh.ru,
+                существующий web-flow.
+   - "mobile" → MobileHHClient (app/hh_client_mobile.py): OAuth Bearer
+                через api.hh.ru.
+   - "auto"   → Phase 0: ВСЕГДА web (mobile-skeleton не готов:
+                fetch_negotiations и др. кидают NotImplementedError "phase 2");
+                mobile — только при явном "mobile". С Phase 2 auto станет
+                mobile при живом OAuth-токене (см. docs/PHASE_MATRIX.md).
+
+Выбор клиента по полю `mode` делает app/hh_client_factory.py::get_client(account).
 """
 
 import json
@@ -53,6 +86,10 @@ class Config:
     auto_pause_errors = 5  # Авто-пауза после N ошибок подряд (0 = выключено)
     auto_apply_tests: bool = False  # Автоматически проходить опросники при откликах
     use_oauth_apply: bool = False  # Использовать OAuth API для откликов (вместо web cookies)
+    # Режим HH-клиента по умолчанию для аккаунтов без поля "mode" ("web" | "mobile" | "auto").
+    # Phase 0: mobile-skeleton не готов, поэтому дефолт "web", а "auto" резолвится
+    # в web до Phase 2; mobile выбирается только явным mode аккаунта.
+    default_client_mode: str = "web"
     daily_apply_limit: int = 0  # Жёсткий лимит откликов в день (0 = без ограничения)
     stop_on_hh_limit: bool = True  # Полная остановка при HH лимите (не перепроверять)
     # Фильтр по формату работы (пустой = без фильтра, все форматы)
@@ -220,7 +257,7 @@ _CONFIG_KEYS = [
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
-    "skip_inconsistent", "use_oauth_apply", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
+    "skip_inconsistent", "use_oauth_apply", "default_client_mode", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
     "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
     "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
@@ -262,6 +299,7 @@ def save_config():
     data["title_exclude_keywords"] = CONFIG.title_exclude_keywords
     data["auto_apply_tests"] = CONFIG.auto_apply_tests
     data["use_oauth_apply"] = CONFIG.use_oauth_apply
+    data["default_client_mode"] = CONFIG.default_client_mode
     data["url_pool"] = CONFIG.url_pool
     data["llm_api_key"] = CONFIG.llm_api_key
     data["llm_base_url"] = CONFIG.llm_base_url
@@ -342,6 +380,10 @@ def load_config():
             CONFIG.auto_apply_tests = bool(data["auto_apply_tests"])
         if "use_oauth_apply" in data:
             CONFIG.use_oauth_apply = bool(data["use_oauth_apply"])
+        if "default_client_mode" in data:
+            _mode = str(data["default_client_mode"]).strip().lower()
+            # Мусорное значение → "web" (не "auto": с Phase 2 auto сможет выбирать mobile).
+            CONFIG.default_client_mode = _mode if _mode in ("web", "mobile", "auto") else "web"
         if "llm_profiles" in data and isinstance(data["llm_profiles"], list):
             CONFIG.llm_profiles = data["llm_profiles"]
         if "llm_profile_mode" in data and isinstance(data["llm_profile_mode"], str):
