@@ -1,7 +1,16 @@
 """Тест: send_response_async режет письмо до letter_max_length."""
 import asyncio
+import concurrent.futures
 
 import app.hh_apply as hh_apply
+
+
+def _run_coro(coro):
+    """Запуск корутины в отдельном потоке: pytest-playwright (tests/e2e) держит
+    session-scoped loop «running» в главном потоке, и прямой asyncio.run() падает
+    с RuntimeError. Исключения корутины пробрасываются через future.result()."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
 
 
 class _FakeFormData:
@@ -55,7 +64,7 @@ def test_send_response_async_truncates_letter_to_max_length(monkeypatch):
     monkeypatch.setattr(hh_apply.aiohttp, "ClientSession", _FakeSession)
     _FakeFormData.instances.clear()
 
-    result, _info = asyncio.run(hh_apply.send_response_async(acc, "42", letter_max_length=100))
+    result, _info = _run_coro(hh_apply.send_response_async(acc, "42", letter_max_length=100))
 
     letter = _FakeFormData.instances[0].fields["letter"]
     assert result == "sent"

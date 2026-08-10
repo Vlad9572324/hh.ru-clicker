@@ -1,9 +1,18 @@
 """Тесты generate_hh_ai_letter (HH-Pro AI письмо). pytest-asyncio нет — asyncio.run."""
 import asyncio
+import concurrent.futures
 import json
 from types import SimpleNamespace
 
 import app.hh_apply as hh_apply
+
+
+def _run_coro(coro):
+    """Запуск корутины в отдельном потоке: pytest-playwright (tests/e2e) держит
+    session-scoped loop «running» в главном потоке, и прямой asyncio.run() падает
+    с RuntimeError. Исключения корутины пробрасываются через future.result()."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
 
 
 def _resp(status, body=None, text=None):
@@ -32,7 +41,7 @@ def test_generate_hh_ai_letter_service_already_used_returns_empty(monkeypatch):
     monkeypatch.setattr(hh_apply, "HH", fake_hh)
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
-    assert asyncio.run(hh_apply.generate_hh_ai_letter(acc, "hash", "42")) == ""
+    assert _run_coro(hh_apply.generate_hh_ai_letter(acc, "hash", "42")) == ""
 
 
 def test_generate_hh_ai_letter_polls_until_letter(monkeypatch):
@@ -46,4 +55,4 @@ def test_generate_hh_ai_letter_polls_until_letter(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
     # Ключ именно generatedLetter — реальный формат HH
-    assert asyncio.run(hh_apply.generate_hh_ai_letter(acc, "hash", "42")) == "Текст"
+    assert _run_coro(hh_apply.generate_hh_ai_letter(acc, "hash", "42")) == "Текст"
