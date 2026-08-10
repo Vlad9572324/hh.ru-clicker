@@ -2076,10 +2076,6 @@ class BotManager:
         """
         import urllib.parse as _up
         acc = state.acc
-        token = _obtain_oauth_token(acc)
-        if not token:
-            return {}, {}, {}
-        headers = {"User-Agent": mobile_user_agent(), "Authorization": f"Bearer {token}"}
         url_pages = _url_pages_map()
         acc_url_pages = acc.get("url_pages", {})
         effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
@@ -2097,26 +2093,20 @@ class BotManager:
             base_params = _up.parse_qsl(parsed.query, keep_blank_values=False)
             # remove cookie-search-only keys; keep the rest verbatim
             base_params = [(k, v) for k, v in base_params if k not in ("items_on_page", "no_magic", "ored_clusters")]
+            query = dict(base_params)
+            text = query.pop("text", "")
+            area = query.pop("area", 1)
             ids_for_url: set = set()
-            for page in range(pages):
-                if state._deleted:
-                    break
-                page_params = list(base_params) + [("per_page", "50"), ("page", str(page))]
-                try:
-                    r = HH.get("https://api.hh.ru/vacancies", params=page_params,
-                               headers=headers, timeout=15)
-                    completed += 1
-                    state.status_detail = f"OAuth-сбор {completed}/{total_pages}"
-                    if r.status_code in (401, 403):
-                        log_debug(f"OAuth collect auth_error for {state.short}")
-                        return {}, {}, {}
-                    if r.status_code != 200:
-                        continue
-                    data = r.json()
-                except Exception as e:
-                    log_debug(f"OAuth collect error [{state.short}] page={page}: {e}")
-                    continue
-                items = data.get("items", []) or []
+            if state._deleted:
+                break
+            try:
+                # search_vacancies performs API pagination itself.  Restrict
+                # the manager's configured page window by slicing below.
+                items = get_client(acc).search_vacancies(
+                    text, area_id=area, per_page=50, page=0, filters=query)
+                items = items[:pages * 50]
+                completed += pages
+                state.status_detail = f"OAuth-сбор {min(completed, total_pages)}/{total_pages}"
                 for it in items:
                     vid = str(it.get("id") or "")
                     if not vid:
@@ -2136,8 +2126,8 @@ class BotManager:
                     sch = it.get("schedule")
                     if isinstance(sch, dict) and sch.get("id"):
                         schedule_map.setdefault(vid, set()).add(sch["id"])
-                if not items or data.get("pages", 0) and page + 1 >= data["pages"]:
-                    break
+            except Exception as e:
+                log_debug(f"OAuth collect error [{state.short}]: {e}")
             results_by_url[url] = ids_for_url
         return results_by_url, salary_map, schedule_map
 

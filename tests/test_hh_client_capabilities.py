@@ -84,18 +84,21 @@ GROUP_E_OAUTH_EXTRAS = {
     "fetch_employer_rating_oauth",
 }
 
+GROUP_F_SEARCH = {"search_vacancies"}
+
 WEB_ONLY = {"fill_questionnaire"}
 MOBILE_ONLY = {"fetch_counters"}
 
 EXPECTED_BASE = (
     GROUP_A_NEGOTIATIONS_CHAT | GROUP_B_APPLY_COMMON | GROUP_C_RESUME | GROUP_E_OAUTH_EXTRAS
+    | GROUP_F_SEARCH
 )
 EXPECTED_FULL = EXPECTED_BASE | WEB_ONLY | MOBILE_ONLY
 
 ACC = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
 
 
-def test_groups_are_disjoint_and_total_37():
+def test_groups_are_disjoint_and_total_38():
     groups = [
         GROUP_A_NEGOTIATIONS_CHAT,
         GROUP_B_APPLY_COMMON,
@@ -103,9 +106,10 @@ def test_groups_are_disjoint_and_total_37():
         GROUP_E_OAUTH_EXTRAS,
         WEB_ONLY,
         MOBILE_ONLY,
+        GROUP_F_SEARCH,
     ]
     flat = [name for g in groups for name in g]
-    assert len(flat) == len(set(flat)) == 37
+    assert len(flat) == len(set(flat)) == 38
 
 
 def test_base_layer_has_exactly_common_methods():

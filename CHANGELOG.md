@@ -21,6 +21,21 @@ Commit-хэши указаны в скобках.
   и `hh_api.py`; он не требует фиктивного импорта фабрики в файлах без caller.
 - Оригинальные функции `hh_chat`, `hh_apply`, `hh_negotiations` и `hh_resume`
   сохранены как fallback-делегаты `WebHHClient`.
+## [0.5.0-phase5] — ветка `feat/phase5-search-mobile` (в разработке)
+
+### Added
+
+- Поиск вакансий через `GET api.hh.ru/vacancies`: Bearer/mobile-заголовки,
+  фильтры, пагинация с пределом 20 страниц и стабильное поле `url`.
+- `search_vacancies` в контракте `HHClient`, mobile/web адаптерах и
+  прозрачной mobile→web fallback-обёртке для 0/401/403/5xx.
+- Unit-тесты mobile-поиска и сценария 401 → SSR fallback.
+
+### Changed
+
+- Degraded OAuth collector в `app/manager.py` больше не выполняет прямой
+  HTTP-запрос: поиск проходит через `get_client(acc).search_vacancies(...)`.
+- Обновлена матрица фаз: Phase 5 отмечена выполненной.
 
 ## [0.4.0-phase3.5] — ветка `feat/phase3.5-migrate-callers` (в разработке)
 
