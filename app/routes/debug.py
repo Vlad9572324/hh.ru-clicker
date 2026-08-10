@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from app.hh_chat import fetch_negotiation_thread
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
-from app.hh_http import is_impersonating, impersonate_version
+from app.hh_http import HH, is_impersonating, impersonate_version
 from app.user_agent import webview_user_agent
 from fastapi.responses import PlainTextResponse
 from pathlib import Path
@@ -81,7 +81,8 @@ async def api_debug_session(idx: int):
     loop = asyncio.get_event_loop()
     def _fetch():
         try:
-            r = requests.get(hh_base() + "/applicant/resumes", headers=headers, timeout=15)
+            # Cookies идут сырым заголовком Cookie (из _raw_cookie_line) в headers.
+            r = HH.get(hh_base() + "/applicant/resumes", headers=headers, timeout=15)
             ssr = parse_hh_lux_ssr(r.text)
             preview = {}
             for k, v in ssr.items():
@@ -172,7 +173,7 @@ async def api_debug_neg_ids(idx: int):
     }
     try:
         resp = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: requests.get(
+            None, lambda: HH.get(
                 hh_base() + "/applicant/negotiations?filter=all&state=INTERVIEW&page=0",
                 cookies=cookies, headers=headers_req, timeout=15,
             )
@@ -247,7 +248,7 @@ async def api_debug_thread_raw(idx: int, chat_id: str):
             "Referer": hh_base() + "/applicant/negotiations",
         }
         try:
-            resp = requests.get(
+            resp = HH.get(
                 f"{hh_base()}/chat/messages?chatId={chat_id}",
                 cookies=acc["cookies"], headers=headers, timeout=15,
             )

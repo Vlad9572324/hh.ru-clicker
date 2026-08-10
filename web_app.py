@@ -43,16 +43,37 @@ def _resolve_host() -> str:
     Non-loopback bind требует HH_BOT_API_KEY + явный HH_BOT_UNSAFE_EXPOSE=1
     (kimi-search-3 #9: defense против env injection; audit CRITICAL #1:
     без API-ключа наружу нельзя даже с UNSAFE_EXPOSE).
+
+    Исключение — container opt-in HH_BOT_ALLOW_CONTAINER_BIND=1: разрешает
+    bind ТОЛЬКО на 0.0.0.0 без ключа. Внутри Docker слушать 127.0.0.1
+    бессмысленно: DNAT направляет published-трафик на container IP, а не на
+    container loopback, поэтому дашборд был бы недоступен даже с хоста.
+    Граница безопасности при opt-in — host-side loopback publish
+    (`127.0.0.1:8000:8000` в docker-compose `ports`), не bind внутри.
+    Произвольный non-loopback opt-in НЕ разрешает — там по-прежнему нужен
+    ключ + HH_BOT_UNSAFE_EXPOSE (fail-closed сохранён полностью).
     """
     raw = os.environ.get("HH_BOT_HOST", "127.0.0.1").strip()
     if raw in _SAFE_HOSTS:
         return raw
+    # Container opt-in проверяем ДО ключа: для 0.0.0.0 он самодостаточен,
+    # для любого другого non-loopback — нет (fallthrough на fail-closed путь).
+    if os.environ.get("HH_BOT_ALLOW_CONTAINER_BIND", "").strip() in ("1", "true", "yes"):
+        if raw == "0.0.0.0":
+            sys.stderr.write(
+                "[hh-bot] WARNING: bind 0.0.0.0 без HH_BOT_API_KEY разрешён через "
+                "HH_BOT_ALLOW_CONTAINER_BIND (container opt-in). Граница безопасности — "
+                "host-side loopback publish `127.0.0.1:8000:8000` в docker-compose ports. "
+                "Не убирай 127.0.0.1 префикс без HH_BOT_API_KEY.\n"
+            )
+            return raw
     # Ключ проверяем ДО UNSAFE_EXPOSE: non-loopback bind без API-ключа
     # запрещён даже при HH_BOT_UNSAFE_EXPOSE=1.
     if not os.environ.get("HH_BOT_API_KEY", "").strip():
         raise RuntimeError(
             f"HH_BOT_HOST={raw!r}: non-loopback bind без HH_BOT_API_KEY запрещён "
-            f"(даже при HH_BOT_UNSAFE_EXPOSE=1). Задай API-ключ или верни host на loopback."
+            f"(даже при HH_BOT_UNSAFE_EXPOSE=1 и HH_BOT_ALLOW_CONTAINER_BIND=1). "
+            f"Задай API-ключ или верни host на loopback."
         )
     if os.environ.get("HH_BOT_UNSAFE_EXPOSE", "").strip() in ("1", "true", "yes"):
         return raw  # admin signed off, ключ задан

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 
 from app.logging_utils import log_debug, _is_login_page
 from app.user_agent import webview_user_agent
+from app.hh_http import HH
 from app.config import accounts_data, save_accounts, hh_base
 from app.storage import save_browser_sessions
 from app.oauth import (
@@ -665,7 +666,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
         return {"ok": False, "error": "Invalid idx"}
     def _do():
         ua = webview_user_agent()
-        r = requests.get(
+        r = HH.get(
             f"{hh_base()}/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
             headers={"User-Agent": ua, "Accept": "text/html"},
             cookies=acc.get("cookies", {}), timeout=15)
@@ -757,7 +758,7 @@ async def api_hot_leads(idx: int):
     if acc is None:
         return {"ok": False, "error": "Invalid idx"}
     try:
-        r = requests.get(
+        r = HH.get(
             hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             headers={
                 "User-Agent": webview_user_agent(),
@@ -793,7 +794,7 @@ async def api_remindable(idx: int):
         return {"ok": False, "error": "Invalid idx"}
     ua = webview_user_agent()
     try:
-        r = requests.get(
+        r = HH.get(
             hh_base() + "/applicant/negotiations",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
             cookies=acc.get("cookies", {}), timeout=15,
@@ -847,7 +848,7 @@ async def api_clone_resume(idx: int, request: Request):
         return {"ok": False, "error": "No resume_hash"}
     xsrf = acc.get("cookies", {}).get("_xsrf", "")
     try:
-        r = requests.post(
+        r = HH.post(
             hh_base() + "/applicant/resumes/clone",
             headers={
                 "User-Agent": webview_user_agent(),
@@ -872,7 +873,7 @@ async def api_clone_resume(idx: int, request: Request):
                 return {"ok": True, "new_hash": "", "message": "Склонировано, но hash не получен"}
 
             ua = webview_user_agent()
-            r_orig = requests.get(f"{hh_base()}/resume/{resume_hash}",
+            r_orig = HH.get(f"{hh_base()}/resume/{resume_hash}",
                 headers={"User-Agent": ua, "Accept": "text/html"},
                 cookies=acc.get("cookies", {}), timeout=15)
             orig_data = {}
@@ -970,7 +971,7 @@ async def api_all_resumes(idx: int):
         return {"ok": False, "error": "Invalid idx"}
     ua = webview_user_agent()
     try:
-        r = requests.get(
+        r = HH.get(
             hh_base() + "/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
             cookies=acc.get("cookies", {}), timeout=15,
@@ -1022,10 +1023,19 @@ def _url_preview_compute(url: str, cookies: dict) -> dict:
     import urllib.parse as _up
     ua = webview_user_agent()
     result = {"vacancies": 0, "seekers": 0, "ratio": 0.0}
+    # URL приходит от пользователя: hh.ru/hh.kz-хосты гоняем через HH-клиент
+    # (HH_PROXY + cookies), не-hh URL — напрямую, HH-прокси к ним не применяем.
+    host = (_up.urlparse(url).hostname or "").lower()
+    _hh_host = (host in ("hh.ru", "hh.kz")
+                or host.endswith(".hh.ru") or host.endswith(".hh.kz"))
     try:
         # 1. Vacancies count — фетчим URL как есть, парсим SSR.
-        r = requests.get(url, headers={"User-Agent": ua, "Accept": "text/html"},
-                         cookies=cookies, timeout=10)
+        if _hh_host:
+            r = HH.get(url, headers={"User-Agent": ua, "Accept": "text/html"},
+                       cookies=cookies, timeout=10)
+        else:
+            r = requests.get(url, headers={"User-Agent": ua, "Accept": "text/html"},
+                             cookies=cookies, timeout=10)
         if r.status_code == 200 and not _is_login_page(r.text):
             from app.hh_resume import parse_hh_lux_ssr
             ssr = parse_hh_lux_ssr(r.text)
@@ -1044,7 +1054,7 @@ def _url_preview_compute(url: str, cookies: dict) -> dict:
             qs = dict(_up.parse_qsl(parsed.query))
             text = qs.get("text", "").strip()
             if text and result["vacancies"]:
-                r2 = requests.get(
+                r2 = HH.get(
                     f"{hh_base()}/search/applicant?text={_up.quote(text)}&area=1&clusters=true",
                     headers={"User-Agent": ua, "Accept": "application/json,text/html"},
                     cookies=cookies, timeout=10,

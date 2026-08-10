@@ -320,6 +320,21 @@ def _safe_error(response: requests.Response) -> MobileAuthError:
     )
 
 
+def _otp_locked_until(state: dict[str, Any]) -> int:
+    """Эффективный конец OTP-lockout по state.
+
+    Учитывает и прямой locked_until, и last_lockout_at + OTP_LOCKOUT_SECONDS:
+    даже если state будет переписан без locked_until, момент старта lockout
+    (last_lockout_at) не даёт обойти блокировку запросом нового кода.
+    Возвращает 0, если активной блокировки нет.
+    """
+    locked_until = int(state.get("locked_until") or 0)
+    last_lockout_at = int(state.get("last_lockout_at") or 0)
+    if last_lockout_at:
+        locked_until = max(locked_until, last_lockout_at + OTP_LOCKOUT_SECONDS)
+    return locked_until
+
+
 class HHMobileClient:
     def __init__(self, config: MobileConfig | None = None, session: requests.Session | None = None):
         self.config = config or effective_config()[0]
@@ -327,10 +342,19 @@ class HHMobileClient:
         # Единый egress: мобильный OTP/API-трафик тоже идёт через HH_PROXY, если он
         # задан (иначе сервер светится hh.ru с двух IP — реального и прокси).
         # requests[socks] поддерживает socks5h через PySocks.
+        # Fail-closed: если прокси задан, но механизм egress сломан/недоступен —
+        # падаем с ошибкой, а НЕ молча идём напрямую (раньше любой внутренний сбой
+        # превращался в прямой egress в обход заданной защиты).
         try:
             from app.hh_http import egress_proxy
             _proxy = egress_proxy()
-        except Exception:
+        except Exception as exc:
+            if os.environ.get("HH_PROXY", "").strip():
+                raise MobileAuthError(
+                    "HH_PROXY задан, но egress-прокси не удалось применить — прямой выход запрещён",
+                    status_code=503,
+                ) from exc
+            # HH_PROXY не задан — легитимный режим работы без прокси.
             _proxy = ""
         if _proxy and not self.session.proxies:
             self.session.proxies = {"http": _proxy, "https": _proxy}
@@ -364,6 +388,16 @@ class HHMobileClient:
         with _otp_lock:
             now = int(time.time())
             state = _read_object(STATE_FILE)
+            # Lockout за перебор кодов НЕ снимается запросом нового кода: пока не
+            # истёк TTL от last_lockout_at, новый код не выдаётся, attempts и
+            # активный challenge не трогаются (иначе обход: 5 попыток -> подождал
+            # throttle -> новый код -> ещё 5 попыток, и так бесконечно).
+            locked_until = _otp_locked_until(state)
+            if locked_until > now:
+                raise MobileAuthError(
+                    "Превышено число попыток. Повторите позже.",
+                    status_code=429, retry_after=locked_until - now,
+                )
             # Throttle: не чаще одного запроса кода в REQUEST_CODE_THROTTLE_SECONDS (анти-SMS-бомба).
             if state and now - int(state.get("requested_at") or 0) < REQUEST_CODE_THROTTLE_SECONDS:
                 wait = REQUEST_CODE_THROTTLE_SECONDS - (now - int(state.get("requested_at") or 0))
@@ -386,7 +420,8 @@ class HHMobileClient:
             )
             if not isinstance(payload, dict):
                 raise MobileAuthError("Неожиданный ответ HH")
-            # Новый код — новый цикл попыток: attempts сбрасываются, locked_until убирается.
+            # Новый код — новый цикл попыток: lockout к этому моменту уже истёк
+            # (проверен выше), attempts сбрасываются, блокировка не переносится.
             _atomic_write(STATE_FILE, {
                 "login": login, "login_type": login_type,
                 "requested_at": int(time.time()),
@@ -407,7 +442,7 @@ class HHMobileClient:
             state = _read_object(STATE_FILE)
             if not state.get("login") or state.get("login_type") not in {"phone", "email"}:
                 raise MobileAuthError("Сначала запросите код подтверждения")
-            locked_until = int(state.get("locked_until") or 0)
+            locked_until = _otp_locked_until(state)
             if locked_until > now:
                 raise MobileAuthError(
                     "Превышено число попыток. Повторите позже.",
@@ -430,7 +465,11 @@ class HHMobileClient:
                 attempts = int(state.get("attempts") or 0) + 1
                 state["attempts"] = attempts
                 if attempts >= OTP_MAX_ATTEMPTS:
-                    state["locked_until"] = int(time.time()) + OTP_LOCKOUT_SECONDS
+                    lockout_start = int(time.time())
+                    state["locked_until"] = lockout_start + OTP_LOCKOUT_SECONDS
+                    # last_lockout_at фиксирует момент старта блокировки: по нему
+                    # request_code проверяет TTL и не сбрасывает lockout новым кодом.
+                    state["last_lockout_at"] = lockout_start
                 _atomic_write(STATE_FILE, state)
                 raise
             if not isinstance(tokens, dict) or not tokens.get("access_token"):

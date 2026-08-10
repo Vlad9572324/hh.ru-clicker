@@ -169,3 +169,40 @@ def test_captcha_error_rejects_external_url():
         "captcha_url": "https://evil.example/captcha",
     }]})
     assert ma._safe_error(response).captcha_url is None
+
+
+def test_proxy_fail_closed_when_hh_proxy_configured(isolated_mobile, monkeypatch):
+    """HIGH №5: HH_PROXY задан, но механизм egress сломан → ошибка, а не тихий прямой выход."""
+    monkeypatch.setenv("HH_PROXY", "socks5h://warp:1080")
+
+    def broken_egress():
+        raise RuntimeError("egress-механизм недоступен")
+
+    monkeypatch.setattr("app.hh_http.egress_proxy", broken_egress)
+    with pytest.raises(ma.MobileAuthError) as excinfo:
+        ma.HHMobileClient()
+    # Сбой внутренней инфраструктуры — не вина клиента: статус 5xx, не 4xx.
+    assert excinfo.value.status_code >= 500
+    assert "HH_PROXY" in str(excinfo.value)
+
+
+def test_no_proxy_mode_when_hh_proxy_not_configured(isolated_mobile, monkeypatch):
+    """HH_PROXY не задан — легитимный режим без прокси даже при сбое механизма."""
+    monkeypatch.delenv("HH_PROXY", raising=False)
+
+    def broken_egress():
+        raise RuntimeError("egress-механизм недоступен")
+
+    monkeypatch.setattr("app.hh_http.egress_proxy", broken_egress)
+    client = ma.HHMobileClient()
+    assert not client.session.proxies
+
+
+def test_proxy_applied_to_session(isolated_mobile, monkeypatch):
+    """Исправный egress-механизм: клиент применяет HH_PROXY к http и https."""
+    monkeypatch.setattr("app.hh_http.egress_proxy", lambda: "socks5h://warp:1080")
+    client = ma.HHMobileClient()
+    assert client.session.proxies == {
+        "http": "socks5h://warp:1080",
+        "https": "socks5h://warp:1080",
+    }
