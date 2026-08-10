@@ -271,6 +271,14 @@ def proxy_url() -> str:
     return _PROXY
 
 
+def egress_proxy() -> str:
+    """HH_PROXY для не-curl_cffi egress-клиентов (aiohttp / requests /
+    websocket-client). Пустая строка = без прокси.
+    Читает модульный _PROXY в момент вызова, поэтому runtime-смена через
+    set_proxy() подхватывается всеми egress-путями без рестарта."""
+    return _PROXY
+
+
 def set_proxy(url: str) -> str:
     """Заменить прокси runtime (без рестарта контейнера). Приниает пустую строку
     для отключения. Возвращает актуальный URL после смены.

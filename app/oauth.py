@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import tempfile
 import time
 import threading
 import urllib.parse
@@ -106,9 +107,14 @@ def _load_oauth_tokens():
     try:
         if _OAUTH_FILE.exists():
             with open(_OAUTH_FILE, "r", encoding="utf-8") as f:
-                _oauth_tokens = json.load(f)
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                # Файл существует, но внутри не объект (битый/чужой JSON) — сбрасываем
+                log_debug("OAuth: token file does not contain a dict, resetting")
+                loaded = {}
+            _oauth_tokens = loaded
             log_debug(f"OAuth: loaded {len(_oauth_tokens)} tokens from disk")
-    except Exception as e:
+    except (OSError, ValueError) as e:
         log_debug(f"OAuth: failed to load tokens: {e}")
 
 
@@ -119,21 +125,24 @@ def _save_oauth_tokens() -> bool:
             _OAUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
             with _oauth_lock:
                 snapshot = dict(_oauth_tokens)
-            tmp = _OAUTH_FILE.with_suffix(".tmp")
+            # Уникальный tmp в той же директории: фиксированный .tmp конфликтовал
+            # между процессами и с backup-restore, который пишет свой .tmp.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=_OAUTH_FILE.parent, prefix=".oauth_tokens.", suffix=".tmp"
+            )
             try:
-                with open(tmp, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(snapshot, f, ensure_ascii=False, indent=2)
-                tmp.replace(_OAUTH_FILE)
-                try:
-                    os.chmod(_OAUTH_FILE, 0o600)  # secrets — owner-only
-                except Exception:
-                    pass
+                    f.flush()
+                    os.fsync(f.fileno())  # данные реально на диске до replace
+                os.chmod(tmp_path, 0o600)  # secrets — owner-only (до replace)
+                os.replace(tmp_path, _OAUTH_FILE)
                 return True
-            except Exception as e:
+            except (OSError, ValueError, TypeError) as e:
                 log_debug(f"OAuth: failed to save tokens: {e}")
-                tmp.unlink(missing_ok=True)
+                Path(tmp_path).unlink(missing_ok=True)
                 return False
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             log_debug(f"OAuth: save outer error: {e}")
             return False
 
@@ -144,7 +153,7 @@ _load_oauth_tokens()
 try:
     if _OAUTH_FILE.exists():
         os.chmod(_OAUTH_FILE, 0o600)
-except Exception:
+except OSError:
     pass
 
 
@@ -220,6 +229,37 @@ def remove_mobile_tokens() -> int:
         # Save outside _oauth_lock (see import_mobile_tokens above).
         _save_oauth_tokens()
     return removed
+
+
+def _propagate_refresh_token(old_refresh: str, new_full: dict) -> int:
+    """Обновить ВСЕ записи, разделяющие old_refresh, новыми токенами.
+    Возвращает число обновлённых записей. Вызывать под refresh_lock,
+    ДО _save_oauth_tokens().
+
+    import_mobile_tokens копирует один refresh_token под каждый resume id
+    пользователя, а refresh идёт per-resume_hash: без propagation после
+    ротации только запись текущего резюме получает новый refresh_token,
+    а остальные копии идут в HH с уже ротированным токеном и получают
+    invalid_grant (аудит #4).
+    """
+    if not old_refresh:
+        return 0
+    updated = 0
+    with _oauth_lock:
+        for key, entry in _oauth_tokens.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("refresh_token") != old_refresh:
+                continue
+            # plain backward-compat ключи (без "::") пишутся без служебных
+            # полей на "_" — как и точечная запись в callers
+            plain_key = "::" not in key
+            for field, value in new_full.items():
+                if plain_key and field.startswith("_"):
+                    continue
+                entry[field] = value
+            updated += 1
+    return updated
 
 
 def _refresh_identity(cached: dict, fallback_ua: str) -> tuple[str, str, str]:
@@ -379,6 +419,12 @@ def _obtain_oauth_token(acc: dict) -> str:
                     _oauth_tokens[resume_hash] = {
                         k: v for k, v in token_data_full.items() if not k.startswith("_")
                     }
+                # Propagate новые токены на ВСЕ записи с этим старым refresh_token —
+                # копии, созданные import_mobile_tokens под другие resume id
+                # (аудит #4). Если HH не ротировал refresh_token (вернул тот же),
+                # propagation обновит им expires_at; точечная запись выше остаётся
+                # обязательной.
+                _propagate_refresh_token(refresh, token_data_full)
                 _save_oauth_tokens()
                 log_debug(f"OAuth: refreshed token for {resume_hash[:12]}")
                 return access_token
@@ -513,6 +559,11 @@ def refresh_oauth_tokens_proactive(min_ttl_hours: int = 48) -> dict:
                 _oauth_tokens[key] = new_full
                 # backward-compat plain key
                 _oauth_tokens[resume_hash] = {k: v for k, v in new_full.items() if not k.startswith("_")}
+            # Propagate новые токены на ВСЕ записи со старым refresh_token
+            # (копии от import_mobile_tokens под другие resume id — аудит #4):
+            # иначе следующий проактивный цикл предъявит HH уже ротированный
+            # токен и получит invalid_grant с разлогином.
+            _propagate_refresh_token(latest_refresh, new_full)
             _save_oauth_tokens()
             stats["refreshed"] += 1
             log_debug(f"OAuth proactive: refreshed {resume_hash[:12]} (+{token_data['expires_in']}s)")

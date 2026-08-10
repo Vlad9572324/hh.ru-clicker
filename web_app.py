@@ -40,23 +40,35 @@ def _install_shutdown_hook():
 
 def _resolve_host() -> str:
     """Validate HH_BOT_HOST: by default only loopback allowed.
-    Чтобы экспозить наружу, нужно явно выставить HH_BOT_UNSAFE_EXPOSE=1
-    (kimi-search-3 #9: defense против env injection).
+    Non-loopback bind требует HH_BOT_API_KEY + явный HH_BOT_UNSAFE_EXPOSE=1
+    (kimi-search-3 #9: defense против env injection; audit CRITICAL #1:
+    без API-ключа наружу нельзя даже с UNSAFE_EXPOSE).
     """
     raw = os.environ.get("HH_BOT_HOST", "127.0.0.1").strip()
     if raw in _SAFE_HOSTS:
         return raw
+    # Ключ проверяем ДО UNSAFE_EXPOSE: non-loopback bind без API-ключа
+    # запрещён даже при HH_BOT_UNSAFE_EXPOSE=1.
+    if not os.environ.get("HH_BOT_API_KEY", "").strip():
+        raise RuntimeError(
+            f"HH_BOT_HOST={raw!r}: non-loopback bind без HH_BOT_API_KEY запрещён "
+            f"(даже при HH_BOT_UNSAFE_EXPOSE=1). Задай API-ключ или верни host на loopback."
+        )
     if os.environ.get("HH_BOT_UNSAFE_EXPOSE", "").strip() in ("1", "true", "yes"):
-        return raw  # admin signed off
+        return raw  # admin signed off, ключ задан
     sys.stderr.write(
         f"[hh-bot] HH_BOT_HOST={raw!r} blocked: not in {_SAFE_HOSTS}. "
-        f"Set HH_BOT_UNSAFE_EXPOSE=1 to override (NOT recommended without API auth).\n"
+        f"Set HH_BOT_UNSAFE_EXPOSE=1 to override (API key задан).\n"
     )
     return "127.0.0.1"
 
 
 if __name__ == "__main__":
-    host = _resolve_host()
+    try:
+        host = _resolve_host()
+    except RuntimeError as e:
+        sys.stderr.write(f"[hh-bot] fatal: {e}\n")
+        sys.exit(1)
     port = int(os.environ.get("HH_BOT_PORT", "8000"))
     _install_shutdown_hook()
     uvicorn.run(app, host=host, port=port, log_level="info")

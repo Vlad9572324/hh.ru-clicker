@@ -3,9 +3,10 @@ HH.ru chat functions: fetch chat list, build threads, send messages, mark read.
 """
 
 import os
+import urllib.parse
 import requests
 from app.config import hh_base
-from app.hh_http import HH
+from app.hh_http import HH, egress_proxy
 from app.user_agent import webview_user_agent
 from app.oauth import _token_key
 
@@ -641,6 +642,21 @@ class ChatikWSClient:
         except ImportError:
             log_debug(f"chatik WS [{self.label}]: websocket-client не установлен — push выключен")
             return
+        # Egress через HH_PROXY (audit HIGH #5): websocket-client умеет только
+        # http(s)-CONNECT туннель (http_proxy_host/http_proxy_port, для wss тоже),
+        # socks НЕ поддерживает. Осознанный trade-off: с socks-прокси push-канал
+        # выключаем вовсе — прямое подключение засветило бы реальный IP сервера.
+        _ws_proxy_kw = {}
+        _proxy = (egress_proxy() or "").strip()
+        if _proxy:
+            _p = urllib.parse.urlparse(_proxy)
+            if _p.scheme.lower().startswith("socks"):
+                log_debug("chatik WS: socks-прокси задан, но websocket-client его не поддерживает — push-канал выключен, чтобы не светить прямой IP")
+                return
+            if not _p.hostname or not _p.port:
+                log_debug(f"chatik WS [{self.label}]: HH_PROXY={_proxy!r} не распарсился — push выключен, чтобы не светить прямой IP")
+                return
+            _ws_proxy_kw = {"http_proxy_host": _p.hostname, "http_proxy_port": _p.port}
         while not self._stop_evt.is_set():
             url = fetch_chatik_ws_url(self.acc)
             if not url:
@@ -659,7 +675,8 @@ class ChatikWSClient:
                 header={"User-Agent": webview_user_agent(), "Origin": _WS_BASE},
             )
             try:
-                self._ws.run_forever(ping_interval=180, ping_timeout=20, skip_utf8_validation=True)
+                self._ws.run_forever(ping_interval=180, ping_timeout=20,
+                                     skip_utf8_validation=True, **_ws_proxy_kw)
             except Exception as e:
                 log_debug(f"chatik WS [{self.label}] run_forever err: {e}")
             if self._stop_evt.is_set():

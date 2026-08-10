@@ -38,7 +38,9 @@ def test_mobile_token_import_fails_when_file_cannot_be_written(monkeypatch, tmp_
     def deny_write(*args, **kwargs):
         raise PermissionError("read-only")
 
-    monkeypatch.setattr("builtins.open", deny_write)
+    # _save_oauth_tokens пишет через tempfile.mkstemp + os.fdopen (атомарная
+    # запись, audit fix) — builtins.open больше не перехватывает запись.
+    monkeypatch.setattr("tempfile.mkstemp", deny_write)
     with pytest.raises(MobileAuthError, match="сохранить OAuth-токены"):
         oauth.import_mobile_tokens(
             {"access_token": "access", "refresh_token": "refresh"},

@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,21 @@ ENV_KEYS = {
 }
 _lock = threading.RLock()
 _web_overrides: dict[str, Any] = {}
+
+# Антибрутфорс OTP: лимиты персистятся в STATE_FILE и переживают рестарт процесса.
+OTP_MAX_ATTEMPTS = 5
+OTP_LOCKOUT_SECONDS = 15 * 60
+OTP_STATE_TTL_SECONDS = 300
+REQUEST_CODE_THROTTLE_SECONDS = 60
+REQUEST_CODE_DAILY_LIMIT = 10
+_otp_lock = threading.Lock()
+
+
+def _seconds_until_midnight() -> int:
+    """Секунд до полуночи — retry_after при достижении дневного лимита кодов."""
+    now = datetime.now()
+    midnight = datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+    return max(int((midnight - now).total_seconds()), 1)
 
 
 class MobileAuthError(RuntimeError):
@@ -113,6 +129,45 @@ def _atomic_write(path: Path, value: Any) -> None:
         tmp.unlink(missing_ok=True)
 
 
+# Allowlist хостов мобильного API: точный хост либо суффикс с точкой на границе.
+# Благодаря точке в начале суффиксов не проходят hh.ru.attacker.com, evilhh.ru,
+# api.hh.ru.evil.com и прочие похожие домены.
+ALLOWED_BASE_URL_HOSTS = ("api.hh.ru", ".hh.ru", ".hh.kz")
+
+
+def validate_base_url(url: str) -> str:
+    """Проверяет и нормализует base_url мобильного API.
+
+    Принимает только https://-адрес с хостом из ALLOWED_BASE_URL_HOSTS,
+    без userinfo, порта (кроме 443), пути, query и fragment.  Любое нарушение
+    поднимает MobileAuthError со статусом 400; при успехе возвращает
+    нормализованный вид "https://<host>" (без порта и завершающего "/").
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise MobileAuthError("Base URL должен быть непустой строкой")
+    try:
+        parsed = urlparse(url.strip())
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise MobileAuthError("Base URL не является корректным адресом") from exc
+    if parsed.scheme != "https":
+        raise MobileAuthError("Base URL должен использовать протокол https")
+    if parsed.username is not None or parsed.password is not None:
+        raise MobileAuthError("Base URL не должен содержать userinfo (user@host)")
+    if not hostname:
+        raise MobileAuthError("Base URL должен содержать имя хоста")
+    if not any(hostname == allowed or hostname.endswith(allowed) for allowed in ALLOWED_BASE_URL_HOSTS):
+        raise MobileAuthError("Base URL должен указывать на api.hh.ru или поддомен *.hh.ru / *.hh.kz")
+    if port not in (None, 443):
+        raise MobileAuthError("Base URL не должен содержать порт, отличный от 443")
+    if parsed.path not in ("", "/"):
+        raise MobileAuthError("Base URL не должен содержать путь")
+    if parsed.query or parsed.fragment:
+        raise MobileAuthError("Base URL не должен содержать query или fragment")
+    return "https://" + hostname
+
+
 def _coerce(values: dict[str, Any]) -> dict[str, Any]:
     out = dict(values)
     try:
@@ -131,9 +186,7 @@ def _coerce(values: dict[str, Any]) -> dict[str, Any]:
         uuid.UUID(out["device_uuid"])
     except (ValueError, AttributeError) as exc:
         raise MobileAuthError("DEVICE_UUID должен быть валидным UUID") from exc
-    if not re.fullmatch(r"https://[^/]+", out["base_url"].rstrip("/")):
-        raise MobileAuthError("Base URL должен быть HTTPS-адресом без пути")
-    out["base_url"] = out["base_url"].rstrip("/")
+    out["base_url"] = validate_base_url(out["base_url"])
     cfg = MobileConfig(**out)
     if not cfg.user_agent:
         raise MobileAuthError("Итоговый User-Agent пуст")
@@ -241,7 +294,7 @@ def _safe_error(response: requests.Response) -> MobileAuthError:
     captcha_url = None
     try:
         payload = response.json()
-        print(payload)
+        # НЕ логируем payload целиком: ответ HH может содержать телефон/login (PII).
         errors = payload.get("errors", []) if isinstance(payload, dict) else []
         first = errors[0] if errors and isinstance(errors[0], dict) else {}
         kind, value = first.get("type", ""), first.get("value", "")
@@ -271,6 +324,16 @@ class HHMobileClient:
     def __init__(self, config: MobileConfig | None = None, session: requests.Session | None = None):
         self.config = config or effective_config()[0]
         self.session = session or requests.Session()
+        # Единый egress: мобильный OTP/API-трафик тоже идёт через HH_PROXY, если он
+        # задан (иначе сервер светится hh.ru с двух IP — реального и прокси).
+        # requests[socks] поддерживает socks5h через PySocks.
+        try:
+            from app.hh_http import egress_proxy
+            _proxy = egress_proxy()
+        except Exception:
+            _proxy = ""
+        if _proxy and not self.session.proxies:
+            self.session.proxies = {"http": _proxy, "https": _proxy}
 
     def _request(self, method: str, path: str, *, token: str = "", data=None, params=None) -> Any:
         headers = {"Accept": "application/json", "User-Agent": self.config.user_agent}
@@ -298,44 +361,88 @@ class HHMobileClient:
     def request_code(self, login: str, login_type: str, notification_type: str | None = None) -> dict:
         if login_type not in {"phone", "email"}:
             raise MobileAuthError("Тип входа должен быть phone или email")
-        payload = self._request(
-            "POST", f"one_time_password/{login_type}/generate",
-            params={"allow_multiaccount_creation": "false"},
-            data={"login": login, "notification_type": notification_type or ""},
-        )
-        if not isinstance(payload, dict):
-            raise MobileAuthError("Неожиданный ответ HH")
-        _atomic_write(STATE_FILE, {
-            "login": login, "login_type": login_type,
-            "requested_at": int(time.time()),
-            "retry_after": payload.get("can_request_code_again_in", 0),
-            "code_length": payload.get("code_length"),
-            "notification_type": payload.get("notification_type"),
-        })
-        return payload
+        with _otp_lock:
+            now = int(time.time())
+            state = _read_object(STATE_FILE)
+            # Throttle: не чаще одного запроса кода в REQUEST_CODE_THROTTLE_SECONDS (анти-SMS-бомба).
+            if state and now - int(state.get("requested_at") or 0) < REQUEST_CODE_THROTTLE_SECONDS:
+                wait = REQUEST_CODE_THROTTLE_SECONDS - (now - int(state.get("requested_at") or 0))
+                raise MobileAuthError(
+                    "Слишком частые запросы кода. Повторите позже.",
+                    status_code=429, retry_after=wait,
+                )
+            # Дневной лимит: не более REQUEST_CODE_DAILY_LIMIT кодов в сутки на логин.
+            today = date.today().isoformat()
+            request_count = int(state.get("request_count") or 0) if state.get("request_day") == today else 0
+            if request_count >= REQUEST_CODE_DAILY_LIMIT:
+                raise MobileAuthError(
+                    "Достигнут дневной лимит запросов кода. Повторите завтра.",
+                    status_code=429, retry_after=_seconds_until_midnight(),
+                )
+            payload = self._request(
+                "POST", f"one_time_password/{login_type}/generate",
+                params={"allow_multiaccount_creation": "false"},
+                data={"login": login, "notification_type": notification_type or ""},
+            )
+            if not isinstance(payload, dict):
+                raise MobileAuthError("Неожиданный ответ HH")
+            # Новый код — новый цикл попыток: attempts сбрасываются, locked_until убирается.
+            _atomic_write(STATE_FILE, {
+                "login": login, "login_type": login_type,
+                "requested_at": int(time.time()),
+                "retry_after": payload.get("can_request_code_again_in", 0),
+                "code_length": payload.get("code_length"),
+                "notification_type": payload.get("notification_type"),
+                "request_day": today,
+                "request_count": request_count + 1,
+                "attempts": 0,
+            })
+            return payload
 
     def login(self, code: str) -> tuple[dict, dict, list]:
-        state = _read_object(STATE_FILE)
-        if not state.get("login") or state.get("login_type") not in {"phone", "email"}:
-            raise MobileAuthError("Сначала запросите код подтверждения")
-        expected = state.get("code_length")
-        if not code or (expected and (not code.isdigit() or len(code) != int(expected))):
-            raise MobileAuthError(f"Введите цифровой код длиной {expected}" if expected else "Введите код")
-        tokens = self._request(
-            "POST", f"one_time_password/{state['login_type']}/login",
-            params={"allow_multiaccount_creation": "false"},
-            data={"login": state["login"], "confirmation_code": code, "user_type": "applicant"},
-        )
-        if not isinstance(tokens, dict) or not tokens.get("access_token"):
-            raise MobileAuthError("Ответ HH не содержит access_token")
-        now = int(time.time())
-        tokens["obtained_at"] = now
-        if tokens.get("expires_in") is not None:
-            tokens["expires_at"] = now + int(tokens["expires_in"])
-        me = self._request("GET", "me", token=tokens["access_token"], params={"with_user_statuses": "true"})
-        resumes_payload = self._request("GET", "resumes/mine", token=tokens["access_token"])
-        resumes = resumes_payload.get("items", []) if isinstance(resumes_payload, dict) else []
-        return tokens, (me if isinstance(me, dict) else {}), [x for x in resumes if isinstance(x, dict)]
+        # Mutex на весь сценарий: защита от параллельного перебора из threadpool
+        # и от перезаписи STATE_FILE одновременными запросами.
+        with _otp_lock:
+            now = int(time.time())
+            state = _read_object(STATE_FILE)
+            if not state.get("login") or state.get("login_type") not in {"phone", "email"}:
+                raise MobileAuthError("Сначала запросите код подтверждения")
+            locked_until = int(state.get("locked_until") or 0)
+            if locked_until > now:
+                raise MobileAuthError(
+                    "Превышено число попыток. Повторите позже.",
+                    status_code=429, retry_after=locked_until - now,
+                )
+            if now - int(state.get("requested_at") or 0) > OTP_STATE_TTL_SECONDS:
+                raise MobileAuthError("Код подтверждения истёк. Запросите новый код.", status_code=410)
+            expected = state.get("code_length")
+            if not code or (expected and (not code.isdigit() or len(code) != int(expected))):
+                raise MobileAuthError(f"Введите цифровой код длиной {expected}" if expected else "Введите код")
+            try:
+                tokens = self._request(
+                    "POST", f"one_time_password/{state['login_type']}/login",
+                    params={"allow_multiaccount_creation": "false"},
+                    data={"login": state["login"], "confirmation_code": code, "user_type": "applicant"},
+                )
+            except MobileAuthError:
+                # Любая ошибка подтверждения (неверный/истёкший код и т.п.) — неудачная попытка.
+                # 5-я попытка ещё отдаёт честный ответ HH; lockout срабатывает на следующей.
+                attempts = int(state.get("attempts") or 0) + 1
+                state["attempts"] = attempts
+                if attempts >= OTP_MAX_ATTEMPTS:
+                    state["locked_until"] = int(time.time()) + OTP_LOCKOUT_SECONDS
+                _atomic_write(STATE_FILE, state)
+                raise
+            if not isinstance(tokens, dict) or not tokens.get("access_token"):
+                raise MobileAuthError("Ответ HH не содержит access_token")
+            now = int(time.time())
+            tokens["obtained_at"] = now
+            if tokens.get("expires_in") is not None:
+                tokens["expires_at"] = now + int(tokens["expires_in"])
+            me = self._request("GET", "me", token=tokens["access_token"], params={"with_user_statuses": "true"})
+            resumes_payload = self._request("GET", "resumes/mine", token=tokens["access_token"])
+            resumes = resumes_payload.get("items", []) if isinstance(resumes_payload, dict) else []
+            return tokens, (me if isinstance(me, dict) else {}), [x for x in resumes if isinstance(x, dict)]
 
     def collect_vacancies(self, token: str, resumes: list[dict], per_page: int = 20) -> dict[str, Any]:
         result: dict[str, Any] = {"fetched_at": int(time.time()), "by_resume": {}}
@@ -465,10 +572,11 @@ def auth_status() -> dict[str, Any]:
     state = _read_object(STATE_FILE)
     if not state:
         return {"stage": "idle"}
+    # code_length намеренно не отдаём: длина кода — разведка для атакующего.
     return {
         "stage": "code_requested", "login_masked": mask_login(str(state.get("login", ""))),
         "login_type": state.get("login_type"), "requested_at": state.get("requested_at"),
-        "retry_after": state.get("retry_after", 0), "code_length": state.get("code_length"),
+        "retry_after": state.get("retry_after", 0),
         "notification_type": state.get("notification_type"),
     }
 

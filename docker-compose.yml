@@ -12,13 +12,18 @@ services:
     depends_on:
       - singbox
     ports:
-      - "8000:8000"
+      # Только loopback: дашборд не торчит в LAN. Для доступа извне loopback
+      # убери префикс 127.0.0.1 И задай HH_BOT_API_KEY (+ см. env ниже).
+      - "127.0.0.1:8000:8000"
     environment:
-      # Открыто наружу для LAN-доступа (см. ports выше — без 127.0.0.1 префикса).
-      # WARNING: дашборд НЕ имеет авторизации — любой в LAN может управлять ботом.
-      HH_BOT_HOST: "0.0.0.0"
-      HH_BOT_UNSAFE_EXPOSE: "1"
-      # Весь исходящий hh.ru-трафик идёт через sing-box-sidecar (VLESS+Reality → MSK IP).
+      # Дашборд слушаем только loopback: non-loopback bind без HH_BOT_API_KEY
+      # запрещён (web_app.py упадёт с RuntimeError даже при HH_BOT_UNSAFE_EXPOSE=1).
+      HH_BOT_HOST: "127.0.0.1"
+      # API-ключ обязателен для доступа к дашборду извне loopback. Для внешнего
+      # доступа также нужны: ports без 127.0.0.1, HH_BOT_HOST=0.0.0.0, HH_BOT_UNSAFE_EXPOSE=1.
+      # HH_BOT_API_KEY: "change-me"
+      # Весь исходящий hh.ru-трафик (aiohttp-отклики и chatik-WS) уважает HH_PROXY
+      # и идёт через sing-box-sidecar (VLESS+Reality → MSK IP).
       HH_PROXY: "socks5h://singbox:1080"
       # Phase 1 WS realtime (websocket.hh.ru): ходим НАПРЯМУЮ, не через singbox-цепочку.
       # "0" = direct (дефолт); "1" = WS тоже через HH_PROXY. singbox-сервис не трогаем.
