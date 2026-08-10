@@ -4,7 +4,7 @@ import time
 import pytest
 import responses
 
-from app import hh_chat, oauth
+from app import hh_chat, mobile_web_only, oauth
 from app.config import CONFIG
 from app.hh_client_fallback import FallbackHHClient
 from app.hh_client_factory import get_client
@@ -78,12 +78,10 @@ def test_mobile_fetch_negotiations_delegates_to_mobile_module(monkeypatch):
     assert calls[0][0] is acc  # тот же объект, не копия
 
 
-def test_mobile_auto_decline_discards_not_implemented():
-    # Единственная оставшаяся phase-2 заглушка группы A: decline существует
-    # только в web-flow; FallbackHHClient повторит вызов через web.
+def test_mobile_auto_decline_discards_delegate(monkeypatch):
     acc = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
-    with pytest.raises(NotImplementedError, match="phase 2"):
-        MobileHHClient(acc).auto_decline_discards()
+    monkeypatch.setattr(mobile_web_only, "auto_decline_discards", lambda account: 2)
+    assert MobileHHClient(acc).auto_decline_discards() == 2
 
 
 def test_factory_mode_selection(monkeypatch):

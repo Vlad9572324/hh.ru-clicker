@@ -25,10 +25,8 @@ MobileHHClient — mobile-клиент hh.ru (api.hh.ru, OAuth Bearer).
     fetch_resume_view_history: dict {items, total} вместо list)
     задокументированы в модулях и отчёте Phase 4.
 
-Заглушки NotImplementedError:
-  - phase 2: auto_decline_discards (decline существует только в web-flow);
-  - phase 3: отклики и vacancy-метаданные,
-  - phase 4: fetch_account_diagnostics (составной SSR-метод, web fallback).
+Web-only аналоги, перенесённые на mobile API:
+  - auto_decline_discards, fetch_employer_rating, fetch_account_diagnostics.
 """
 
 import asyncio
@@ -55,6 +53,7 @@ from app import (
     mobile_search,
     mobile_send_message,
     mobile_touch_resume,
+    mobile_web_only,
     oauth,
 )
 from app.hh_client import HHClient
@@ -64,10 +63,9 @@ from app.llm import _randomize_text
 class MobileHHClient(HHClient):
     """Mobile-flow реализация полного контракта HHClient (HHClientBase +
     WebOnlyOps + MobileOnlyOps): api.hh.ru через OAuth Bearer. Реально:
-    fetch_counters (MobileOnlyOps), OAuth-extras, группа A без
-    auto_decline_discards (Phase 2) и группа C без fetch_account_diagnostics
-    (Phase 4, делегирование в app/mobile_*.py); остальное —
-    NotImplementedError-заглушки."""
+    fetch_counters (MobileOnlyOps), OAuth-extras и группы A–C через
+    app/mobile_*.py; оставшиеся неподдержанные операции явно представлены
+    NotImplementedError-заглушками."""
 
     def __init__(self, acc: dict):
         super().__init__(acc)
@@ -133,10 +131,8 @@ class MobileHHClient(HHClient):
         return mobile_neg_meta.fetch_possible_offers(self.acc)
 
     def auto_decline_discards(self) -> int:
-        """Автоотклонение DISCARD-переговоров. Mobile-эндпоинта нет —
-        decline существует только в web-flow (/applicant/negotiations/decline);
-        FallbackHHClient прозрачно повторит через web-flow."""
-        raise NotImplementedError("phase 2: TODO mobile auto_decline_discards")
+        """Отклонить DISCARD-переговоры через Android mobile endpoint."""
+        return mobile_web_only.auto_decline_discards(self.acc)
 
     def fetch_negotiations_metadata(self) -> dict:
         """Метаданные переговоров: GET api.hh.ru/negotiations ->
@@ -190,8 +186,8 @@ class MobileHHClient(HHClient):
         return mobile_related.fetch_related_vacancies(self.acc, seed_vid, max_pages)
 
     def fetch_employer_rating(self, employer_id) -> dict | None:
-        """Рейтинг работодателя (phase 3, vacancy-метаданные)."""
-        raise NotImplementedError("phase 3: TODO mobile fetch_employer_rating")
+        """Рейтинг работодателя из /employers/{id} и reviews API."""
+        return mobile_web_only.fetch_employer_rating(self.acc, employer_id)
 
     def fetch_employer_id_for_vacancy(self, vacancy_id) -> int | None:
         """employer_id по вакансии (phase 3, vacancy-метаданные)."""
@@ -265,10 +261,8 @@ class MobileHHClient(HHClient):
         return mobile_job_search_status.set_job_search_status(self.acc, status)
 
     def fetch_account_diagnostics(self) -> dict:
-        """Диагностика аккаунта (phase 4). Составной web-SSR метод
-        (/applicant/resumes) — mobile-аналога нет; FallbackHHClient
-        прозрачно повторит через web-flow."""
-        raise NotImplementedError("phase 4: TODO mobile fetch_account_diagnostics")
+        """Диагностика из /me, /counters/user и negotiation statistics."""
+        return mobile_web_only.fetch_account_diagnostics(self.acc)
 
     # ── Реально в Phase 0 ─────────────────────────────────────────────────────
 
