@@ -26,7 +26,7 @@ def test_200_empty_missing_ok_and_query_params(monkeypatch):
 
     out = check_vacancy_before_apply(ACC, "123", resume_id="rh1")
 
-    assert out == {"ok": True, "missing": []}
+    assert out == {"ok": True, "hard_missing": [], "soft_missing": []}
     q = _query()
     assert q["vacancy_id"] == ["123"]
     assert q["resume_id"] == ["rh1"]
@@ -44,7 +44,7 @@ def test_200_list_of_strings_missing(monkeypatch):
 
     out = check_vacancy_before_apply(ACC, "123", resume_id="rh1")
 
-    assert out == {"ok": False, "missing": ["WORK_FORMAT", "PHOTO"]}
+    assert out == {"ok": False, "hard_missing": ["WORK_FORMAT"], "soft_missing": ["PHOTO"]}
 
 
 @responses.activate
@@ -58,7 +58,7 @@ def test_200_list_of_dicts_type_or_id(monkeypatch):
 
     out = check_vacancy_before_apply(ACC, "123", resume_id="rh1")
 
-    assert out == {"ok": False, "missing": ["PHOTO", "EDUCATION"]}
+    assert out == {"ok": True, "hard_missing": [], "soft_missing": ["PHOTO", "EDUCATION"]}
 
 
 @responses.activate
@@ -72,7 +72,8 @@ def test_200_dict_with_values_missing(monkeypatch):
     out = check_vacancy_before_apply(ACC, "123", resume_id="rh1")
 
     assert out["ok"] is False
-    assert sorted(out["missing"]) == ["PHOTO", "WORK_FORMAT"]
+    assert out["hard_missing"] == ["WORK_FORMAT"]
+    assert out["soft_missing"] == ["PHOTO"]
 
 
 @responses.activate
@@ -96,7 +97,7 @@ def test_200_not_a_list_defensively_empty(monkeypatch):
 
     out = check_vacancy_before_apply(ACC, "123", resume_id="rh1")
 
-    assert out == {"ok": True, "missing": []}
+    assert out == {"ok": True, "hard_missing": [], "soft_missing": []}
 
 
 @responses.activate
@@ -136,7 +137,7 @@ def test_client_substitutes_resume_hash_from_acc(monkeypatch):
 
     out = MobileHHClient(ACC).check_vacancy_before_apply("123")
 
-    assert out == {"ok": True, "missing": []}
+    assert out == {"ok": True, "hard_missing": [], "soft_missing": []}
     q = _query()
     assert q["resume_id"] == ["rh1"]
     assert q["vacancy_id"] == ["123"]

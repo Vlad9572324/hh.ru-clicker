@@ -198,7 +198,10 @@ def test_sync_delegate_forwards_args_and_returns_sentinel(
 
     result = getattr(WebHHClient(acc), method_name)(*args)
 
-    assert result is sentinel  # возвращено без преобразования
+    if method_name == "fetch_resume":
+        assert result == {"text": sentinel, "source": "web"}
+    else:
+        assert result is sentinel  # возвращено без преобразования
     assert len(calls) == 1
     fwd_args, fwd_kwargs = calls[0]
     assert fwd_args[0] is acc  # тот же объект, не копия

@@ -190,7 +190,7 @@ def test_mobile_check_vacancy_before_apply_200(oauth_token, web_recs):
 
     result = MobileHHClient(ACC).check_vacancy_before_apply("v1")
 
-    assert result == {"ok": True, "missing": []}
+    assert result == {"ok": True, "hard_missing": [], "soft_missing": []}
     assert web_recs["_check_vacancy_before_apply"] == []
 
 

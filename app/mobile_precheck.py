@@ -24,6 +24,8 @@ from app.hh_mobile_transport import (
 )
 from app.logging_utils import log_debug
 
+HARD_MISSING = {"WORK_FORMAT", "ADDRESS_COORDINATES", "PREFERRED_WORK_AREAS"}
+
 
 def _parse_missing(raw) -> list:
     """Защитно извлечь список недостающих элементов из data_inconsistency.
@@ -96,4 +98,7 @@ def check_vacancy_before_apply(acc: dict, vacancy_id, resume_id: str = "",
     if missing:
         log_debug(f"mobile check_vacancy_before_apply vacancy={vacancy_id}: "
                   f"не хватает {missing} -> отклик пропускается")
-    return {"ok": not missing, "missing": missing}
+    hard_missing = [item for item in missing if item in HARD_MISSING]
+    soft_missing = [item for item in missing if item not in HARD_MISSING]
+    return {"ok": not hard_missing, "hard_missing": hard_missing,
+            "soft_missing": soft_missing}

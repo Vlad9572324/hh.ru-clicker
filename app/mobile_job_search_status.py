@@ -59,6 +59,11 @@ _STATUS_LABELS = {
 }
 
 
+def normalize_job_search_status(status: str) -> str:
+    norm = str(status or "").strip().lower()
+    return _STATUS_ALIASES.get(norm, norm)
+
+
 def set_job_search_status(acc: dict, status: str) -> dict:
     """Смена статуса поиска работы через mobile-API (аналог web
     hh_resume.set_job_search_status).

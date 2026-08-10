@@ -1646,8 +1646,11 @@ class BotManager:
                             meta = state.vacancy_meta.get(vid, {})
                             display_title = (meta.get("title") or vid)[:40]
                             self._add_log(state.short, state.color,
-                                f"⏭ {display_title}: пропуск ({precheck['reason']})", "warning")
+                                f"⏭ {display_title}: пропуск ({precheck.get('reason') or ', '.join(precheck.get('hard_missing', []))})", "warning")
                         else:
+                            if precheck.get("soft_missing"):
+                                self._add_log(state.short, state.color,
+                                    f"⚠️ {vid}: можно откликнуться; рекомендуется: {', '.join(precheck['soft_missing'])}", "warning")
                             checked_batch.append(vid)
                             # Обогащаем vacancy_meta полями popup'а (letter_max_length,
                             # test_required, ai_assistant_enabled) — используются на этапе
@@ -2519,7 +2522,9 @@ class BotManager:
                 if CONFIG.llm_use_resume:
                     rh = state.acc.get("resume_hash", "")
                     _cached = rh and rh in _resume_cache and (time.time() - _resume_cache[rh][1] < _RESUME_CACHE_TTL)
-                    resume_text = get_client(state.acc).fetch_resume()
+                    resume_data = get_client(state.acc).fetch_resume()
+                    resume_text = (resume_data.get("text", "") if isinstance(resume_data, dict)
+                                   and "text" in resume_data else json.dumps(resume_data, ensure_ascii=False))
                     if resume_text:
                         src = "кэш" if _cached else "загружено"
                         self._add_log(state.short, state.color,

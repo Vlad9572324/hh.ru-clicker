@@ -83,7 +83,7 @@ def _dict_items(items) -> list:
     return [it for it in items if isinstance(it, dict)]
 
 
-def _aux_request(acc: dict, label: str, method: str, path: str, **kwargs):
+def _aux_request(acc: dict, label: str, method: str, path: str, errors=None, **kwargs):
     """Вспомогательный запрос (endpoint'ы 2-5): fallback-статусы
     (0/401/403/5xx) поднимаем MobileAPIError наверх — вызов целиком
     повторится через web-flow; не-fallback ошибки — log_debug и None
@@ -95,6 +95,8 @@ def _aux_request(acc: dict, label: str, method: str, path: str, **kwargs):
             raise
         log_debug(f"mobile analyze_resume {label}: HTTP {e.status_code} | "
                   f"{e.payload} — часть результата пустая")
+        if errors is not None:
+            errors.append({"endpoint": label, "error": f"HTTP {e.status_code}"})
         return None
 
 
@@ -143,13 +145,14 @@ def analyze_resume(acc: dict, resume_id=None) -> dict:
     # skills; регистронезависимая база для вычитания recommended_skills).
     raw_skills = resume.get("skill_set") or resume.get("skills")
     existing_lower = {name.lower() for name in _names(raw_skills)}
+    errors: list = []
 
     # 2. Рекомендуемые навыки → missing_skills: что стоит ДОБАВИТЬ в резюме
     # (регистронезависимо минус существующие, порядок ответа сохраняем).
     missing_skills: list = []
     data = _aux_request(acc, "recommended_skills", "POST",
                         "/skills_profile/predictions/recommended_skills/resume",
-                        json_body={"resume_id": rid, "limit": 20})
+                        errors=errors, json_body={"resume_id": rid, "limit": 20})
     if isinstance(data, dict):
         seen_lower = set(existing_lower)
         for name in _names(data.get("skills")):
@@ -164,7 +167,7 @@ def analyze_resume(acc: dict, resume_id=None) -> dict:
     recommended_duties: list = []
     data = _aux_request(acc, "duties", "POST",
                         "/skills_profile/suggestions/duties",
-                        json_body={"resume_id": rid})
+                        errors=errors, json_body={"resume_id": rid})
     if isinstance(data, dict):
         recommended_duties = _names(data.get("items"))
 
@@ -173,7 +176,7 @@ def analyze_resume(acc: dict, resume_id=None) -> dict:
     if title:
         data = _aux_request(acc, "subroles", "POST",
                             "/skills_profile/predictions/subroles/by_title",
-                            json_body={"title": title})
+                            errors=errors, json_body={"title": title})
         raw_subroles = data.get("subroles") if isinstance(data, dict) else None
         for sub in _dict_items(raw_subroles):
             subroles.append({
@@ -189,7 +192,7 @@ def analyze_resume(acc: dict, resume_id=None) -> dict:
     grade = None
     data = _aux_request(acc, "career_platform/profile", "GET",
                         "/career_platform/profile",
-                        params={"profession_description": "true"})
+                        errors=errors, params={"profession_description": "true"})
     if isinstance(data, dict):
         grade_raw = data.get("grade")
         if isinstance(grade_raw, dict):
@@ -206,4 +209,6 @@ def analyze_resume(acc: dict, resume_id=None) -> dict:
         "subroles": subroles,
         "grade": grade,
         "current_score": current_score,
+        "partial": bool(errors),
+        "errors": errors,
     }

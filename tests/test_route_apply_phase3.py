@@ -339,3 +339,63 @@ def test_web_mode_stays_on_web_flow(monkeypatch, bot_stub):
     assert fake_web.submit_calls == []        # submit_response НЕ вызван
     assert web_calls                          # web-form flow реально начался
     assert resp == {"status": "error", "message": "web-flow reached"}
+
+
+class _Response:
+    def __init__(self, status, text="", location=""):
+        self.status = status
+        self._text = text
+        self.headers = {"location": location}
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): return False
+    async def text(self): return self._text
+
+
+class _Session:
+    def __init__(self, get_response, post_response, **kwargs):
+        self.get_response = get_response
+        self.post_response = post_response
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): return False
+    def get(self, *args, **kwargs): return self.get_response
+    def post(self, *args, **kwargs): return self.post_response
+
+
+class _FormData:
+    def __init__(self): self.fields = []
+    def add_field(self, name, value): self.fields.append((name, value))
+
+
+def _fake_aiohttp(get_response, post_response):
+    return types.SimpleNamespace(
+        ClientSession=lambda **kwargs: _Session(get_response, post_response, **kwargs),
+        ClientTimeout=lambda **kwargs: kwargs,
+        FormData=_FormData,
+    )
+
+
+@pytest.mark.parametrize("post_status,location,expected", [
+    (302, "/applicant/negotiations", "sent"),
+    (302, "/negotiations-limit-exceeded", "limit"),
+    (302, "/applicant/vacancy_response?vacancyId=777&withoutTest=no", "error"),
+    (400, "", "error"),
+])
+def test_real_web_form_outcomes(monkeypatch, bot_stub, post_status, location, expected):
+    fake_web = FakeWebClient(dict(ACC))
+    monkeypatch.setattr(apply_route, "get_client", lambda acc: fake_web)
+    hidden = '<input type="hidden" name="_xsrf" value="token">'
+    monkeypatch.setattr(apply_route, "aiohttp", _fake_aiohttp(
+        _Response(200, hidden), _Response(post_status, location=location)))
+
+    resp = _run(api_apply_submit({"account_idx": 0, "vacancy_id": "777"}))
+    assert resp["status"] == expected
+    if expected == "sent":
+        assert bot_stub["state"].sent == 1
+        assert bot_stub["state"].questionnaire_sent == 1
+        assert bot_stub["applied"] == [("acc1", "777")]
+
+
+def test_submit_validation_errors(monkeypatch, bot_stub):
+    assert _run(api_apply_submit({"account_idx": "bad"}))["status"] == "error"
+    monkeypatch.setattr(bot, "_get_apply_acc", lambda idx: None)
+    assert _run(api_apply_submit({"account_idx": 0, "vacancy_id": "777"}))["message"] == "Неверный аккаунт"

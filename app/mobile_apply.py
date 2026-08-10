@@ -85,7 +85,9 @@ def _extract_error_code(payload) -> str:
 def submit_response(acc: dict, vacancy_id: str, resume_id: str,
                     message: str = "", response_source: str = "",
                     hhtm_source: str = "vacancy",
-                    hhtm_from: str = "vacancy") -> dict:
+                    hhtm_from: str = "vacancy", source_label: str = "",
+                    required_applicant_visibility_id: str = "",
+                    enable_applicant_visibility_in_country: bool | None = None) -> dict:
     """Отклик на вакансию через mobile-контракт api.hh.ru.
 
     POST https://api.hh.ru/negotiations, Content-Type form-urlencoded
@@ -118,10 +120,17 @@ def submit_response(acc: dict, vacancy_id: str, resume_id: str,
         form["message"] = message
     if response_source:
         form["response_source"] = response_source
+    if required_applicant_visibility_id:
+        form["required_applicant_visibility_id"] = required_applicant_visibility_id
+        enabled = True if enable_applicant_visibility_in_country is None else enable_applicant_visibility_in_country
+        form["enable_applicant_visibility_in_country"] = str(enabled).lower()
+    params = {"hhtmSource": hhtm_source, "hhtmFrom": hhtm_from}
+    if source_label:
+        params["source_label"] = source_label
     try:
         data = mobile_request(
             acc, "POST", "/negotiations",
-            params={"hhtmSource": hhtm_source, "hhtmFrom": hhtm_from},
+            params=params,
             form=form,
         )
     except MobileAPIError as e:

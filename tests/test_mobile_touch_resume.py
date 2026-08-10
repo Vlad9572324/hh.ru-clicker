@@ -15,6 +15,11 @@ ACC = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
 URL = MOBILE_BASE + "/resumes/rh1/publish"
 
 
+@pytest.fixture(autouse=True)
+def _clear_touch_cooldown():
+    ACC.pop("_touch_retry_after_ts", None)
+
+
 @responses.activate
 def test_200_returns_true_and_request_contract(monkeypatch):
     """200 → (True, ...); URL /resumes/rh1/publish и query-параметр."""
@@ -72,9 +77,10 @@ def test_429_returns_false_with_cooldown_message(monkeypatch):
     monkeypatch.setattr(oauth, "_obtain_oauth_token", lambda a: "t")
     responses.add(responses.POST, URL, json={"errors": []}, status=429)
 
-    ok, msg = touch_resume(ACC, "rh1")
-    assert ok is False
-    assert "429" in msg
+    result = touch_resume(ACC, "rh1")
+    assert result["ok"] is False
+    assert result["error"] == "touch_limit_active"
+    assert result["next_at"] > 0
 
 
 @responses.activate

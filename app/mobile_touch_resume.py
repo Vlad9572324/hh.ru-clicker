@@ -17,6 +17,7 @@ NotImplementedError: FallbackHHClient ловит NotImplementedError и проз
 """
 
 from urllib.parse import quote
+import time
 
 from app.hh_mobile_transport import (
     MobileAPIError,
@@ -46,6 +47,10 @@ def touch_resume(acc: dict, resume_id: str) -> tuple:
     """
     if not resume_id:
         return False, "Нет resume_hash"
+    now = time.time()
+    retry_after_ts = float(acc.get("_touch_retry_after_ts") or 0)
+    if retry_after_ts > now:
+        return {"ok": False, "error": "touch_limit_active", "next_at": retry_after_ts}
     try:
         mobile_request(acc, "POST",
                        f"/resumes/{quote(resume_id, safe='')}/publish",
@@ -54,9 +59,12 @@ def touch_resume(acc: dict, resume_id: str) -> tuple:
         if is_fallback_status(e.status_code):
             # Не глотим: fallback-обёртка повторит вызов через web-flow.
             raise
-        if e.status_code == 429:
+        payload_text = str(e.payload).lower()
+        if e.status_code == 429 or "touch_limit_exceeded" in payload_text or "total_limit_exceeded" in payload_text:
+            retry_after_ts = now + 4 * 60 * 60
+            acc["_touch_retry_after_ts"] = retry_after_ts
             log_debug(f"mobile touch_resume {resume_id}: 429 cooldown")
-            return False, "Слишком часто (429)"
+            return {"ok": False, "error": "touch_limit_active", "next_at": retry_after_ts}
         # Прочие 4xx (например 400): publish может требовать HHPro или
         # заполненные поля — web-flow умеет это лучше, падаем в fallback.
         raise NotImplementedError(
