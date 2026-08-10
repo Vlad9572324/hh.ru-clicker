@@ -178,6 +178,18 @@ class BotManager:
         # Сериализация append к data/llm_log.jsonl (kimi-search-1 #5).
         self._llm_log_write_lock = threading.Lock()
 
+    def reload_temp_sessions(self, sessions: list | None = None) -> int:
+        """Refresh browser accounts after OTP materializes their sessions.
+
+        ``sessions`` avoids racing the asynchronous disk writer.  Other callers may
+        omit it to reload the persisted snapshot.
+        """
+        fresh = load_browser_sessions() if sessions is None else sessions
+        if not isinstance(fresh, list):
+            fresh = []
+        self.temp_sessions[:] = fresh
+        return len(self.temp_sessions)
+
     def _persist_llm_log(self, entry: dict):
         """Append-only JSONL write-through for LLM reply events (async via _schedule_save).
         Сериализуем через _llm_log_write_lock — иначе concurrent appends могут интерливить
