@@ -6,7 +6,8 @@
   - mode вне {web, mobile, auto} → CONFIG.default_client_mode → fallback "web";
   - "auto" → всегда WebHHClient (решение Phase 0, docs/PHASE_MATRIX.md:
     mobile-клиент не готов, авто-выбор не должен приводить к mobile даже
-    при живом OAuth-токене); явный "mobile" → MobileHHClient без токена.
+    при живом OAuth-токене); явный "mobile" → FallbackHHClient поверх
+    MobileHHClient (Phase 2: auto-fallback на web-flow) без токена.
 
 Каждый тест явно monkeypatch'ит CONFIG.default_client_mode и состояние
 oauth-хранилища, чтобы не зависеть от дефолтов и data/oauth_tokens.json.
@@ -17,6 +18,7 @@ import pytest
 
 from app import oauth
 from app.config import CONFIG
+from app.hh_client_fallback import FallbackHHClient
 from app.hh_client_factory import get_client
 from app.hh_client_mobile import MobileHHClient
 from app.hh_client_web import WebHHClient
@@ -43,8 +45,11 @@ def test_missing_mode_default_web(monkeypatch):
 
 
 def test_missing_mode_default_mobile(monkeypatch):
+    # Phase 2: mode=mobile резолвится в FallbackHHClient поверх MobileHHClient.
     _isolate(monkeypatch, "mobile")
-    assert isinstance(get_client(_acc()), MobileHHClient)
+    client = get_client(_acc())
+    assert isinstance(client, FallbackHHClient)
+    assert isinstance(client.mobile, MobileHHClient)
 
 
 def test_missing_mode_default_auto_phase0_web(monkeypatch):
@@ -57,7 +62,9 @@ def test_missing_mode_default_auto_phase0_web(monkeypatch):
 
 def test_mode_whitespace_uppercase_mobile(monkeypatch):
     _isolate(monkeypatch, "web")
-    assert isinstance(get_client(_acc(mode="  MOBILE  ")), MobileHHClient)
+    client = get_client(_acc(mode="  MOBILE  "))
+    assert isinstance(client, FallbackHHClient)
+    assert isinstance(client.mobile, MobileHHClient)
 
 
 def test_mode_mixedcase_web(monkeypatch):
@@ -134,4 +141,6 @@ def test_p1_auto_status_without_has_token_stays_web(monkeypatch):
 def test_p1_explicit_mobile_without_any_token_is_mobile(monkeypatch):
     # Контроль: явный mobile не зависит от токена вообще.
     _isolate(monkeypatch, "web")
-    assert isinstance(get_client(_acc(mode="mobile")), MobileHHClient)
+    client = get_client(_acc(mode="mobile"))
+    assert isinstance(client, FallbackHHClient)
+    assert isinstance(client.mobile, MobileHHClient)

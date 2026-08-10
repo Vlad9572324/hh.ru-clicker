@@ -8,6 +8,7 @@ import pytest
 
 from app import oauth
 from app.config import CONFIG
+from app.hh_client_fallback import FallbackHHClient
 from app.hh_client_factory import get_client
 from app.hh_client_mobile import MobileHHClient
 from app.hh_client_web import WebHHClient
@@ -48,7 +49,9 @@ def test_mode_unknown_string_uses_default_web(deterministic_env):
 
 def test_mode_whitespace_and_case_is_normalized_to_mobile(deterministic_env):
     client = get_client(_account("  MOBILE  "))
-    assert isinstance(client, MobileHHClient)
+    # Phase 2: mode=mobile → FallbackHHClient поверх MobileHHClient.
+    assert isinstance(client, FallbackHHClient)
+    assert isinstance(client.mobile, MobileHHClient)
 
 
 def test_mode_missing_field_uses_default_web(deterministic_env):

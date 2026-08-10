@@ -4,8 +4,9 @@ P1-дефект из code review Phase 0: при default mode "auto" и живо
 get_client() возвращала MobileHHClient, чей fetch_negotiations() кидает
 NotImplementedError("phase 2: ...") — endpoint возвращал ok:false для нормальных
 аккаунтов. После фикса "auto" и аккаунты без поля mode должны ВСЕГДА резолвиться
-в WebHHClient (Phase 0); явный mode="mobile" по-прежнему даёт MobileHHClient
-(ok:false с "phase 2" — задокументированное ограничение skeleton'а до Phase 2).
+в WebHHClient (Phase 0); явный mode="mobile" с Phase 2 даёт FallbackHHClient
+поверх MobileHHClient: NotImplementedError mobile-заглушки прозрачно
+повторяется через web-flow → endpoint возвращает ok:true.
 
 pytest-asyncio в проекте нет — async handler вызывается через asyncio.run()
 (хелпер _run устойчив к уже запущенному в потоке event loop — см. ниже).
@@ -17,9 +18,11 @@ import time
 import types
 
 import pytest
+import responses
 
 from app import hh_negotiations, oauth
 from app.config import CONFIG
+from app.hh_mobile_transport import MOBILE_BASE
 from app.instances import bot
 from app.routes.debug import api_debug_neg_ids
 
@@ -113,25 +116,33 @@ def test_neg_ids_account_without_mode_auto_uses_web_client(
     assert result["negotiations"] == {"items": [1, 2, 3]}
 
 
-def test_neg_ids_explicit_mobile_mode_phase2_limitation(
+@responses.activate
+def test_neg_ids_explicit_mobile_mode_falls_back_to_web(
     monkeypatch, tmp_data_dir, fake_state, live_oauth
 ):
-    """Явный mode="mobile" → MobileHHClient, чей fetch_negotiations() кидает
-    NotImplementedError. ok:false с "phase 2" — задокументированное ограничение
-    skeleton'а до Phase 2 (не баг)."""
+    """Явный mode="mobile" с Phase 2 даёт FallbackHHClient поверх
+    MobileHHClient. Mobile-реализация fetch_negotiations() реально ходит в
+    GET api.hh.ru/negotiations; мокаем её на 401 (протух токен) — транспорт
+    поднимает MobileAPIError(401), обёртка прозрачно повторяет вызов через
+    web-flow → ok:true с web-payload. Герметично: без живого HTTP."""
     monkeypatch.setattr(CONFIG, "default_client_mode", "auto")
     acc = {"name": "a1", "cookies": {}, "resume_hash": "rh1", "mode": "mobile"}
     fake_state(acc)
     _mock_web_negotiations(monkeypatch, {"items": [1, 2, 3]})
+    # mobile-endpoint отдаёт 401 → fallback на web
+    responses.add(responses.GET, MOBILE_BASE + "/negotiations",
+                  json={"errors": [{"value": "unauthorized"}]}, status=401)
 
     result = _run(api_debug_neg_ids(0))
 
-    assert result["ok"] is False
-    # handler обрезает str(e)[:100]; "phase 2" стоит в начале сообщения
-    # NotImplementedError("phase 2: TODO mobile fetch_negotiations") — 39 симв.,
-    # так что начало строки гарантированно попадает в обрезанный error.
-    assert "phase 2" in result["error"]
-    assert len(result["error"]) <= 100
+    assert result["ok"] is True, f"mobile должен fallback'нуться на web: {result}"
+    assert result["account"] == "a1"
+    assert result["mode"] == "mobile"
+    # handler возвращает type(client).__name__ — выбрана обёртка, не голый web
+    assert result["backend"] == "FallbackHHClient"
+    assert result["negotiations"] == {"items": [1, 2, 3]}
+    # mobile-запрос реально ушёл (и получил 401) — fallback не «на пустом месте»
+    assert any("/negotiations" in c.request.url for c in responses.calls)
 
 
 def test_neg_ids_out_of_range(monkeypatch, tmp_data_dir, fake_state):
