@@ -98,27 +98,15 @@ from app.hh_api import (
 
 from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, get_llm_status_summary
 
-from app.hh_apply import (
-    send_response_async, fill_and_submit_questionnaire,
-    _check_vacancy_before_apply, check_limit, touch_resume,
-)
+from app.hh_client_factory import get_client
 
 from app.hh_chat import (
-    _fetch_chat_list, _build_thread_from_chat_item, _check_chat_locked,
-    _fetch_chat_history,
-    send_negotiation_message,
+    _build_thread_from_chat_item, _check_chat_locked,
     ChatikWSClient,
-    fetch_quick_replies,
-    send_participant_action, mark_chat_read,
 )
 
 from app.hh_resume import (
-    fetch_resume_text, fetch_resume_stats, fetch_resume_view_history,
     _resume_cache, _RESUME_CACHE_TTL,
-)
-
-from app.hh_negotiations import (
-    fetch_hh_negotiations_stats, fetch_hh_possible_offers,
 )
 
 from app.state import AccountState
@@ -1084,8 +1072,7 @@ class BotManager:
 
         if not state._active_search_forced:
             try:
-                from app.hh_resume import set_job_search_status
-                r = set_job_search_status(acc, "active_search")
+                r = get_client(acc).set_job_search_status("active_search")
                 if r.get("ok"):
                     state._active_search_forced = True
                     self._add_log(state.short, state.color,
@@ -1155,7 +1142,7 @@ class BotManager:
                     # Всегда сверяемся с сервером непосредственно перед publish:
                     # UI/фоновая статистика используют 5-минутный cache и после
                     # предыдущего touch могут ещё показывать устаревшее `true`.
-                    fresh_status = fetch_resume_status(acc, force=True)
+                    fresh_status = get_client(acc).fetch_resume_status(force=True)
                     server_next = _server_next_publish_datetime(fresh_status)
                     if fresh_status and not fresh_status.get("can_publish_or_update"):
                         state.resume_free_touches = 0
@@ -1170,10 +1157,10 @@ class BotManager:
                             state.resume_touch_status = "⏳ HH пока не разрешает поднятие"
                     elif fresh_status.get("can_publish_or_update"):
                         self._add_log(state.short, state.color, "\U0001f4e4 Поднимаю резюме...", "info")
-                        success, message = touch_resume(acc)
+                        success, message = get_client(acc).touch_resume()
                         # Результат publish немедленно делает прежний cache статуса
                         # недействительным. Следующее время берём только у HH.
-                        after_status = fetch_resume_status(acc, force=True)
+                        after_status = get_client(acc).fetch_resume_status(force=True)
                         server_next = _server_next_publish_datetime(after_status)
                         state.resume_free_touches = int(bool(after_status.get("can_publish_or_update")))
                         if server_next and server_next > now:
@@ -1213,7 +1200,7 @@ class BotManager:
                     state.status_detail = "Проверка сброса лимита..."
                     self._add_log(state.short, state.color, "\U0001f50d Проверяю сброс лимита...", "info")
 
-                    if not check_limit(acc):
+                    if not get_client(acc).check_limit():
                         state.limit_exceeded = False
                         state.limit_reset_time = None
                         state.paused = False
@@ -1328,8 +1315,7 @@ class BotManager:
                     seed_vid = next(iter(unique_vacancies), None)
                 if seed_vid:
                     try:
-                        from app.hh_apply import fetch_related_vacancies
-                        related = fetch_related_vacancies(acc, str(seed_vid), max_pages=1)
+                        related = get_client(acc).fetch_related_vacancies(str(seed_vid), max_pages=1)
                         if related:
                             new_ids = set(related) - unique_vacancies
                             unique_vacancies |= set(related)
@@ -1655,7 +1641,7 @@ class BotManager:
                 if CONFIG.skip_inconsistent:
                     checked_batch = []
                     for vid in batch:
-                        precheck = _check_vacancy_before_apply(acc, vid)
+                        precheck = get_client(acc).check_vacancy_before_apply(vid)
                         if not precheck["ok"]:
                             meta = state.vacancy_meta.get(vid, {})
                             display_title = (meta.get("title") or vid)[:40]
@@ -1716,9 +1702,10 @@ class BotManager:
                             time.sleep(CONFIG.response_delay)
                 else:
                     # Web: async batch via aiohttp
+                    client = get_client(acc)
                     def _make_send_batch(b):
                         async def send_batch():
-                            tasks = [send_response_async(acc, vid,
+                            tasks = [client.submit_response(vid,
                                         letter_max_length=state.vacancy_meta.get(vid, {}).get("letter_max_length"))
                                      for vid in b]
                             return await asyncio.gather(*tasks, return_exceptions=True)
@@ -1813,8 +1800,8 @@ class BotManager:
                                                 title or vid, company, "пропущено")
                         else:
                             # Пробуем автозаполнить опрос
-                            q_result, q_info = asyncio.run(fill_and_submit_questionnaire(
-                                acc, vid, vacancy_title=title, company=company))
+                            q_result, q_info = asyncio.run(get_client(acc).fill_questionnaire(
+                                vid, vacancy_title=title, company=company))
                             if q_result == "sent":
                                 state.sent += 1
                                 state.questionnaire_sent += 1
@@ -2326,7 +2313,7 @@ class BotManager:
         # (employer just wrote) will always be near the top.
         self._add_log(state.short, state.color, "\U0001f916 LLM: загружаю список чатов…", "info")
         log_debug(f"LLM [{state.short}]: загружаю чат-лист")
-        items_by_id, display_info, cur_pid = _fetch_chat_list(state.acc, max_pages=3)
+        items_by_id, display_info, cur_pid = get_client(state.acc).fetch_chat_list(max_pages=3)
         log_debug(f"LLM [{state.short}]: чат-лист загружен, {len(items_by_id)} чатов")
 
         # Process items that need a reply: NEGOTIATION type, unread, from employer, not rejection
@@ -2532,7 +2519,7 @@ class BotManager:
                 if CONFIG.llm_use_resume:
                     rh = state.acc.get("resume_hash", "")
                     _cached = rh and rh in _resume_cache and (time.time() - _resume_cache[rh][1] < _RESUME_CACHE_TTL)
-                    resume_text = fetch_resume_text(state.acc)
+                    resume_text = get_client(state.acc).fetch_resume()
                     if resume_text:
                         src = "кэш" if _cached else "загружено"
                         self._add_log(state.short, state.color,
@@ -2548,9 +2535,9 @@ class BotManager:
                     full_history = fetch_negotiation_messages_oauth(state.acc, neg_id, max_messages=20)
                     if not full_history:
                         # Fallback на chatik если OAuth ничего не вернул (404 / 403 / token issue)
-                        full_history = _fetch_chat_history(state.acc, neg_id, max_messages=20)
+                        full_history = get_client(state.acc).fetch_chat_history(neg_id, max_messages=20)
                 else:
-                    full_history = _fetch_chat_history(state.acc, neg_id, max_messages=20)
+                    full_history = get_client(state.acc).fetch_chat_history(neg_id, max_messages=20)
                 conversation = full_history if full_history else thread["messages"]
 
                 _last_emp_raw = None
@@ -2580,7 +2567,7 @@ class BotManager:
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                      employer=employer_short, vacancy_title=vacancy_title, vacancy_id=vacancy_id,
                                      chat_status="robot")
-                    ok = send_negotiation_message(state.acc, neg_id, btn_text)
+                    ok = get_client(state.acc).send_message(neg_id, btn_text)
                     if ok and ok != "chat_not_found":
                         state.llm_replied_msgs[key] = None
                         replied += 1
@@ -2660,7 +2647,7 @@ class BotManager:
                     )
                     if not _has_own_llm and getattr(CONFIG, "llm_use_quick_replies", True):
                         # Своего LLM нет — берём quick_replies с умным ranking.
-                        qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
+                        qr = get_client(state.acc).fetch_quick_replies(neg_id, last_msg_id)
                         if qr:
                             is_question = "?" in hr_last
                             _greet = ("здравствуйте", "добрый день", "добрый вечер", "приветствую")
@@ -2692,7 +2679,7 @@ class BotManager:
                         reply_source = "llm"
                     if not reply_text and _has_own_llm and getattr(CONFIG, "llm_use_quick_replies", True):
                         # LLM молчит (rate-limit / down) — попробуем quick_replies как последний резерв.
-                        qr = fetch_quick_replies(state.acc, neg_id, last_msg_id)
+                        qr = get_client(state.acc).fetch_quick_replies(neg_id, last_msg_id)
                         if qr:
                             is_question = "?" in hr_last
                             _greet = ("здравствуйте", "добрый день", "добрый вечер", "приветствую")
@@ -2732,16 +2719,16 @@ class BotManager:
                     # Читаем HR-сообщение (галочка «прочитано» в UI HH) + typing indicator
                     # 2-4 сек — HR получает push «печатает…», ответ выглядит человечнее.
                     try:
-                        mark_chat_read(state.acc, neg_id, last_msg_id)
-                        send_participant_action(state.acc, neg_id, "TYPING")
+                        get_client(state.acc).mark_chat_read(neg_id, last_msg_id)
+                        get_client(state.acc).send_participant_action(neg_id, "TYPING")
                     except Exception:
                         pass
                     _delay = min(4.0, max(2.0, len(reply_text) * 0.03))
                     time.sleep(_delay)
                     log_debug(f"LLM [{state.short}] {neg_id}: отправляю сообщение в chatik")
-                    ok = send_negotiation_message(state.acc, neg_id, reply_text, topic_id=thread.get("topic_id", ""))
+                    ok = get_client(state.acc).send_message(neg_id, reply_text, topic_id=thread.get("topic_id", ""))
                     try:
-                        send_participant_action(state.acc, neg_id, "NONE")
+                        get_client(state.acc).send_participant_action(neg_id, "NONE")
                     except Exception:
                         pass
                     if ok == "chat_not_found":
@@ -2913,7 +2900,7 @@ class BotManager:
             except Exception as e:
                 log_debug(f"resume_status fetch error [{state.short}]: {e}")
             try:
-                stats = fetch_hh_negotiations_stats(state.acc)
+                stats = get_client(state.acc).fetch_negotiations()
                 if stats.get("auth_error"):
                     log_debug(f"AUTH_ERROR [{state.short}] vid=- flow=stats")
                     state.cookies_expired = True
@@ -2943,11 +2930,11 @@ class BotManager:
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                          vacancy_title=item.get("text", ""))
 
-                offers = fetch_hh_possible_offers(state.acc)
+                offers = get_client(state.acc).fetch_possible_offers()
                 state.hh_possible_offers = offers
 
                 was_touch_available = state.resume_free_touches > 0
-                rs = fetch_resume_stats(state.acc)
+                rs = get_client(state.acc).fetch_stats()
                 state.resume_views_7d = rs["views"]
                 state.resume_views_new = rs["views_new"]
                 state.resume_shows_7d = rs["shows"]
@@ -2969,7 +2956,7 @@ class BotManager:
                 state.resume_global_invitations = rs["global_invitations"]
                 state.resume_new_invitations_total = rs["new_invitations_total"]
 
-                state.resume_view_history = fetch_resume_view_history(state.acc, limit=100)
+                state.resume_view_history = get_client(state.acc).fetch_resume_view_history(limit=100)
 
                 state.hh_stats_updated = datetime.now()
 

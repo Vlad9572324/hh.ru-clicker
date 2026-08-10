@@ -24,6 +24,7 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 | **1** | Не определено (см. §4) |
 | **2** | Переговоры / чаты (группа A без vacancy/employer-метаданных) |
 | **3** | Отклики (группа B) + vacancy/employer-метаданные (см. §5) |
+| **3.5** | Без новых реализаций: внешние hot-path callers переводятся на фабрику `get_client(acc)` |
 | **4** | Резюме / статистика (группа C) |
 
 **Capability-слои интерфейса.** После fix P2 интерфейс разложен на слои
@@ -58,11 +59,12 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
     клиентов);
   - `заглушка phase N` — `NotImplementedError("phase N: TODO mobile ...")`.
 - **Consumer(s)** — фактические call-sites операции в `app/` на текущий
-  момент. Важно: почти весь код всё ещё вызывает **модульные функции
-  напрямую**, минуя абстракцию (Phase 0 её только вводит); первый и пока
-  единственный production-потребитель `get_client(...)` —
-  `routes/debug.py::api_debug_neg_ids`. Строки указаны по состоянию ветки
-  на момент написания и могут плыть при рефакторинге.
+  момент. С Phase 3.5 все внешние hot-path callers web-flow функций
+  переведены на фабрику `get_client(acc)` (40 call-site: `manager.py`,
+  `routes/accounts.py`, `routes/debug.py`); прямые импорты модульных
+  функций остались только для исключений (§3, «Вне матрицы»). Строки
+  указаны по состоянию ветки на момент написания и могут плыть при
+  рефакторинге.
 
 ---
 
@@ -72,20 +74,20 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 
 | Метод HHClient | Фаза | Web | Mobile | Consumer(s) |
 |---|---|---|---|---|
-| `fetch_negotiations` | 2 | делегат | да (Phase 2: `mobile_negotiations`, `GET api.hh.ru/negotiations`) | через абстракцию: `routes/debug.py:190` (`/api/debug/neg_ids`); напрямую `fetch_hh_negotiations_stats`: `manager.py:2762` |
-| `fetch_thread` | 2 | делегат | да (Phase 2: `mobile_chat_thread`, `GET api.hh.ru/chats/{id}?limit&order=next`) | `routes/debug.py:216` (`/api/debug/thread`, пока прямой вызов `fetch_negotiation_thread`) |
-| `send_message` | 2 | делегат | да (Phase 2: `mobile_send_message`, `POST api.hh.ru/chats/{id}/messages` + idempotency_key) | `manager.py:2429`, `2588` |
-| `fetch_chat_list` | 2 | делегат | да (Phase 2: `mobile_chat_list`, `GET api.hh.ru/chats`, возврат-кортеж как у web) | `manager.py:2175` |
-| `fetch_chat_history` | 2 | делегат | да (Phase 2: `mobile_chat_thread.fetch_chat_history`, тот же конверт чата) | `manager.py:2397`, `2399` |
-| `fetch_quick_replies` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../suggestions/quick_replies?message_id=`) | `manager.py:2509`, `2541` |
-| `send_participant_action` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../participants/action` {action_type: typing\|none}) | `manager.py:2582` (TYPING), `2590` (NONE) |
-| `mark_chat_read` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../messages/last_viewed_id` form message_id) | `manager.py:2581` |
-| `fetch_possible_offers` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/vacancies/possible_job_offers`) | `manager.py:2792` |
-| `auto_decline_discards` | 2 | делегат | заглушка phase 2 (decline есть только в web-flow; `FallbackHHClient` прозрачно повторяет через web) | `routes/accounts.py:1120` |
-| `fetch_negotiations_metadata` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/negotiations` → topics_by_vid; politeness/activity — только web-SSR) | `routes/accounts.py:182` |
-| `fetch_employer_rating` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:187`, `219` |
-| `fetch_employer_id_for_vacancy` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:180` |
-| `fetch_vacancy_owner_hr_hhid` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:181` |
+| `fetch_negotiations` | 2 | делегат | да (Phase 2: `mobile_negotiations`, `GET api.hh.ru/negotiations`) | через абстракцию: `routes/debug.py:190` (`/api/debug/neg_ids`); `manager.py:2762` (`fetch_hh_negotiations_stats`) — через `get_client` с Phase 3.5 |
+| `fetch_thread` | 2 | делегат | да (Phase 2: `mobile_chat_thread`, `GET api.hh.ru/chats/{id}?limit&order=next`) | `routes/debug.py:216` (`/api/debug/thread`) — через `get_client` с Phase 3.5 |
+| `send_message` | 2 | делегат | да (Phase 2: `mobile_send_message`, `POST api.hh.ru/chats/{id}/messages` + idempotency_key) | `manager.py:2429`, `2588` — через `get_client` с Phase 3.5 |
+| `fetch_chat_list` | 2 | делегат | да (Phase 2: `mobile_chat_list`, `GET api.hh.ru/chats`, возврат-кортеж как у web) | `manager.py:2175` — через `get_client` с Phase 3.5 |
+| `fetch_chat_history` | 2 | делегат | да (Phase 2: `mobile_chat_thread.fetch_chat_history`, тот же конверт чата) | `manager.py:2397`, `2399` — через `get_client` с Phase 3.5 |
+| `fetch_quick_replies` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../suggestions/quick_replies?message_id=`) | `manager.py:2509`, `2541` — через `get_client` с Phase 3.5 |
+| `send_participant_action` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../participants/action` {action_type: typing\|none}) | `manager.py:2582` (TYPING), `2590` (NONE) — через `get_client` с Phase 3.5 |
+| `mark_chat_read` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../messages/last_viewed_id` form message_id) | `manager.py:2581` — через `get_client` с Phase 3.5 |
+| `fetch_possible_offers` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/vacancies/possible_job_offers`) | `manager.py:2792` — через `get_client` с Phase 3.5 |
+| `auto_decline_discards` | 2 | делегат | заглушка phase 2 (decline есть только в web-flow; `FallbackHHClient` прозрачно повторяет через web) | `routes/accounts.py:1120` — через `get_client` с Phase 3.5 |
+| `fetch_negotiations_metadata` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/negotiations` → topics_by_vid; politeness/activity — только web-SSR) | `routes/accounts.py:182` — через `get_client` с Phase 3.5 |
+| `fetch_employer_rating` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:187`, `219` — через `get_client` с Phase 3.5 |
+| `fetch_employer_id_for_vacancy` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:180` — через `get_client` с Phase 3.5 |
+| `fetch_vacancy_owner_hr_hhid` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:181` — через `get_client` с Phase 3.5 |
 
 ¹ Целевая классификация по замечанию review: рейтинг работодателя,
 `employer_id` и HR-владелец вакансии — это vacancy/apply-метаданные,
@@ -97,12 +99,12 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 
 | Метод HHClient | Фаза | Web | Mobile | Consumer(s) |
 |---|---|---|---|---|
-| `submit_response` (async) | 3 | делегат | заглушка phase 3 | `manager.py:1592` (`send_response_async`); выбор web/OAuth сейчас зашит в `manager.py:1577-1597` (`state.use_oauth or CONFIG.use_oauth_apply or state.degraded_mode` → `_oauth_apply` на `manager.py:1582`) — именно этот блок в будущем заменит `get_client(...).submit_response(...)`, в Phase 0 не трогаем |
-| `fill_questionnaire` (async) ² | web-only | делегат | заглушка phase 3 | `manager.py:1687` |
-| `check_vacancy_before_apply` | 3 | делегат | заглушка phase 3 | `manager.py:1529` |
-| `check_limit` | 3 | делегат | заглушка phase 3 | `manager.py:1090` |
-| `touch_resume` | 3 | делегат | заглушка phase 3 | `manager.py:1060` (web-функция уже OAuth-first внутри: `hh_apply.py:617` → `_oauth_touch_resume`) |
-| `fetch_related_vacancies` | 3 | делегат | заглушка phase 3 | `manager.py:1206` |
+| `submit_response` (async) | 3 | делегат | заглушка phase 3 | `manager.py:1592` (`send_response_async`) — через `get_client(...).submit_response(...)` с Phase 3.5 (`asyncio.gather` сохранён); диспетчизация web/OAuth `manager.py:1577-1597` (`state.use_oauth or CONFIG.use_oauth_apply or state.degraded_mode` → `_oauth_apply`) вне scope Phase 3.5 — функции `app.oauth` не мигрируются |
+| `fill_questionnaire` (async) ² | web-only | делегат | заглушка phase 3 | `manager.py:1687` — через `get_client` с Phase 3.5 (mobile-заглушка прозрачно ретраится через web `FallbackHHClient`) |
+| `check_vacancy_before_apply` | 3 | делегат | заглушка phase 3 | `manager.py:1529` — через `get_client` с Phase 3.5 |
+| `check_limit` | 3 | делегат | заглушка phase 3 | `manager.py:1090` — через `get_client` с Phase 3.5 |
+| `touch_resume` | 3 | делегат | заглушка phase 3 | `manager.py:1060` — через `get_client` с Phase 3.5 (web-функция уже OAuth-first внутри: `hh_apply.py:617` → `_oauth_touch_resume`) |
+| `fetch_related_vacancies` | 3 | делегат | заглушка phase 3 | `manager.py:1206` — через `get_client` с Phase 3.5 |
 
 ² Единственный метод группы B вне `HHClientBase`: входит в capability-слой
 `WebOnlyOps`. См. §3 — анкеты являются web-only capability.
@@ -111,14 +113,14 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 
 | Метод HHClient | Фаза | Web | Mobile | Consumer(s) |
 |---|---|---|---|---|
-| `fetch_stats` | 4 | делегат | заглушка phase 4 | `manager.py:2795`; `routes/accounts.py:566` |
-| `fetch_resume` | 4 | делегат | заглушка phase 4 | `manager.py:2381`; `routes/accounts.py:672`; внутри `hh_apply` (сопровождает `fill_and_submit_questionnaire`) |
-| `fetch_resume_view_history` | 4 | делегат | заглушка phase 4 | `manager.py:2806`; `routes/accounts.py:562` |
-| `fetch_resume_views_aggregate` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:581` |
-| `analyze_resume` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:697`, `711` |
-| `edit_resume_field` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:904` (clone), `960` (edit) |
-| `set_job_search_status` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:239`; `manager.py:992` |
-| `fetch_account_diagnostics` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:150` |
+| `fetch_stats` | 4 | делегат | заглушка phase 4 | `manager.py:2795`; `routes/accounts.py:566` — через `get_client` с Phase 3.5 |
+| `fetch_resume` | 4 | делегат | заглушка phase 4 | `manager.py:2381`; `routes/accounts.py:672` — через `get_client` с Phase 3.5; плюс внутренний вызов в `hh_apply` (сопровождает `fill_and_submit_questionnaire`, часть web-flow) |
+| `fetch_resume_view_history` | 4 | делегат | заглушка phase 4 | `manager.py:2806`; `routes/accounts.py:562` — через `get_client` с Phase 3.5 |
+| `fetch_resume_views_aggregate` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:581` — через `get_client` с Phase 3.5 |
+| `analyze_resume` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:697`, `711` — через `get_client` с Phase 3.5 |
+| `edit_resume_field` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:904` (clone), `960` (edit) — через `get_client` с Phase 3.5 |
+| `set_job_search_status` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:239`; `manager.py:992` — через `get_client` с Phase 3.5 |
+| `fetch_account_diagnostics` | 4 | делегат | заглушка phase 4 | `routes/accounts.py:150` — через `get_client` с Phase 3.5 |
 
 ### Группа D — счётчики
 
@@ -183,7 +185,9 @@ capability-слои (`HHClientBase` / `WebOnlyOps` / `MobileOnlyOps`, см. §1)
    клиентах** — делегирование в `app/oauth.py`, выбор backend'а на них не
    влияет.
 
-**Вне матрицы** (сознательно не входят в интерфейс клиента):
+**Вне матрицы** (сознательно не входят в интерфейс клиента; все
+перечисленные объекты и после Phase 3.5 остаются прямыми импортами из
+модулей — перевода на `get_client` для них нет и не планируется):
 
 - `ChatikWSClient` (`hh_chat.py`) — web-only push-канал (`websocket.hh.ru`),
   мобильного аналога нет;
@@ -194,9 +198,9 @@ capability-слои (`HHClientBase` / `WebOnlyOps` / `MobileOnlyOps`, см. §1)
 - токен-менеджмент (`_obtain_oauth_token`, `invalidate_oauth_token`,
   `get_oauth_status`, `refresh_oauth_tokens_proactive`) — уровень
   фабрики/авторизации, а не клиентского интерфейса;
-- `fetch_rating_by_vacancy` (`hh_negotiations.py`) — мёртвый код: только
-  мёртвый импорт в `routes/accounts.py:31`, вызовов нет. В интерфейс не
-  включён.
+- `fetch_rating_by_vacancy` (`hh_negotiations.py`) — мёртвый код: единственный
+  мёртвый импорт в `routes/accounts.py:31` удалён в Phase 3.5, вызовов не
+  было. В интерфейс не включён.
 
 ---
 
@@ -232,6 +236,26 @@ capability-слои (`HHClientBase` / `WebOnlyOps` / `MobileOnlyOps`, см. §1)
   Сюда же целевым образом относятся `fetch_employer_rating`,
   `fetch_employer_id_for_vacancy`, `fetch_vacancy_owner_hr_hhid` (§5).
   `fill_questionnaire` — под вопросом (web-only, §3).
+- **Phase 3.5 — внешние hot-path callers → фабрика (выполнено в ветке
+  `feat/phase3.5-migrate-callers`).** Без новых реализаций: все внешние
+  hot-path callers web-flow функций переведены на `get_client(acc)`
+  (`app/hh_client_factory.py`) — **40 call-site в 3 файлах**:
+  `app/manager.py` — 22, `app/routes/accounts.py` — 17,
+  `app/routes/debug.py` — 1. Сам web-flow не тронут и остаётся
+  fallback-реализацией: адаптер `WebHHClient` (`app/hh_client_web.py`) и
+  модули `hh_chat.py`/`hh_apply.py`/`hh_negotiations.py`/`hh_resume.py`;
+  `mode="mobile"` идёт через `FallbackHHClient(MobileHHClient,
+  WebHHClient)` с авто-откатом на web. Проверенные группы без мигрируемых
+  вызовов: `routes/{settings,llm,data,core,apply,ws}.py`, `web_app.py`,
+  `hh_api.py`, `sessions.py`. Исключения остались прямыми импортами (§3,
+  «Вне матрицы»): чистые функции без аккаунта `parse_hh_lux_ssr`
+  (6 call-site), `fetch_similar_vacancies`, `_check_chat_locked`,
+  `_build_thread_from_chat_item`; класс `ChatikWSClient` (WebSocket
+  chatik.hh.ru — в mobile-flow свой push-канал); внутренние кэши/константы
+  `_resume_cache`/`_RESUME_CACHE_TTL`/`_JOB_SEARCH_STATUSES`. Мёртвый
+  импорт `fetch_rating_by_vacancy` удалён. OAuth-функции `app/oauth.py`
+  вне scope фазы. Миграция зафиксирована AST-guard'ом
+  `tests/test_phase35_migration.py`.
 - **Phase 4 — резюме/статистика (группа C).** Текст резюме, статистика,
   история/агрегаты просмотров, аудит, редактирование полей, статус поиска,
   диагностика аккаунта.
@@ -301,7 +325,8 @@ vacancy-метаданные». Доменное группирование в `
 (`save_accounts()`/`save_browser_sessions()` пропускают любые ключи без
 префикса `_`), но UI-контрола для него в Phase 0 нет — правится через
 JSON (`POST /api/raw/accounts`). Перевод боевых потребителей
-(`manager.py`, routes) на `get_client(...)` — за пределами Phase 0.
+(`manager.py`, routes) на `get_client(...)` — за пределами Phase 0
+(выполнен в Phase 3.5, см. §4).
 
 ---
 
@@ -323,4 +348,7 @@ JSON (`POST /api/raw/accounts`). Перевод боевых потребите�
 - `docs/MOBILE_MIGRATION_GUIDE.md` — ограничения web-only анкет;
 - `docs/ARCHITECTURE.md` §3 — текущая (до фикса) диаграмма выбора режима;
 - материалы deep-dive анализа Phase 0 (`phase0_analysis.md`: сигнатуры,
-  call-sites, предложение интерфейса, что не включать в HHClient).
+  call-sites, предложение интерфейса, что не включать в HHClient);
+- материалы deep-dive анализа Phase 3.5 (`phase35_analysis.md`: таблицы
+  call-site, группы файлов, исключения, маппинг web-flow функций на
+  методы HHClient).

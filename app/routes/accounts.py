@@ -22,16 +22,13 @@ from app.oauth import (
 )
 from app.llm import generate_llm_questionnaire_answers
 from app.questionnaire import get_questionnaire_answer, _parse_questionnaire_rich
+from app.hh_client_factory import get_client
 from app.hh_resume import (
-    fetch_resume_text, fetch_resume_stats, fetch_resume_view_history,
-    _analyze_resume, parse_hh_lux_ssr, _edit_resume_field,
+    parse_hh_lux_ssr,
     _resume_cache,
-    fetch_account_diagnostics, set_job_search_status, _JOB_SEARCH_STATUSES,
-    fetch_resume_views_aggregate,
+    _JOB_SEARCH_STATUSES,
 )
 from app.hh_negotiations import (
-    auto_decline_discards, fetch_employer_rating, fetch_rating_by_vacancy,
-    fetch_employer_id_for_vacancy, fetch_negotiations_metadata, fetch_vacancy_owner_hr_hhid,
     fetch_similar_vacancies,
 )
 from app.state import AccountState
@@ -149,7 +146,8 @@ async def api_account_diagnostics(idx: int):
     if not acc:
         return {"ok": False, "error": "Аккаунт не найден"}
     import asyncio as _aio
-    data = await _aio.get_event_loop().run_in_executor(None, fetch_account_diagnostics, acc)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    data = await _aio.get_event_loop().run_in_executor(None, client.fetch_account_diagnostics)
     data["ok"] = True
     data["available_statuses"] = _JOB_SEARCH_STATUSES
     return data
@@ -177,16 +175,17 @@ async def api_rating_by_vacancy(idx: int, vacancy_id: int):
         return {"ok": False, "error": "Аккаунт не найден"}
     import asyncio as _aio
     loop = _aio.get_event_loop()
+    client = get_client(acc)  # до executor: выбор клиента синхронный
 
     # Параллельно: vac→emp, vac→HR, neg-метаданные (politeness + activity).
-    eid_task   = loop.run_in_executor(None, fetch_employer_id_for_vacancy, acc, vacancy_id)
-    hr_task    = loop.run_in_executor(None, fetch_vacancy_owner_hr_hhid, acc, vacancy_id)
-    meta_task  = loop.run_in_executor(None, fetch_negotiations_metadata, acc)
+    eid_task   = loop.run_in_executor(None, client.fetch_employer_id_for_vacancy, vacancy_id)
+    hr_task    = loop.run_in_executor(None, client.fetch_vacancy_owner_hr_hhid, vacancy_id)
+    meta_task  = loop.run_in_executor(None, client.fetch_negotiations_metadata)
     eid, hr_hhid, meta = await _aio.gather(eid_task, hr_task, meta_task)
 
     if not eid:
         return {"ok": False, "error": "Не удалось определить работодателя"}
-    rating = await loop.run_in_executor(None, fetch_employer_rating, acc, eid)
+    rating = await loop.run_in_executor(None, client.fetch_employer_rating, eid)
     out = {"ok": True}
     if rating:
         out.update(rating)
@@ -218,7 +217,8 @@ async def api_employer_rating(idx: int, employer_id: int):
     if not acc:
         return {"ok": False, "error": "Аккаунт не найден"}
     import asyncio as _aio
-    rating = await _aio.get_event_loop().run_in_executor(None, fetch_employer_rating, acc, employer_id)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    rating = await _aio.get_event_loop().run_in_executor(None, client.fetch_employer_rating, employer_id)
     if rating is None:
         return {"ok": False, "error": "Работодатель не имеет отзывов или закрыт"}
     return {"ok": True, **rating}
@@ -238,7 +238,8 @@ async def api_set_job_status(idx: int, request: Request):
         return {"ok": False, "error": "bad json"}
     status = str(body.get("status", "")).strip().lower()
     import asyncio as _aio
-    result = await _aio.get_event_loop().run_in_executor(None, set_job_search_status, acc, status)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    result = await _aio.get_event_loop().run_in_executor(None, client.set_job_search_status, status)
     if result.get("ok"):
         # лог в боте для аудита
         state = bot._get_apply_state(idx)
@@ -544,7 +545,8 @@ async def api_resume_text(idx: int):
         return {"ok": False, "error": "Invalid idx"}
     rh = s.acc.get("resume_hash", "")
     _resume_cache.pop(rh, None)
-    text = await asyncio.get_event_loop().run_in_executor(None, fetch_resume_text, s.acc)
+    client = get_client(s.acc)  # до executor: выбор клиента синхронный
+    text = await asyncio.get_event_loop().run_in_executor(None, client.fetch_resume)
     return {"ok": True, "resume_hash": rh, "length": len(text), "text": text}
 
 
@@ -558,14 +560,15 @@ async def api_resume_views(idx: int):
         temp_idx = idx - len(bot.account_states)
         s = bot.temp_states.get(temp_idx)
     if s:
+        client = get_client(s.acc)  # до executor: выбор клиента синхронный
         if not s.resume_view_history:
             loop = asyncio.get_event_loop()
             s.resume_view_history = await loop.run_in_executor(
-                None, fetch_resume_view_history, s.acc, 100
+                None, client.fetch_resume_view_history, 100
             )
         if not s.resume_views_7d:
             loop = asyncio.get_event_loop()
-            rs = await loop.run_in_executor(None, fetch_resume_stats, s.acc)
+            rs = await loop.run_in_executor(None, client.fetch_stats)
             s.resume_views_7d = rs["views"]
             s.resume_views_new = rs["views_new"]
             s.resume_shows_7d = rs["shows"]
@@ -580,7 +583,7 @@ async def api_resume_views(idx: int):
         # тренд просмотров (пики/провалы) и общий счётчик 18k+.
         if not getattr(s, "resume_views_total", None):
             loop = asyncio.get_event_loop()
-            agg = await loop.run_in_executor(None, fetch_resume_views_aggregate, s.acc)
+            agg = await loop.run_in_executor(None, client.fetch_resume_views_aggregate)
             s.resume_views_total = agg.get("total_all_time", 0)
             s.resume_views_total_new = agg.get("total_new", 0)
             s.resume_views_graph_30d = agg.get("graph_30d", [])
@@ -671,7 +674,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
             headers={"User-Agent": ua, "Accept": "text/html"},
             cookies=acc.get("cookies", {}), timeout=15)
         rich = _parse_questionnaire_rich(r.text)
-        resume_text = fetch_resume_text(acc) if CONFIG.llm_use_resume else ""
+        resume_text = get_client(acc).fetch_resume() if CONFIG.llm_use_resume else ""
         answers = generate_llm_questionnaire_answers(rich, f"Vacancy {vacancy_id}", "", resume_text)
         result = []
         for q in rich:
@@ -696,7 +699,8 @@ async def api_resume_audit(idx: int, extra_terms: str = ""):
         return {"ok": False, "error": "Invalid idx"}
     extra = [t.strip() for t in (extra_terms or "").split(",") if t.strip()] if extra_terms else []
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _analyze_resume, acc, extra)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    return await loop.run_in_executor(None, client.analyze_resume, extra)
 
 
 @router.get("/api/account/{idx}/suggest_urls")
@@ -710,7 +714,8 @@ async def api_suggest_urls(idx: int, extra_terms: str = ""):
         return {"ok": False, "error": "Invalid idx"}
     extra = [t.strip() for t in (extra_terms or "").split(",") if t.strip()] if extra_terms else []
     loop = asyncio.get_event_loop()
-    audit = await loop.run_in_executor(None, _analyze_resume, acc, extra)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    audit = await loop.run_in_executor(None, client.analyze_resume, extra)
     if audit.get("error"):
         return {"ok": False, "error": audit["error"]}
     suggestions = []
@@ -902,8 +907,9 @@ async def api_clone_resume(idx: int, request: Request):
                 fields["workFormats"] = wf
 
             edited_count = 0
+            client = get_client(acc)
             for field_name, field_data in fields.items():
-                res = _edit_resume_field(acc, new_hash, {field_name: field_data})
+                res = client.edit_resume_field(new_hash, {field_name: field_data})
                 if res.get("ok"):
                     edited_count += 1
 
@@ -959,7 +965,8 @@ async def api_edit_resume(idx: int, request: Request):
         return {"ok": False, "error": "No fields to update"}
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _edit_resume_field, acc, resume_hash, fields)
+    client = get_client(acc)  # до executor: выбор клиента синхронный
+    result = await loop.run_in_executor(None, client.edit_resume_field, resume_hash, fields)
     return result
 
 
@@ -1126,9 +1133,10 @@ async def api_decline_discards(idx: int):
     """Авто-отклонение дискардов в переговорах"""
     if 0 <= idx < len(bot.account_states):
         acc = bot.account_states[idx].acc
+        client = get_client(acc)  # до executor: выбор клиента синхронный
 
         def do_decline():
-            return auto_decline_discards(acc)
+            return client.auto_decline_discards()
 
         count = await asyncio.get_event_loop().run_in_executor(None, do_decline)
         bot._add_log(

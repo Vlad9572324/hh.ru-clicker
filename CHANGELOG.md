@@ -7,6 +7,42 @@
 PR/ветке, слитой в `main`; baseline (состояние «до») — `origin/main` (`b3bba5a`, 2026-08-07).
 Commit-хэши указаны в скобках.
 
+## [0.4.0-phase3.5] — ветка `feat/phase3.5-migrate-callers` (в разработке)
+
+**Phase 3.5 миграции mobile-API: все внешние hot-path callers web-flow функций
+переведены на фабрику `get_client(acc)`.** 40 call-site в 3 файлах; сам web-flow
+(модули `hh_chat`/`hh_apply`/`hh_negotiations`/`hh_resume` и адаптер `WebHHClient`)
+не тронут и остаётся fallback-реализацией — `mode="mobile"` по-прежнему идёт через
+`FallbackHHClient(MobileHHClient, WebHHClient)` с авто-откатом на web.
+
+### Added
+
+- `tests/test_phase35_migration.py` — AST-guard: внешние hot-path модули
+  (`app/manager.py`, `app/routes/*`) не вызывают аккаунтные функции web-flow
+  напрямую, только через `get_client(acc)`.
+
+### Changed
+
+- `app/manager.py` — 22 call-site переведены на `get_client(acc).<method>()`
+  (чаты, отклики, резюме, статистика переговоров; для async
+  `submit_response`/`fill_questionnaire` сохранены `asyncio.gather`/`asyncio.run`).
+- `app/routes/accounts.py` — 17 call-site переведены на фабрику (клиент создаётся
+  до `run_in_executor`; прямые blocking-вызовы в sync-обёртках — тоже через
+  `get_client`).
+- `app/routes/debug.py` — 1 call-site: `/api/debug/thread` теперь
+  `get_client(state.acc).fetch_thread(...)`.
+- Удалён мёртвый импорт `fetch_rating_by_vacancy` из `app/routes/accounts.py`
+  (вызовов не было, в интерфейсе HHClient метод отсутствует).
+- Исключения сознательно остались прямыми импортами (без аккаунта / вне
+  интерфейса): чистые функции `parse_hh_lux_ssr` (6 call-site),
+  `fetch_similar_vacancies`, `_check_chat_locked`,
+  `_build_thread_from_chat_item`; класс `ChatikWSClient` (WebSocket
+  chatik.hh.ru — в mobile-flow свой push-канал); внутренние кэши/константы
+  `_resume_cache`, `_RESUME_CACHE_TTL`, `_JOB_SEARCH_STATUSES`. OAuth-функции
+  `app/oauth.py` вне scope Phase 3.5.
+- Обновлены `docs/PHASE_MATRIX.md` (consumer-статусы матрицы, таблица фаз,
+  roadmap) и `CHANGELOG.md`.
+
 ## [Unreleased] — ветка `feat/phase2-chats-mobile` (в разработке, не закоммичено)
 
 **Phase 2 миграции mobile-API: переговоры/чаты через `api.hh.ru` + auto-fallback.**
