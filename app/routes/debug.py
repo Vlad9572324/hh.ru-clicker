@@ -8,7 +8,6 @@ import requests
 from app.config import hh_base
 from fastapi import APIRouter, Request
 
-from app.hh_chat import fetch_negotiation_thread
 from app.hh_client_factory import get_client
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
@@ -188,15 +187,16 @@ async def api_debug_neg_ids(idx: int):
 
 @router.get("/api/debug/thread/{idx}/{chat_id}")
 async def api_debug_thread(idx: int, chat_id: str):
-    """Test fetch_negotiation_thread for a given chatId using account idx."""
+    """Test fetching a negotiation thread for a given chatId using account idx."""
     if idx < len(bot.account_states):
         state = bot.account_states[idx]
     elif idx - len(bot.account_states) in bot.temp_states:
         state = bot.temp_states[idx - len(bot.account_states)]
     else:
         return {"ok": False, "error": "account not found"}
+    client = get_client(state.acc)  # до executor: выбор клиента синхронный
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: fetch_negotiation_thread(state.acc, chat_id)
+        None, lambda: client.fetch_thread(chat_id)
     )
     return result
 
