@@ -15,10 +15,20 @@ MobileHHClient — mobile-клиент hh.ru (api.hh.ru, OAuth Bearer).
     который прозрачно повторяет такие вызовы через web-flow; прочие
     статусы обработаны в модулях (дефолты/sentinel'ы как в web).
 
+  - Phase 4 (резюме/статистика) — реальные вызовы api.hh.ru через тот же
+    транспорт (модули app/mobile_resume*.py + app/mobile_job_search_status.py):
+    fetch_resume, fetch_stats, fetch_resume_view_history,
+    fetch_resume_views_aggregate, analyze_resume, edit_resume_field,
+    set_job_search_status. Политика ошибок та же: fallback-статусы
+    (0/401/403/5xx) поднимаются MobileAPIError → авто-повтор через web.
+    Расхождения форматов с web (fetch_resume: dict вместо str;
+    fetch_resume_view_history: dict {items, total} вместо list)
+    задокументированы в модулях и отчёте Phase 4.
+
 Заглушки NotImplementedError:
   - phase 2: auto_decline_discards (decline существует только в web-flow);
   - phase 3: отклики и vacancy-метаданные,
-  - phase 4: резюме/статистика.
+  - phase 4: fetch_account_diagnostics (составной SSR-метод, web fallback).
 """
 
 import requests
@@ -27,8 +37,15 @@ from app import (
     mobile_chat_actions,
     mobile_chat_list,
     mobile_chat_thread,
+    mobile_job_search_status,
     mobile_neg_meta,
     mobile_negotiations,
+    mobile_resume,
+    mobile_resume_aggregate,
+    mobile_resume_analyze,
+    mobile_resume_edit,
+    mobile_resume_stats,
+    mobile_resume_views,
     mobile_send_message,
     oauth,
 )
@@ -38,9 +55,10 @@ from app.hh_client import HHClient
 class MobileHHClient(HHClient):
     """Mobile-flow реализация полного контракта HHClient (HHClientBase +
     WebOnlyOps + MobileOnlyOps): api.hh.ru через OAuth Bearer. Реально:
-    fetch_counters (MobileOnlyOps), OAuth-extras и группа A без
-    auto_decline_discards (Phase 2, делегирование в app/mobile_*.py);
-    остальное — NotImplementedError-заглушки."""
+    fetch_counters (MobileOnlyOps), OAuth-extras, группа A без
+    auto_decline_discards (Phase 2) и группа C без fetch_account_diagnostics
+    (Phase 4, делегирование в app/mobile_*.py); остальное —
+    NotImplementedError-заглушки."""
 
     def __init__(self, acc: dict):
         super().__init__(acc)
@@ -156,38 +174,73 @@ class MobileHHClient(HHClient):
         """HHID HR-а, владеющего вакансией (phase 3, vacancy-метаданные)."""
         raise NotImplementedError("phase 3: TODO mobile fetch_vacancy_owner_hr_hhid")
 
-    # ── Phase 4: резюме/статистика ────────────────────────────────────────────
+    # ── Phase 4: резюме/статистика (реализовано: api.hh.ru, Bearer) ──────────
+    # Делегирование в app/mobile_resume*.py и app/mobile_job_search_status.py;
+    # транспорт — app/hh_mobile_transport.py, резолв hash'а резюме —
+    # app/mobile_resume_common.py (контракты: scratchpad/apidocs
+    # apidocs_group_2/3/5.yaml + apk_writes_group_5.yaml).
 
-    def fetch_stats(self) -> dict:
-        """Статистика резюме (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile fetch_stats")
+    def fetch_resume(self, resume_id: str | None = None) -> dict:
+        """Полное резюме JSON: GET api.hh.ru/resumes/{id}
+        (?with_professional_roles=true&with_creds=true). resume_id=None —
+        первое резюме аккаунта (mobile_resume_common.resolve_resume_id).
+        ВНИМАНИЕ: mobile возвращает dict (полный JSON резюме), web — str
+        (текст для LLM); расхождение задокументировано в отчёте Phase 4."""
+        return mobile_resume.fetch_resume(self.acc, resume_id)
 
-    def fetch_resume(self) -> str:
-        """Текст резюме (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile fetch_resume")
+    def fetch_stats(self, resume_id: str | None = None) -> dict:
+        """Статистика резюме: GET /me?with_user_statuses=true (counters:
+        new_resume_views/unread_negotiations/resumes_count) +
+        GET /resumes/{id} (total_views/new_views) +
+        GET /negotiations_statistic/mine (streak). Ключи совместимы с web
+        hh_resume.fetch_resume_stats; shows/invitations в mobile недоступны
+        (web-SSR данные) — нули."""
+        return mobile_resume_stats.fetch_stats(self.acc, resume_id)
 
-    def fetch_resume_view_history(self, limit: int = 50) -> list:
-        """История просмотров резюме (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile fetch_resume_view_history")
+    def fetch_resume_view_history(self, limit: int = 50, resume_id: str | None = None) -> dict:
+        """Кто смотрел резюме: GET api.hh.ru/resumes/{id}/views (пагинация
+        до limit). Возврат {items: [{employer_id, name, viewed_at, viewed}],
+        total}. ВНИМАНИЕ: mobile возвращает dict с флагом viewed, web —
+        list; расхождение задокументировано в отчёте Phase 4."""
+        return mobile_resume_views.fetch_resume_view_history(self.acc, resume_id, limit)
 
-    def fetch_resume_views_aggregate(self) -> dict:
-        """Агрегированные просмотры резюме (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile fetch_resume_views_aggregate")
+    def fetch_resume_views_aggregate(self, resume_id: str | None = None) -> dict:
+        """Агрегация просмотров: GET /resumes/{id}/views (все страницы) →
+        {total, new (viewed=false), by_employer_top10} + web-алиасы
+        total_all_time/total_new (graph_30d в mobile пуст)."""
+        return mobile_resume_aggregate.fetch_resume_views_aggregate(self.acc, resume_id)
 
-    def analyze_resume(self, extra_terms: list = None) -> dict:
-        """Аудит резюме по ключевым словам (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile analyze_resume")
+    def analyze_resume(self, extra_terms: list = None, resume_id: str | None = None) -> dict:
+        """ML-аудит резюме: комбинация GET /resumes/{id} +
+        POST /skills_profile/predictions/recommended_skills/resume +
+        POST /skills_profile/suggestions/duties +
+        POST /skills_profile/predictions/subroles/by_title +
+        GET /career_platform/profile?profession_description=true. Возврат
+        {ok, missing_skills, recommended_duties, subroles, grade,
+        current_score}. extra_terms в mobile не используется (web-SSR
+        supply/demand), сохранён в сигнатуре ради контракта."""
+        return mobile_resume_analyze.analyze_resume(self.acc, resume_id)
 
     def edit_resume_field(self, resume_hash: str, fields: dict) -> dict:
-        """Редактирование полей резюме (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile edit_resume_field")
+        """Редактирование полей резюме: валидация по
+        GET /resumes/{id}/conditions (regexp/длины) +
+        PUT /resume_profile/{id} с JSON-diff
+        {resume: fields, creds: {}, additional_properties: {}}
+        (контракт APK EditResumeProfileRequestNetwork). Возврат
+        {ok, error?, updated_field?}."""
+        return mobile_resume_edit.edit_resume_field(self.acc, resume_hash, fields)
 
     def set_job_search_status(self, status: str) -> dict:
-        """Смена статуса поиска работы (phase 4)."""
-        raise NotImplementedError("phase 4: TODO mobile set_job_search_status")
+        """Смена статуса поиска работы: PUT
+        /user_statuses/job_search_statuses/mine (form id=<status>, контракт
+        APK JobSearchStatusRemoteApi). Возврат {ok, status, label} либо
+        {ok: False, error}."""
+        return mobile_job_search_status.set_job_search_status(self.acc, status)
 
     def fetch_account_diagnostics(self) -> dict:
-        """Диагностика аккаунта (phase 4)."""
+        """Диагностика аккаунта (phase 4). Составной web-SSR метод
+        (/applicant/resumes) — mobile-аналога нет; FallbackHHClient
+        прозрачно повторит через web-flow."""
         raise NotImplementedError("phase 4: TODO mobile fetch_account_diagnostics")
 
     # ── Реально в Phase 0 ─────────────────────────────────────────────────────
