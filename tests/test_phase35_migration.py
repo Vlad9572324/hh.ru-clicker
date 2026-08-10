@@ -100,6 +100,7 @@ _MODULE_SHORT_NAMES = {name.rsplit(".", 1)[1] for name in MIGRATED_FUNCTIONS}
 # слой); пути относительно корня репозитория.
 EXCLUDED_FILES = {
     "app/hh_client_web.py",
+    "app/mobile_questionnaire.py",  # APK has no native questionnaire endpoint
     "app/hh_chat.py",
     "app/hh_apply.py",
     "app/hh_negotiations.py",

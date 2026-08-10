@@ -672,7 +672,9 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
             headers={"User-Agent": ua, "Accept": "text/html"},
             cookies=acc.get("cookies", {}), timeout=15)
         rich = _parse_questionnaire_rich(r.text)
-        resume_text = get_client(acc).fetch_resume() if CONFIG.llm_use_resume else ""
+        resume_data = get_client(acc).fetch_resume() if CONFIG.llm_use_resume else {}
+        resume_text = (resume_data.get("text", "") if isinstance(resume_data, dict)
+                       and "text" in resume_data else json.dumps(resume_data, ensure_ascii=False))
         answers = generate_llm_questionnaire_answers(rich, f"Vacancy {vacancy_id}", "", resume_text)
         result = []
         for q in rich:

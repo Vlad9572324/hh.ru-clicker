@@ -179,7 +179,7 @@ class HHClientBase(ABC):
         ...
 
     @abstractmethod
-    def fetch_resume(self) -> str:
+    def fetch_resume(self) -> dict:
         """Текст резюме; web: hh_resume.fetch_resume_text."""
         ...
 

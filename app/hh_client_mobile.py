@@ -31,15 +31,21 @@ MobileHHClient — mobile-клиент hh.ru (api.hh.ru, OAuth Bearer).
   - phase 4: fetch_account_diagnostics (составной SSR-метод, web fallback).
 """
 
+import asyncio
 import requests
 
 from app import (
+    mobile_apply,
     mobile_chat_actions,
     mobile_chat_list,
     mobile_chat_thread,
+    mobile_check_limit,
     mobile_job_search_status,
     mobile_neg_meta,
     mobile_negotiations,
+    mobile_precheck,
+    mobile_questionnaire,
+    mobile_related,
     mobile_resume,
     mobile_resume_aggregate,
     mobile_resume_analyze,
@@ -47,9 +53,11 @@ from app import (
     mobile_resume_stats,
     mobile_resume_views,
     mobile_send_message,
+    mobile_touch_resume,
     oauth,
 )
 from app.hh_client import HHClient
+from app.llm import _randomize_text
 
 
 class MobileHHClient(HHClient):
@@ -133,8 +141,20 @@ class MobileHHClient(HHClient):
     # ── Phase 3: отклики и vacancy-метаданные ─────────────────────────────────
 
     async def submit_response(self, vid: str, letter_max_length: int | None = None) -> tuple:
-        """Отклик на вакансию (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile submit_response")
+        letter = _randomize_text(self.acc.get("letter", "")) if self.acc.get("letter") else ""
+        if letter_max_length and len(letter) > letter_max_length:
+            letter = letter[:letter_max_length].rstrip()
+        visibility_id = self.acc.get("required_applicant_visibility_id", "")
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: mobile_apply.submit_response(
+                self.acc, vid, self.acc.get("resume_hash", ""), letter,
+                required_applicant_visibility_id=visibility_id))
+        if result.get("ok"):
+            return "sent", {"negotiation_id": result.get("negotiation_id", "")}
+        info = {"error_type": result.get("error_type", ""),
+                "http_status": result.get("http_status")}
+        return {"limit_exceeded": "limit", "test_required": "test",
+                "already_applied": "already"}.get(info["error_type"], "error"), info
 
     async def fill_questionnaire(self, vid: str, vacancy_title: str = "", company: str = "") -> tuple:
         """Заполнение анкеты при отклике (phase 3).
@@ -144,23 +164,24 @@ class MobileHHClient(HHClient):
         планируется. Fallback-политика для mobile-аккаунтов (делегировать в
         web-flow или оставить NotImplementedError) будет решена в Phase 3.
         """
-        raise NotImplementedError("phase 3: TODO mobile fill_questionnaire")
+        return await mobile_questionnaire.fill_questionnaire(self.acc, vid, vacancy_title, company)
 
     def check_vacancy_before_apply(self, vid: str) -> dict:
         """Пре-проверка вакансии перед откликом (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile check_vacancy_before_apply")
+        return mobile_precheck.check_vacancy_before_apply(
+            self.acc, vid, self.acc.get("resume_hash", ""))
 
     def check_limit(self) -> bool:
         """Проверка дневного лимита откликов (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile check_limit")
+        return not mobile_check_limit.check_limit(self.acc).get("can_apply", True)
 
     def touch_resume(self) -> tuple:
         """Поднять резюме (touch) (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile touch_resume")
+        return mobile_touch_resume.touch_resume(self.acc, self.acc.get("resume_hash", ""))
 
     def fetch_related_vacancies(self, seed_vid: str, max_pages: int = 1) -> list:
         """Похожие вакансии для расширения пула (phase 3)."""
-        raise NotImplementedError("phase 3: TODO mobile fetch_related_vacancies")
+        return mobile_related.fetch_related_vacancies(self.acc, seed_vid, max_pages)
 
     def fetch_employer_rating(self, employer_id) -> dict | None:
         """Рейтинг работодателя (phase 3, vacancy-метаданные)."""

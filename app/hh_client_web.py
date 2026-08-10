@@ -91,8 +91,8 @@ class WebHHClient(HHClient):
     def fetch_stats(self) -> dict:
         return hh_resume.fetch_resume_stats(self.acc)
 
-    def fetch_resume(self) -> str:
-        return hh_resume.fetch_resume_text(self.acc)
+    def fetch_resume(self) -> dict:
+        return {"text": hh_resume.fetch_resume_text(self.acc), "source": "web"}
 
     def fetch_resume_view_history(self, limit: int = 50) -> list:
         return hh_resume.fetch_resume_view_history(self.acc, limit)

@@ -31,6 +31,7 @@ import inspect
 from app.hh_client import HHClient
 from app.hh_mobile_transport import MobileAPIError, is_fallback_status
 from app.logging_utils import log_debug
+from app.mobile_job_search_status import normalize_job_search_status
 
 # Явный список делегируемых методов: полный контракт HHClient =
 # группа A (переговоры/чат) + группа B (отклики) + группа C (резюме) +
@@ -93,6 +94,8 @@ assert set(_METHODS) == set(HHClient.__abstractmethods__), (
 
 def _make_sync_delegate(name: str):
     def delegate(self, *args, **kwargs):
+        if name == "set_job_search_status" and args:
+            args = (normalize_job_search_status(args[0]), *args[1:])
         try:
             return getattr(self.mobile, name)(*args, **kwargs)
         except NotImplementedError:
