@@ -3,6 +3,7 @@ Browser session routes (temporary accounts added via cookie paste).
 """
 
 import asyncio
+import hashlib
 import re
 
 import requests
@@ -24,9 +25,15 @@ router = APIRouter()
 def _validate_and_profile(raw_cookie_line: str) -> dict:
     """
     Синхронно проверяет сессию и вытаскивает профиль из SSR.
-    Использует Session() + warm-up GET к hh.ru/ чтобы получить DDoS-Guard-куки;
-    без warm-up прямой GET /applicant/resumes часто возвращает 403 (issue #8).
+    Использует per-validation сессию + warm-up GET к hh.ru/ чтобы получить
+    DDoS-Guard-куки; без warm-up прямой GET /applicant/resumes часто
+    возвращает 403 (issue #8).
     """
+    # Per-validation сессия (ключ = хэш вставляемой cookie-строки): requests
+    # мержит общую jar ПОВЕРХ raw `Cookie:` header, и без изоляции валидация
+    # новой сессии B могла бы пройти на живых куках другого аккаунта.
+    _jar_key = "sess_validate::" + hashlib.sha256(
+        raw_cookie_line.encode("utf-8", errors="replace")).hexdigest()[:16]
     base_headers = {
         "User-Agent": webview_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -45,7 +52,8 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
         # Warm-up для получения DDoS-Guard cookies (best-effort).
         try:
             HH.get(hh_base() + "/", headers=base_headers, timeout=10,
-                   allow_redirects=True, _diag_tag="sess_warmup")
+                   allow_redirects=True, _diag_tag="sess_warmup",
+                   cookie_jar_key=_jar_key)
         except Exception:
             pass
         r = HH.get(
@@ -53,6 +61,7 @@ def _validate_and_profile(raw_cookie_line: str) -> dict:
             headers={**base_headers, "Referer": hh_base() + "/"},
             timeout=15, allow_redirects=True,
             _diag_tag="sess_validate",
+            cookie_jar_key=_jar_key,
         )
     except Exception as e:
         return {"ok": False, "error": f"Ошибка сети: {e}"}
@@ -290,7 +299,7 @@ def _refresh_via_oauth(acc: dict) -> dict:
     """OAuth-fallback: тянем список резюме через GET /resumes/mine
     (Bearer-only, cookies не нужны). Работает даже когда куки протухли.
     """
-    from app.oauth import _obtain_oauth_token
+    from app.oauth import _obtain_oauth_token, _token_key
     from app.hh_http import HH
     token = _obtain_oauth_token(acc)
     if not token:
@@ -299,7 +308,8 @@ def _refresh_via_oauth(acc: dict) -> dict:
         r = HH.get("https://api.hh.ru/resumes/mine", headers={
             "User-Agent": mobile_user_agent(),
             "Authorization": f"Bearer {token}",
-        }, params={"per_page": 30}, timeout=10, _diag_tag="sess_refresh_oauth")
+        }, params={"per_page": 30}, cookie_jar_key=_token_key(acc) or None,
+            timeout=10, _diag_tag="sess_refresh_oauth")
     except Exception as e:
         return {"ok": False, "error": f"OAuth ошибка: {e}"}
     if r.status_code != 200:

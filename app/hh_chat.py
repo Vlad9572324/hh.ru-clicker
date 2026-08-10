@@ -7,6 +7,7 @@ import requests
 from app.config import hh_base
 from app.hh_http import HH
 from app.user_agent import webview_user_agent
+from app.oauth import _token_key
 
 from app.logging_utils import log_debug, _is_login_page
 
@@ -62,6 +63,7 @@ def _do_fetch_chatik_cookies(acc: dict) -> None:
         r = HH.get(
             hh_base() + "/",
             cookies=acc["cookies"],
+            cookie_jar_key=_token_key(acc) or None,
             headers={"User-Agent": ua},
             timeout=10,
             allow_redirects=True,
@@ -103,7 +105,8 @@ def _fetch_chat_list(acc: dict, max_pages: int = 5) -> tuple:
         else:
             url = f"{_CHATIK_BASE}/chatik/api/chats?page={page_num}"
         try:
-            resp = HH.get(url, cookies=acc["cookies"], headers=headers, timeout=15)
+            resp = HH.get(url, cookies=acc["cookies"], cookie_jar_key=_token_key(acc) or None,
+                          headers=headers, timeout=15)
             if resp.status_code in (401, 403) or _is_login_page(resp.text):
                 break
             if resp.status_code != 200:
@@ -257,6 +260,7 @@ def _fetch_chat_history(acc: dict, chat_id: str, max_messages: int = 20) -> list
             f"{_CHATIK_BASE}/chatik/api/chat_data",
             params={"chatId": int(chat_id)},
             cookies=acc["cookies"],
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json",
@@ -326,6 +330,7 @@ def fetch_quick_replies(acc: dict, chat_id: str, msg_id: str) -> list:
             f"{_CHATIK_BASE}/chatik/api/quick_replies",
             params={"chatId": str(chat_id), "messageId": str(msg_id)},
             cookies=acc.get("cookies") or {},
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json",
@@ -371,6 +376,7 @@ def send_participant_action(acc: dict, chat_id: str, action_type: str = "TYPING"
         r = HH.post(
             f"{_CHATIK_BASE}/chatik/api/participant_action",
             cookies=acc.get("cookies", {}),
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua, "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -410,6 +416,7 @@ def mark_chat_read(acc: dict, chat_id: str, message_id: str) -> bool:
         r = HH.post(
             f"{_CHATIK_BASE}/chatik/api/mark_read",
             cookies=acc.get("cookies", {}),
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua, "Accept": "application/json",
                 "Content-Type": "application/json",
@@ -483,6 +490,7 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
         resp = HH.post(
             f"{_CHATIK_BASE}/chatik/api/send",
             cookies=acc["cookies"],
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json, */*",
@@ -565,6 +573,7 @@ def fetch_chatik_ws_url(acc: dict) -> str | None:
             f"{_WS_BASE}/connection/data",
             params={"connectionMode": "direct", "appVersion": _WS_APP_VERSION},
             cookies=acc.get("cookies") or {},
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": webview_user_agent(),
                 "Accept": "application/json, text/plain, */*",
@@ -712,6 +721,7 @@ def _mark_chat_read(acc: dict, chat_id: str, message_id: str):
                      "Origin": _CHATIK_BASE, "Referer": f"{_CHATIK_BASE}/",
                      "X-XSRFToken": xsrf},
             cookies=acc["cookies"],
+            cookie_jar_key=_token_key(acc) or None,
             json={"chatId": cid, "messageId": mid},
             timeout=5
         )

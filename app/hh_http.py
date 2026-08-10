@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import urllib.parse
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -127,25 +128,78 @@ class HHClient:
     """Обёртка над curl_cffi / requests с общим API `.request(...)`.
 
     Использование:
-        r = HH.request("GET", "https://hh.ru/vacancy/1", cookies=acc["cookies"])
+        r = HH.request("GET", "https://hh.ru/vacancy/1", cookies=acc["cookies"],
+                       cookie_jar_key=acc_id)
         r.status_code, r.text, r.headers, r.json()
 
     При curl_cffi доступен — automatically impersonates Chrome.
     При отсутствии — fallback на стандартный `requests` (старое поведение).
     Оба возвращают одинаковый интерфейс `requests.Response`-совместимый объект.
 
+    Per-account сессии (изоляция cookies):
+        `request()` принимает kwarg `cookie_jar_key: str | None` (извлекается
+        из kwargs через pop, как `_diag_tag` и т.п.). Когда задан — запрос идёт
+        через per-key пару сессий (curl_cffi + requests fallback), хранящуюся
+        в LRU-реестре `self._sessions` (макс. 100 ключей; least recently used
+        вытесняется). Это устраняет cross-account cookie confusion, когда
+        аккаунт B отправлял hhtoken аккаунта A через общую cookie jar.
+        `cookies=` kwarg остаётся pass-through к сессии.
+        `cookie_jar_key=None` — legacy поведение: общие сессии
+        `_session_cffi`/`_session_req` (для запросов без аккаунтного контекста,
+        например probe_outbound_ip).
+        Fallback при cffi-ошибке идёт в PER-KEY requests-сессию, не в общую.
+
     Diag-хук: любой не-2xx ответ или подозрительное тело пишет запись в
     `data/diag.log`.
     """
 
+    _MAX_SESSIONS = 100  # LRU-лимит per-account реестра сессий
+
     def __init__(self):
         self._session_cffi = _CffiSession() if _HAS_CFFI else None
         self._session_req = _requests.Session()
+        # Per-account сессии: cookie_jar_key -> {"cffi": ..., "req": ...}.
+        # LRU: недавно использованные ключи в конце (move_to_end при доступе).
+        self._sessions: OrderedDict[str, dict] = OrderedDict()
+        self._sessions_lock = threading.RLock()
+
+    def _get_session(self, cookie_jar_key: str | None) -> tuple[Any, Any]:
+        """Вернуть (cffi_session_or_None, requests_session) для данного ключа.
+
+        cookie_jar_key=None → legacy общие сессии (запросы без аккаунтного
+        контекста). Иначе — per-key пара сессий из LRU-реестра `self._sessions`
+        (ленивое создание; при доступе move_to_end; при превышении
+        `_MAX_SESSIONS` вытесняется самая давно не использовавшаяся запись
+        через popitem(last=False)). Все операции под `self._sessions_lock`.
+        """
+        if cookie_jar_key is None:
+            return self._session_cffi, self._session_req
+        with self._sessions_lock:
+            entry = self._sessions.get(cookie_jar_key)
+            if entry is None:
+                entry = {
+                    "cffi": _CffiSession() if _HAS_CFFI else None,
+                    "req": _requests.Session(),
+                }
+                self._sessions[cookie_jar_key] = entry
+            self._sessions.move_to_end(cookie_jar_key)
+            while len(self._sessions) > self._MAX_SESSIONS:
+                _evicted_key, evicted = self._sessions.popitem(last=False)
+                # Закрываем вытесненные сессии чтобы их keep-alive/cookies
+                # не переиспользовались и не висели в памяти.
+                for s in (evicted["cffi"], evicted["req"]):
+                    if s is not None:
+                        try:
+                            s.close()
+                        except Exception:
+                            pass
+            return entry["cffi"], entry["req"]
 
     def request(self, method: str, url: str, **kwargs) -> Any:
         # Extract our own kwargs
         diag_tag = kwargs.pop("_diag_tag", "")
         skip_diag = kwargs.pop("_skip_diag", False)
+        cookie_jar_key = kwargs.pop("cookie_jar_key", None)
 
         # curl_cffi не поддерживает `files=` в POST → forced fallback на requests
         # (обычно touch_resume / multipart uploads — редкие, не критично для fingerprint).
@@ -165,10 +219,13 @@ class HHClient:
         if _PROXY and "proxies" not in kwargs and "proxy" not in kwargs:
             kwargs["proxies"] = {"http": _PROXY, "https": _PROXY}
 
+        # Per-account сессия (cookie_jar_key) или общая legacy (None).
+        sess_cffi, sess_req = self._get_session(cookie_jar_key)
+
         # curl_cffi понимает большинство requests-опций 1:1 + `impersonate`
-        if self._session_cffi is not None and not force_requests:
+        if sess_cffi is not None and not force_requests:
             try:
-                r = self._session_cffi.request(
+                r = sess_cffi.request(
                     method, url, impersonate=_IMPERSONATE, **kwargs,
                 )
                 tag = _classify(r.status_code, r.content or b"", dict(r.headers or {}))
@@ -179,11 +236,12 @@ class HHClient:
                 return r
             except Exception as e:
                 # На unrecoverable ошибку curl_cffi (segfault, unsupported cert) —
-                # логируем и fallback на requests.
+                # логируем и fallback на requests той же per-key сессию (не общую,
+                # иначе cross-account cookie confusion сохраняется).
                 _record_diag(method, url, -1, str(e).encode("utf-8"), {},
                              tag="cffi_error", extra={"exc": str(e)})
 
-        r = self._session_req.request(method, url, **kwargs)
+        r = sess_req.request(method, url, **kwargs)
         tag = _classify(r.status_code, r.content or b"", dict(r.headers or {}))
         if not skip_diag and tag not in ("ok",):
             _record_diag(method, url, r.status_code, r.content or b"",
@@ -216,8 +274,9 @@ def proxy_url() -> str:
 def set_proxy(url: str) -> str:
     """Заменить прокси runtime (без рестарта контейнера). Приниает пустую строку
     для отключения. Возвращает актуальный URL после смены.
-    Пересоздаёт curl_cffi Session чтобы старые keep-alive соединения через
-    прежний прокси не переиспользовались."""
+    Пересоздаёт curl_cffi Session и очищает per-account реестр сессий, чтобы
+    старые keep-alive соединения через прежний прокси не переиспользовались
+    (per-account сессии лениво пересоздадутся при следующем запросе)."""
     global _PROXY
     url = (url or "").strip()
     _PROXY = url
@@ -225,6 +284,21 @@ def set_proxy(url: str) -> str:
     try:
         HH._session_cffi = _CffiSession() if _HAS_CFFI else None
         HH._session_req = _requests.Session()
+    except Exception:
+        pass
+    # Per-account сессии тоже привязаны к старому прокси — очищаем реестр;
+    # лениво пересоздадутся через новый прокси при следующем запросе.
+    try:
+        with HH._sessions_lock:
+            evicted = list(HH._sessions.values())
+            HH._sessions.clear()
+        for entry in evicted:
+            for s in (entry["cffi"], entry["req"]):
+                if s is not None:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
     except Exception:
         pass
     return _PROXY

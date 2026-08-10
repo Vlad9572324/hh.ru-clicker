@@ -11,6 +11,7 @@ from app.hh_resume import parse_hh_lux_ssr
 from app.config import hh_base
 from app.hh_http import HH
 from app.user_agent import mobile_user_agent, webview_user_agent
+from app.oauth import _token_key
 
 
 def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
@@ -43,6 +44,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
             resp = HH.get(
                 f"{hh_base()}/applicant/negotiations?filter=all&state=INTERVIEW&page={page}",
                 cookies=cookies,
+                cookie_jar_key=_token_key(acc) or None,
                 headers=headers,
                 timeout=15,
             )
@@ -139,6 +141,7 @@ def fetch_hh_negotiations_stats(acc: dict, max_pages: int = 20) -> dict:
             resp = HH.get(
                 f"{hh_base()}/applicant/negotiations?page={page}",
                 cookies=cookies,
+                cookie_jar_key=_token_key(acc) or None,
                 headers=headers,
                 timeout=15,
             )
@@ -237,6 +240,7 @@ def fetch_hh_possible_offers(acc: dict) -> list:
         resp = HH.get(
             hh_base() + "/shards/applicant/negotiations/possible_job_offers",
             cookies=cookies,
+            cookie_jar_key=_token_key(acc) or None,
             headers=headers,
             timeout=10,
         )
@@ -274,7 +278,8 @@ def auto_decline_discards(acc: dict) -> int:
         for page in range(5):
             r = HH.get(
                 f"{hh_base()}/applicant/negotiations?state=DISCARD&page={page}",
-                headers=headers, cookies=acc["cookies"], timeout=15
+                headers=headers, cookies=acc["cookies"], cookie_jar_key=_token_key(acc) or None,
+                timeout=15,
             )
             ssr = parse_hh_lux_ssr(r.text)
             topics = ssr.get("applicantNegotiations", {}).get("topicList", [])
@@ -297,6 +302,7 @@ def auto_decline_discards(acc: dict) -> int:
                     hh_base() + "/applicant/negotiations/decline",
                     headers=headers,
                     cookies=acc["cookies"],
+                    cookie_jar_key=_token_key(acc) or None,
                     data={"topicId": tid, "_xsrf": xsrf},
                     timeout=10
                 )
@@ -353,6 +359,7 @@ def fetch_employer_rating(acc: dict, employer_id) -> dict | None:
             f"{hh_base()}/employer_reviews/proxy_components/small_widget",
             params={"employerId": eid},
             cookies=acc.get("cookies") or {},
+            cookie_jar_key=_token_key(acc) or None,
             headers={
                 "User-Agent": ua,
                 "Accept": "application/json",
@@ -443,6 +450,7 @@ def fetch_employer_id_for_vacancy(acc: dict, vacancy_id) -> int | None:
         r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
             cookies=acc.get("cookies") or {},
+            cookie_jar_key=_token_key(acc) or None,
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
             timeout=12, allow_redirects=True,
         )
@@ -516,6 +524,7 @@ def fetch_negotiations_metadata(acc: dict) -> dict:
         r = HH.get(
             f"{hh_base()}/applicant/negotiations",
             cookies=cookies,
+            cookie_jar_key=_token_key(acc) or None,
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
             timeout=15, allow_redirects=True,
         )
@@ -590,6 +599,7 @@ def fetch_vacancy_owner_hr_hhid(acc: dict, vacancy_id) -> int | None:
         r = HH.get(
             f"{hh_base()}/vacancy/{vid}",
             cookies=acc.get("cookies") or {},
+            cookie_jar_key=_token_key(acc) or None,
             headers={"User-Agent": ua, "Accept": "text/html"},
             timeout=10, allow_redirects=True,
         )

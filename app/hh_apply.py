@@ -15,7 +15,7 @@ from app.config import CONFIG, hh_base
 from app.hh_http import HH
 from app.user_agent import webview_user_agent
 from app.hh_api import get_headers
-from app.oauth import _oauth_touch_resume
+from app.oauth import _oauth_touch_resume, _token_key
 from app.questionnaire import _parse_questionnaire_fields, _parse_questionnaire_rich
 from app.llm import _randomize_text, generate_llm_questionnaire_answers, get_llm_last_status
 from app.hh_resume import fetch_resume_text
@@ -491,6 +491,7 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
                 headers={"User-Agent": ua, "Accept": "application/json, */*",
                          "Referer": f"{hh_base()}/vacancy/{vid}"},
                 cookies=acc.get("cookies", {}),
+                cookie_jar_key=_token_key(acc) or None,
                 timeout=_HH_DEFAULT_TIMEOUT,
             ),
             retries=3, backoff_base=2.0,
@@ -582,7 +583,8 @@ def check_limit(acc: dict) -> bool:
                 hh_base() + "/search/vacancy?text=&area=1&page=0",
                 headers={"User-Agent": webview_user_agent(),
                          "Accept": "text/html"},
-                cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
+                cookies=acc["cookies"], cookie_jar_key=_token_key(acc) or None,
+                timeout=_HH_DEFAULT_TIMEOUT,
             ),
             retries=3, backoff_base=2.0,
         )()
@@ -596,7 +598,8 @@ def check_limit(acc: dict) -> bool:
                 f"{hh_base()}/applicant/vacancy_response/popup?vacancyId={vid}",
                 headers={"User-Agent": webview_user_agent(),
                          "Accept": "application/json", "X-Xsrftoken": xsrf},
-                cookies=acc["cookies"], timeout=_HH_DEFAULT_TIMEOUT,
+                cookies=acc["cookies"], cookie_jar_key=_token_key(acc) or None,
+                timeout=_HH_DEFAULT_TIMEOUT,
             ),
             retries=3, backoff_base=2.0,
         )()
@@ -631,6 +634,7 @@ def touch_resume(acc: dict) -> tuple:
             hh_base() + "/shards/resume/batch_update",
             headers=headers,
             cookies=acc["cookies"],
+            cookie_jar_key=_token_key(acc) or None,
             timeout=_HH_DEFAULT_TIMEOUT,
         )
         if r.status_code == 200:
@@ -665,6 +669,7 @@ def touch_resume(acc: dict) -> tuple:
                 hh_base() + "/applicant/resumes/touch",
                 headers=headers,
                 cookies=acc["cookies"],
+                cookie_jar_key=_token_key(acc) or None,
                 files=touch_files,
                 timeout=_HH_DEFAULT_TIMEOUT,
             ),
@@ -715,6 +720,7 @@ def fetch_related_vacancies(acc: dict, seed_vid: str, max_pages: int = 1) -> lis
                 },
                 headers=headers,
                 cookies=acc.get("cookies", {}),
+                cookie_jar_key=_token_key(acc) or None,
                 timeout=8,
             )
             if r.status_code != 200:

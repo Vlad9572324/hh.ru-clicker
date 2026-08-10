@@ -407,7 +407,8 @@ def _obtain_oauth_token(acc: dict) -> str:
                 "client_id": _HH_OAUTH_CLIENT_ID,
                 "redirect_uri": _HH_OAUTH_REDIRECT,
                 "state": flow_state,
-            }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
+            }, headers={"User-Agent": ua}, cookies=cookies,
+                cookie_jar_key=_token_key(acc) or None, timeout=15, allow_redirects=False)
 
             code = _extract_code(r1.headers.get("Location", ""))
             if not code and r1.status_code == 200 and (
@@ -421,7 +422,8 @@ def _obtain_oauth_token(acc: dict) -> str:
                     "state": flow_state,
                     "action": "approve",
                     "_xsrf": cookies.get("_xsrf", ""),
-                }, headers={"User-Agent": ua}, cookies=cookies, timeout=15, allow_redirects=False)
+                }, headers={"User-Agent": ua}, cookies=cookies,
+                    cookie_jar_key=_token_key(acc) or None, timeout=15, allow_redirects=False)
                 code = _extract_code(r2.headers.get("Location", ""))
 
             if not code:
@@ -566,7 +568,7 @@ def fetch_saved_vacancy_searches(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/saved_searches/vacancies",
-                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, cookie_jar_key=_token_key(acc) or None, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -598,7 +600,7 @@ def fetch_favorited_vacancies(acc: dict) -> list:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/favorited",
-                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, cookie_jar_key=_token_key(acc) or None, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -627,7 +629,7 @@ def fetch_blacklisted_vacancies(acc: dict) -> set:
         page = 0
         while page < 5:
             r = HH.get("https://api.hh.ru/vacancies/blacklisted",
-                             headers=H, params={"per_page": 10, "page": page}, timeout=5)
+                             headers=H, params={"per_page": 10, "page": page}, cookie_jar_key=_token_key(acc) or None, timeout=5)
             if r.status_code != 200:
                 break
             d = r.json()
@@ -667,7 +669,7 @@ def fetch_employer_rating(acc: dict, employer_id: str) -> dict:
     try:
         r = HH.get(
             f"https://api.hh.ru/employers/{employer_id}/reviews",
-            headers=H, timeout=5,
+            headers=H, cookie_jar_key=_token_key(acc) or None, timeout=5,
         )
         if r.status_code == 404:
             with _employer_rating_lock:
@@ -716,7 +718,8 @@ def fetch_vacancy_details(acc: dict, vid: str) -> dict:
     if not H:
         return {}
     try:
-        r = HH.get(f"https://api.hh.ru/vacancies/{vid}", headers=H, timeout=5)
+        r = HH.get(f"https://api.hh.ru/vacancies/{vid}", headers=H,
+                   cookie_jar_key=_token_key(acc) or None, timeout=5)
         if r.status_code == 404:
             with _vacancy_details_lock:
                 _vacancy_details_cache[vid] = (now + 3600, {"archived": True})
@@ -794,7 +797,8 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
         for page in range(5):
             r = HH.get(
                 "https://api.hh.ru/negotiations",
-                headers=H, params={"per_page": 100, "page": page}, timeout=5,
+                headers=H, params={"per_page": 100, "page": page},
+                cookie_jar_key=_token_key(acc) or None, timeout=5,
             )
             if r.status_code != 200:
                 break
@@ -849,7 +853,7 @@ def fetch_resume_status(acc: dict, force: bool = False) -> dict:
             f"https://api.hh.ru/resumes/{resume_id}",
             headers=H,
             params={"with_professional_roles": "true", "with_creds": "true"},
-            timeout=5,
+            cookie_jar_key=_token_key(acc) or None, timeout=5,
         )
         if r.status_code != 200:
             return None
@@ -900,7 +904,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             "https://api.hh.ru/negotiations",
             headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}",
                      "Content-Type": "application/x-www-form-urlencoded"},
-            data=data, timeout=15,
+            data=data, cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code in (200, 201, 204):
             # Success — try to get vacancy info
@@ -973,7 +977,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
         r = HH.post(
             f"https://api.hh.ru/resumes/{resume_hash_quoted}/publish",
             headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}"},
-            timeout=15,
+            cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code in (200, 204):
             return True, "✅ Резюме поднято через OAuth API!"
@@ -1004,7 +1008,7 @@ def fetch_negotiation_messages_oauth(acc: dict, neg_id, max_messages: int = 20) 
         r = HH.get(
             f"https://api.hh.ru/negotiations/{neg_id}/messages",
             headers=H, params={"per_page": max_messages, "order_by": "asc"},
-            timeout=5,
+            cookie_jar_key=_token_key(acc) or None, timeout=5,
         )
         if r.status_code != 200:
             log_debug(f"OAuth chat history neg={neg_id}: HTTP {r.status_code}")
@@ -1042,7 +1046,7 @@ def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
         r = HH.post(
             f"https://api.hh.ru/negotiations/{neg_id}/messages",
             headers={**H, "Content-Type": "application/json"},
-            json={"message": text}, timeout=15,
+            json={"message": text}, cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         log_debug(f"OAuth /negotiations send neg={neg_id}: HTTP {r.status_code} | {r.text[:200]}")
         if r.status_code in (200, 201, 204):
@@ -1094,7 +1098,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {token}",
             },
-            timeout=15,
+            cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         log_debug(f"OAuth chat send chat_id={cid}: HTTP {r.status_code} | {r.text[:300]}")
         if r.status_code in (200, 201, 204):
@@ -1147,7 +1151,7 @@ def fetch_negotiations_statistic(acc: dict) -> dict:
     H = {**H, "x-force-app-access": "true", "User-Agent": _mobile_user_agent()}
     try:
         r = HH.get("https://api.hh.ru/negotiations_statistic/mine",
-                   headers=H, timeout=8)
+                   headers=H, cookie_jar_key=_token_key(acc) or None, timeout=8)
         if r.status_code != 200:
             return {}
         data = r.json()
