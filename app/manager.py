@@ -61,6 +61,7 @@ from app.oauth import (
     _oauth_apply,
     get_oauth_status,
     _obtain_oauth_token,
+    _token_key,
     refresh_oauth_tokens_proactive,
     fetch_saved_vacancy_searches,
     fetch_favorited_vacancies,
@@ -1437,7 +1438,8 @@ class BotManager:
                         "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                         "Referer": hh_base() + "/applicant/negotiations",
                     },
-                    cookies=acc.get("cookies", {}), timeout=10,
+                    cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None,
+                    timeout=10,
                 )
                 if r_offers.status_code == 200:
                     offers_data = r_offers.json()
