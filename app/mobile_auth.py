@@ -581,6 +581,7 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
             existing["cookies"] = dict(cookies)
             existing["all_resumes"] = all_resumes
             existing["use_oauth"] = True
+            existing["mode"] = "mobile"  # mobile OTP flow → mobile-clients
         else:
             sessions.append({
                 "name": display_name or "HH Mobile",
@@ -594,6 +595,7 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
                 "all_resumes": all_resumes,
                 "degraded_fallback_enabled": False,
                 "use_oauth": True,
+                "mode": "mobile",  # mobile OTP flow → mobile-clients (Hedi, hh_recommendations и т.д.)
                 "urls": [],
                 "url_pages": {},
             })
