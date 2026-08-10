@@ -40,6 +40,7 @@ from app.mobile_job_search_status import normalize_job_search_status
 # При добавлении метода в HHClient добавьте имя сюда (guard ниже уронит
 # импорт при рассинхроне).
 _METHODS = (
+    "search_vacancies",
     # ── Группа A — переговоры / чат ──────────────────────────────────────
     "fetch_negotiations",
     "fetch_thread",

@@ -9,7 +9,7 @@ hh_chat / hh_apply / hh_negotiations / hh_resume / oauth.
 Импортируются МОДУЛИ (а не функции) — тесты monkeypatch'ат атрибуты модулей.
 """
 
-from app import hh_chat, hh_apply, hh_negotiations, hh_resume, oauth
+from app import hh_api, hh_chat, hh_apply, hh_negotiations, hh_resume, oauth
 from app.hh_client import HHClient
 
 
@@ -142,3 +142,7 @@ class WebHHClient(HHClient):
 
     def fetch_employer_rating_oauth(self, employer_id: str) -> dict:
         return oauth.fetch_employer_rating(self.acc, employer_id)
+    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
+                         page: int = 0, filters=None) -> list:
+        return hh_api.fetch_hh_vacancies(
+            self.acc, text, area_id, per_page, page, filters)

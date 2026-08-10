@@ -65,6 +65,12 @@ class HHClientBase(ABC):
     def __init__(self, acc: dict):
         self.acc = acc
 
+    @abstractmethod
+    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
+                         page: int = 0, filters=None) -> list:
+        """Поиск вакансий; mobile: GET api.hh.ru/vacancies."""
+        ...
+
     # ------------------------------------------------------------------
     # Группа A — переговоры / чат
     # ------------------------------------------------------------------

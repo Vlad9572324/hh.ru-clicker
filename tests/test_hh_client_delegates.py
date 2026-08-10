@@ -24,7 +24,7 @@ import concurrent.futures
 
 import pytest
 
-from app import hh_apply, hh_chat, hh_negotiations, hh_resume, oauth
+from app import hh_api, hh_apply, hh_chat, hh_negotiations, hh_resume, oauth
 from app.hh_client import HHClient
 from app.hh_client_mobile import MobileHHClient
 from app.hh_client_web import WebHHClient
@@ -38,6 +38,9 @@ from app.hh_client_web import WebHHClient
 #    проверка дефолтов: None | (аргументы вызова, ожидаемый проброс без acc))
 # ---------------------------------------------------------------------------
 SYNC_DELEGATES = [
+    ("search_vacancies", hh_api, "fetch_hh_vacancies",
+     ("python", 2, 40, 1, {"experience": "between1And3"}),
+     (("python",), ("python", 1, 20, 0, None))),
     # --- Группа A: переговоры / чат ---
     ("fetch_negotiations", hh_negotiations, "fetch_hh_negotiations_stats",
      (7,), ((), (20,))),

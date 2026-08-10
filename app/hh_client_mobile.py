@@ -52,6 +52,7 @@ from app import (
     mobile_resume_edit,
     mobile_resume_stats,
     mobile_resume_views,
+    mobile_search,
     mobile_send_message,
     mobile_touch_resume,
     oauth,
@@ -70,6 +71,11 @@ class MobileHHClient(HHClient):
 
     def __init__(self, acc: dict):
         super().__init__(acc)
+
+    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
+                         page: int = 0, filters=None) -> list:
+        return mobile_search.search_vacancies(
+            self.acc, text, area_id, per_page, page, filters)
 
     # ── Phase 2: переговоры/чаты (реализовано: api.hh.ru, Bearer) ─────────────
     # Делегирование в app/mobile_*.py; транспорт — app/hh_mobile_transport.py

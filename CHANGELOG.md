@@ -7,6 +7,22 @@
 PR/ветке, слитой в `main`; baseline (состояние «до») — `origin/main` (`b3bba5a`, 2026-08-07).
 Commit-хэши указаны в скобках.
 
+## [0.5.0-phase5] — ветка `feat/phase5-search-mobile` (в разработке)
+
+### Added
+
+- Поиск вакансий через `GET api.hh.ru/vacancies`: Bearer/mobile-заголовки,
+  фильтры, пагинация с пределом 20 страниц и стабильное поле `url`.
+- `search_vacancies` в контракте `HHClient`, mobile/web адаптерах и
+  прозрачной mobile→web fallback-обёртке для 0/401/403/5xx.
+- Unit-тесты mobile-поиска и сценария 401 → SSR fallback.
+
+### Changed
+
+- Degraded OAuth collector в `app/manager.py` больше не выполняет прямой
+  HTTP-запрос: поиск проходит через `get_client(acc).search_vacancies(...)`.
+- Обновлена матрица фаз: Phase 5 отмечена выполненной.
+
 ## [0.4.0-phase3.5] — ветка `feat/phase3.5-migrate-callers` (в разработке)
 
 **Phase 3.5 миграции mobile-API: все внешние hot-path callers web-flow функций

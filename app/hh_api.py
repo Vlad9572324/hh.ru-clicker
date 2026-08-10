@@ -8,7 +8,47 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from app.logging_utils import log_debug
-from app.config import CONFIG
+from app.config import CONFIG, hh_base
+
+
+def fetch_hh_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
+                       page: int = 0, filters=None) -> list[dict]:
+    """Cookie/SSR vacancy-search fallback with the mobile result shape.
+
+    This deliberately uses the existing HTML parsers; it does not call the
+    public API and therefore remains useful when OAuth is unavailable.
+    """
+    from app.hh_http import HH
+
+    params = dict(filters or {})
+    params.update({"text": text, "area": area_id, "items_on_page": per_page})
+    cookies = acc.get("cookies", {}) or {}
+    headers = get_headers(cookies.get("_xsrf", ""))
+    out = []
+    for current in range(max(0, int(page)), max(0, int(page)) + 20):
+        params["page"] = current
+        response = HH.get(
+            f"{hh_base().rstrip('/')}/search/vacancy",
+            params=params, headers=headers, cookies=cookies, timeout=15,
+        )
+        response.raise_for_status()
+        parsed = parse_search_page(response.text)
+        ids = parsed["ids"]
+        for vid in ids:
+            meta = parsed["meta"].get(vid, {})
+            out.append({
+                "id": vid,
+                "name": meta.get("title", ""),
+                "employer": {"id": meta.get("employer_id", ""),
+                             "name": meta.get("company", "")},
+                "area": {},
+                "salary": parsed["salaries"].get(vid),
+                "url": f"https://hh.ru/vacancy/{vid}",
+                "alternate_url": f"https://hh.ru/vacancy/{vid}",
+            })
+        if not ids:
+            break
+    return out
 
 
 def get_headers(xsrf: str) -> dict:
