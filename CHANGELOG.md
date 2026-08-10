@@ -7,7 +7,44 @@
 PR/ветке, слитой в `main`; baseline (состояние «до») — `origin/main` (`b3bba5a`, 2026-08-07).
 Commit-хэши указаны в скобках.
 
-## [Unreleased] — ветка `refactor/mobile-api` (в разработке, не закоммичено)
+## [Unreleased] — ветка `feat/phase2-chats-mobile` (в разработке, не закоммичено)
+
+**Phase 2 миграции mobile-API: переговоры/чаты через `api.hh.ru` + auto-fallback.**
+Реализованы 10 из 11 mobile-методов группы A (переговоры/чат) и прозрачный
+fallback mobile→web при сбоях авторизации/сервера.
+
+### Added
+
+- Общий транспорт mobile-вызовов `app/hh_mobile_transport.py`: Bearer через
+  `app.oauth._obtain_oauth_token`, заголовки `ru.hh.android/26.28.1` +
+  `x-force-app-access`, единая обработка ошибок (`MobileAPIError`,
+  `is_fallback_status` — 0/401/403/5xx).
+- Mobile-модули группы A (`app/mobile_*.py`): `mobile_chat_list`
+  (`GET /chats`), `mobile_chat_thread` (`GET /chats/{id}`, `fetch_thread` +
+  `fetch_chat_history`), `mobile_send_message` (`POST /chats/{id}/messages`,
+  idempotency_key), `mobile_chat_actions` (`PUT` quick_replies /
+  last_viewed_id / participants/action), `mobile_negotiations`
+  (`GET /negotiations`, пагинация), `mobile_neg_meta`
+  (`fetch_negotiations_metadata` + `GET /vacancies/possible_job_offers`).
+- `app/hh_client_fallback.py` — `FallbackHHClient`: обёртка mobile→web,
+  повторяет вызов через `WebHHClient` при fallback-статусах или
+  `NotImplementedError` (полный контракт HHClient, sync+async).
+- Тесты: `tests/test_hh_mobile_transport.py`, `tests/test_mobile_*.py`
+  (по модулям), `tests/test_hh_client_fallback.py`,
+  `tests/test_mobile_phase2_integration.py` — все через `responses`,
+  без живого HTTP; покрытие новых модулей ≥ 86%.
+
+### Changed
+
+- `app/hh_client_mobile.py`: методы группы A (кроме `auto_decline_discards`)
+  делегируют в `app/mobile_*.py` вместо `NotImplementedError`.
+- `app/hh_client_factory.py`: `mode="mobile"` возвращает
+  `FallbackHHClient(MobileHHClient, WebHHClient)` вместо голого
+  `MobileHHClient`; `auto`/`web` без изменений.
+- Обновлены `docs/PHASE_MATRIX.md` (матрица, фабрика, roadmap) и тесты
+  фабрики/регрессии под новую семантику mobile.
+
+## [Unreleased] — ветка `refactor/mobile-api` (Phase 0)
 
 **Phase 0 рефакторинга mobile-API: абстракция HHClient.** Цель — единая точка доступа
 к hh.ru для обоих потоков (web-flow на cookies и mobile-flow на OAuth Bearer) по принципу

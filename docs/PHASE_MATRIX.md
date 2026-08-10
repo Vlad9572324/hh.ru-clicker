@@ -72,17 +72,17 @@ Phase/backend» и фиксирует нумерацию фаз, которой 
 
 | Метод HHClient | Фаза | Web | Mobile | Consumer(s) |
 |---|---|---|---|---|
-| `fetch_negotiations` | 2 | делегат | заглушка phase 2 | через абстракцию: `routes/debug.py:190` (`/api/debug/neg_ids`); напрямую `fetch_hh_negotiations_stats`: `manager.py:2762` |
-| `fetch_thread` | 2 | делегат | заглушка phase 2 | `routes/debug.py:216` (`/api/debug/thread`, пока прямой вызов `fetch_negotiation_thread`) |
-| `send_message` | 2 | делегат | заглушка phase 2 | `manager.py:2429`, `2588` |
-| `fetch_chat_list` | 2 | делегат | заглушка phase 2 | `manager.py:2175` |
-| `fetch_chat_history` | 2 | делегат | заглушка phase 2 | `manager.py:2397`, `2399` |
-| `fetch_quick_replies` | 2 | делегат | заглушка phase 2 | `manager.py:2509`, `2541` |
-| `send_participant_action` | 2 | делегат | заглушка phase 2 | `manager.py:2582` (TYPING), `2590` (NONE) |
-| `mark_chat_read` | 2 | делегат | заглушка phase 2 | `manager.py:2581` |
-| `fetch_possible_offers` | 2 | делегат | заглушка phase 2 | `manager.py:2792` |
-| `auto_decline_discards` | 2 | делегат | заглушка phase 2 | `routes/accounts.py:1120` |
-| `fetch_negotiations_metadata` | 2 | делегат | заглушка phase 2 | `routes/accounts.py:182` |
+| `fetch_negotiations` | 2 | делегат | да (Phase 2: `mobile_negotiations`, `GET api.hh.ru/negotiations`) | через абстракцию: `routes/debug.py:190` (`/api/debug/neg_ids`); напрямую `fetch_hh_negotiations_stats`: `manager.py:2762` |
+| `fetch_thread` | 2 | делегат | да (Phase 2: `mobile_chat_thread`, `GET api.hh.ru/chats/{id}?limit&order=next`) | `routes/debug.py:216` (`/api/debug/thread`, пока прямой вызов `fetch_negotiation_thread`) |
+| `send_message` | 2 | делегат | да (Phase 2: `mobile_send_message`, `POST api.hh.ru/chats/{id}/messages` + idempotency_key) | `manager.py:2429`, `2588` |
+| `fetch_chat_list` | 2 | делегат | да (Phase 2: `mobile_chat_list`, `GET api.hh.ru/chats`, возврат-кортеж как у web) | `manager.py:2175` |
+| `fetch_chat_history` | 2 | делегат | да (Phase 2: `mobile_chat_thread.fetch_chat_history`, тот же конверт чата) | `manager.py:2397`, `2399` |
+| `fetch_quick_replies` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../suggestions/quick_replies?message_id=`) | `manager.py:2509`, `2541` |
+| `send_participant_action` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../participants/action` {action_type: typing\|none}) | `manager.py:2582` (TYPING), `2590` (NONE) |
+| `mark_chat_read` | 2 | делегат | да (Phase 2: `mobile_chat_actions`, `PUT .../messages/last_viewed_id` form message_id) | `manager.py:2581` |
+| `fetch_possible_offers` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/vacancies/possible_job_offers`) | `manager.py:2792` |
+| `auto_decline_discards` | 2 | делегат | заглушка phase 2 (decline есть только в web-flow; `FallbackHHClient` прозрачно повторяет через web) | `routes/accounts.py:1120` |
+| `fetch_negotiations_metadata` | 2 | делегат | да (Phase 2: `mobile_neg_meta`, `GET api.hh.ru/negotiations` → topics_by_vid; politeness/activity — только web-SSR) | `routes/accounts.py:182` |
 | `fetch_employer_rating` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:187`, `219` |
 | `fetch_employer_id_for_vacancy` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:180` |
 | `fetch_vacancy_owner_hr_hhid` | **3** ¹ | делегат | заглушка phase 3 | `routes/accounts.py:181` |
@@ -215,13 +215,17 @@ capability-слои (`HHClientBase` / `WebOnlyOps` / `MobileOnlyOps`, см. §1)
   `phase 2 → phase 3 → phase 4`, перепрыгивая единицу. До появления
   roadmap-решения считаем фазу 1 зарезервированной; ничего с такой меткой
   не существует.
-- **Phase 2 — переговоры/чаты.** Перевод на mobile API списков
-  переговоров/чатов, тредов, отправки сообщений, quick replies, participant
-  actions, mark-read, possible offers, auto-decline, метаданных переговоров
-  (11 методов группы A). Целевая реализация для `fetch_chat_history` —
-  `oauth.fetch_negotiation_messages_oauth` (уже существует как
-  degraded-путь, `manager.py:2394`). Исключение — три метода
-  vacancy/employer-метаданных (см. §5).
+- **Phase 2 — переговоры/чаты (выполнено в ветке `feat/phase2-chats-mobile`).**
+  Перевод на mobile API (`app/mobile_*.py`, общий транспорт
+  `app/hh_mobile_transport.py`): списки переговоров/чатов, треды, отправка
+  сообщений, quick replies, participant actions, mark-read, possible offers,
+  метаданные переговоров — 10 из 11 методов группы A. Исключения:
+  `auto_decline_discards` (decline существует только в web-flow — остаётся
+  заглушкой, `FallbackHHClient` прозрачно повторяет через web) и три метода
+  vacancy/employer-метаданных (см. §5, целевая фаза 3). Добавлен auto-fallback
+  mobile→web (`app/hh_client_fallback.py`): фабрика при явном `mode="mobile"`
+  возвращает `FallbackHHClient`. Боевые потребители (`manager.py`) по-прежнему
+  вызывают модульные функции напрямую — перевод на `get_client(...)` вне фазы.
 - **Phase 3 — отклики (группа B) + vacancy/employer-метаданные.**
   `submit_response` (целевая mobile-реализация — `oauth._oauth_apply`,
   уже существует), пре-проверка вакансии, лимиты, touch, related vacancies.
@@ -271,14 +275,14 @@ vacancy-метаданные». Доменное группирование в `
 | mode | Поведение |
 |---|---|
 | `"web"` | всегда `WebHHClient` (cookies hh.ru / chatik.hh.ru) |
-| `"mobile"` | всегда `MobileHHClient` (OAuth Bearer api.hh.ru) |
-| `"auto"` | **целевое состояние Phase 0: `WebHHClient`** — mobile-клиент не готов (почти все методы группы A/B/C кидают `NotImplementedError`), поэтому авто-выбор не должен приводить к mobile |
+| `"mobile"` | с Phase 2 — `FallbackHHClient(MobileHHClient, WebHHClient)` (`app/hh_client_fallback.py`): вызовы идут в mobile-flow (OAuth Bearer api.hh.ru), а при fallback-статусах (0/401/403/5xx, см. `app.hh_mobile_transport.is_fallback_status`) или `NotImplementedError` (напр. `auto_decline_discards`) прозрачно повторяются через web-flow |
+| `"auto"` | **целевое состояние: `WebHHClient`** — авто-выбор не приводит к mobile; mobile включается осознанно явным `mode="mobile"` |
 
-**Решение Phase 0:** `auto` → `web`; mobile-клиент выбирается **только**
-при явном `mode="mobile"`. Это делает поведение предсказуемым: аккаунт с
-живым OAuth-токеном, но без явного `mode`, продолжает работать через
-проверенный web-flow, а mobile включается осознанно (и пока покрывает
-только счётчики + OAuth-extras).
+**Решение (Phase 0, подтверждено в Phase 2):** `auto` → `web`; mobile-клиент
+выбирается **только** при явном `mode="mobile"`. С Phase 2 явный mobile
+возвращает `FallbackHHClient` поверх `MobileHHClient`, поэтому переключение
+безопасно: нереализованные mobile-методы (фаза 3/4) и сбои mobile-авторизации/
+сервера автоматически повторяются через проверенный web-flow.
 
 > ⚠️ **(фикс в работе)** На момент написания этого документа фабрика в
 > worktree ещё несёт старую семантику `auto`: `MobileHHClient`, если

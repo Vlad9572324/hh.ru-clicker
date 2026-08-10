@@ -31,13 +31,18 @@ HHClient не гарантировал вызываемость методов):
   app/hh_resume.py и app/oauth.py. Ноль новой логики, только адаптер:
   подставляет self.acc первым аргументом в существующую функцию.
 - MobileHHClient (app/hh_client_mobile.py) — mobile-flow (OAuth Bearer
-  api.hh.ru); в Phase 0 почти все методы кидают NotImplementedError
-  ("phase N: TODO"), реально реализован только fetch_counters().
+  api.hh.ru); реально реализованы fetch_counters(), OAuth-extras и
+  переговоры/чаты (Phase 2: делегирование в app/mobile_*.py через общий
+  транспорт app/hh_mobile_transport.py). Фабрика оборачивает mobile-клиент
+  в FallbackHHClient (app/hh_client_fallback.py): fallback-статусы
+  (0/401/403/5xx) и NotImplementedError-заглушки прозрачно повторяются
+  через WebHHClient. Заглушки остались для фаз 3/4 (+auto_decline_discards).
 
 Выбор реализации: app/hh_client_factory.py::get_client(acc) — по полю
 acc["mode"] ("web" | "mobile" | "auto"; при отсутствии берётся
-CONFIG.default_client_mode). Решение Phase 0: "auto" → всегда web
-(mobile-клиент не готов), mobile — только при явном mode="mobile";
+CONFIG.default_client_mode). Решение Phase 0 (подтверждено в Phase 2):
+"auto" → всегда web; mobile — только при явном mode="mobile" (с Phase 2 —
+FallbackHHClient поверх MobileHHClient с auto-fallback на web-flow);
 подробнее docs/PHASE_MATRIX.md.
 
 ВАЖНО: НЕ путать с app.hh_http.HHClient — там класс с тем же именем, но это

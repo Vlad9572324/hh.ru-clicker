@@ -1,77 +1,116 @@
 """
-MobileHHClient — skeleton mobile-клиента (api.hh.ru, OAuth Bearer).
+MobileHHClient — mobile-клиент hh.ru (api.hh.ru, OAuth Bearer).
 
-Phase 0: реально реализованы только
-  - fetch_counters() — smoke-test абстракции (GET /me?with_user_statuses=true),
+Реализовано:
+  - fetch_counters() — smoke-test абстракции (GET /me?with_user_statuses=true);
   - oauth-extras (группа E) — эти вызовы уже живут в app/oauth.py и работают
-    через Bearer одинаково для web и mobile, поэтому просто делегируем туда.
+    через Bearer одинаково для web и mobile, поэтому просто делегируем туда;
+  - Phase 2 (переговоры/чаты) — реальные вызовы api.hh.ru через общий
+    транспорт app/hh_mobile_transport.py (модули app/mobile_*.py):
+    fetch_negotiations, fetch_thread, fetch_chat_history, send_message,
+    fetch_chat_list, fetch_quick_replies, send_participant_action,
+    mark_chat_read, fetch_possible_offers, fetch_negotiations_metadata.
+    Политика ошибок: fallback-статусы (0/401/403/5xx) поднимаются
+    MobileAPIError — фабрика оборачивает клиент в FallbackHHClient,
+    который прозрачно повторяет такие вызовы через web-flow; прочие
+    статусы обработаны в модулях (дефолты/sentinel'ы как в web).
 
-Всё остальное — заглушки NotImplementedError("phase N: TODO mobile ..."):
-  - phase 2: переговоры/чаты,
+Заглушки NotImplementedError:
+  - phase 2: auto_decline_discards (decline существует только в web-flow);
   - phase 3: отклики и vacancy-метаданные,
   - phase 4: резюме/статистика.
 """
 
 import requests
 
-from app import oauth
+from app import (
+    mobile_chat_actions,
+    mobile_chat_list,
+    mobile_chat_thread,
+    mobile_neg_meta,
+    mobile_negotiations,
+    mobile_send_message,
+    oauth,
+)
 from app.hh_client import HHClient
 
 
 class MobileHHClient(HHClient):
     """Mobile-flow реализация полного контракта HHClient (HHClientBase +
-    WebOnlyOps + MobileOnlyOps): api.hh.ru через OAuth Bearer. Реально в
-    Phase 0: fetch_counters (MobileOnlyOps) и OAuth-extras; остальное —
-    NotImplementedError-заглушки."""
+    WebOnlyOps + MobileOnlyOps): api.hh.ru через OAuth Bearer. Реально:
+    fetch_counters (MobileOnlyOps), OAuth-extras и группа A без
+    auto_decline_discards (Phase 2, делегирование в app/mobile_*.py);
+    остальное — NotImplementedError-заглушки."""
 
     def __init__(self, acc: dict):
         super().__init__(acc)
 
-    # ── Phase 2: переговоры/чаты ──────────────────────────────────────────────
+    # ── Phase 2: переговоры/чаты (реализовано: api.hh.ru, Bearer) ─────────────
+    # Делегирование в app/mobile_*.py; транспорт — app/hh_mobile_transport.py
+    # (requests + responses-mock'и в тестах, конвенция fetch_counters).
 
     def fetch_negotiations(self, max_pages: int = 20) -> dict:
-        """Список переговоров + статистика (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_negotiations")
+        """Список переговоров + статистика: GET api.hh.ru/negotiations
+        (пагинация до конца). Совместим по ключам с web
+        hh_negotiations.fetch_hh_negotiations_stats."""
+        return mobile_negotiations.fetch_negotiations(self.acc, max_pages)
 
     def fetch_thread(self, neg_id: str) -> dict:
-        """Тред переговоров по neg_id (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_thread")
+        """Тред переговоров (chat_id == neg_id):
+        GET api.hh.ru/chats/{neg_id}?limit=50&order=next."""
+        return mobile_chat_thread.fetch_thread(self.acc, neg_id)
 
     def send_message(self, neg_id: str, text: str, topic_id: str = "") -> bool | str:
-        """Отправить сообщение в переговоры (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile send_message")
+        """Отправка сообщения: POST api.hh.ru/chats/{neg_id}/messages
+        {text, idempotency_key(uuid4)}. topic_id в mobile-flow не нужен
+        (один чат = один топик), сохранён в сигнатуре ради контракта."""
+        return mobile_send_message.send_message(self.acc, neg_id, text)
 
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
-        """Список чатов (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_chat_list")
+        """Список чатов: GET api.hh.ru/chats (page/per_page<=20). Возврат
+        совместим с web hh_chat._fetch_chat_list:
+        (items_by_id, display_info, current_participant_id)."""
+        return mobile_chat_list.fetch_chat_list(self.acc, max_pages)
 
     def fetch_chat_history(self, chat_id: str, max_messages: int = 20) -> list:
-        """История сообщений чата (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_chat_history")
+        """История сообщений чата:
+        GET api.hh.ru/chats/{chat_id}?limit&order=next (текст в
+        body.text.content)."""
+        return mobile_chat_thread.fetch_chat_history(self.acc, chat_id, max_messages)
 
     def fetch_quick_replies(self, chat_id: str, msg_id: str) -> list:
-        """Быстрые ответы HH на сообщение (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_quick_replies")
+        """Быстрые ответы HH: PUT
+        api.hh.ru/chats/{chat_id}/suggestions/quick_replies?message_id=...
+        (глагол PUT по контракту APK; GET на пути -> 405)."""
+        return mobile_chat_actions.fetch_quick_replies(self.acc, chat_id, msg_id)
 
     def send_participant_action(self, chat_id: str, action_type: str = "TYPING") -> bool:
-        """Participant action (TYPING/NONE) в чат (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile send_participant_action")
+        """Typing-индикатор: PUT api.hh.ru/chats/{chat_id}/participants/action
+        {action_type: "typing"|"none"} (контракт APK, нормализация регистра
+        в модуле)."""
+        return mobile_chat_actions.send_participant_action(self.acc, chat_id, action_type)
 
     def mark_chat_read(self, chat_id: str, message_id: str) -> bool:
-        """Отметить чат прочитанным до message_id (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile mark_chat_read")
+        """Read-receipt «прочитано до...»: PUT
+        api.hh.ru/chats/{chat_id}/messages/last_viewed_id
+        (form-urlencoded message_id=<long>)."""
+        return mobile_chat_actions.mark_chat_read(self.acc, chat_id, message_id)
 
     def fetch_possible_offers(self) -> list:
-        """Возможные офферы (possible_job_offers) (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_possible_offers")
+        """Возможные офферы: GET api.hh.ru/vacancies/possible_job_offers."""
+        return mobile_neg_meta.fetch_possible_offers(self.acc)
 
     def auto_decline_discards(self) -> int:
-        """Автоотклонение DISCARD-переговоров (phase 2)."""
+        """Автоотклонение DISCARD-переговоров. Mobile-эндпоинта нет —
+        decline существует только в web-flow (/applicant/negotiations/decline);
+        FallbackHHClient прозрачно повторит через web-flow."""
         raise NotImplementedError("phase 2: TODO mobile auto_decline_discards")
 
     def fetch_negotiations_metadata(self) -> dict:
-        """Метаданные переговоров (phase 2)."""
-        raise NotImplementedError("phase 2: TODO mobile fetch_negotiations_metadata")
+        """Метаданные переговоров: GET api.hh.ru/negotiations ->
+        topics_by_vid (per-vacancy статусы). politeness/activity доступны
+        только в web-SSR — в mobile пусты."""
+        return mobile_neg_meta.fetch_negotiations_metadata(self.acc)
 
     # ── Phase 3: отклики и vacancy-метаданные ─────────────────────────────────
 

@@ -6,6 +6,7 @@ import responses
 
 from app import hh_chat, oauth
 from app.config import CONFIG
+from app.hh_client_fallback import FallbackHHClient
 from app.hh_client_factory import get_client
 from app.hh_client_mobile import MobileHHClient
 from app.hh_client_web import WebHHClient
@@ -55,10 +56,34 @@ def test_mobile_fetch_counters_hits_api_me(monkeypatch):
     assert req.headers["Authorization"] == "Bearer test-token"
 
 
-def test_mobile_fetch_negotiations_not_implemented():
+def test_mobile_fetch_negotiations_delegates_to_mobile_module(monkeypatch):
+    # Phase 2: fetch_negotiations реально реализован — MobileHHClient
+    # делегирует в app.mobile_negotiations (модуль, не функция — патчим
+    # атрибут модуля), подставляя self.acc первым аргументом.
+    from app import mobile_negotiations
+
+    acc = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
+    calls = []
+
+    def fake(account, *args, **kwargs):
+        calls.append((account, args, kwargs))
+        return {"neg_ids": ["n1"], "auth_error": False}
+
+    monkeypatch.setattr(mobile_negotiations, "fetch_negotiations", fake)
+
+    res = MobileHHClient(acc).fetch_negotiations()
+
+    assert res == {"neg_ids": ["n1"], "auth_error": False}
+    assert len(calls) == 1
+    assert calls[0][0] is acc  # тот же объект, не копия
+
+
+def test_mobile_auto_decline_discards_not_implemented():
+    # Единственная оставшаяся phase-2 заглушка группы A: decline существует
+    # только в web-flow; FallbackHHClient повторит вызов через web.
     acc = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
     with pytest.raises(NotImplementedError, match="phase 2"):
-        MobileHHClient(acc).fetch_negotiations()
+        MobileHHClient(acc).auto_decline_discards()
 
 
 def test_factory_mode_selection(monkeypatch):
@@ -68,7 +93,11 @@ def test_factory_mode_selection(monkeypatch):
     mobile_acc = {"mode": "mobile", "resume_hash": "rh", "cookies": {}}
     web_acc = {"mode": "web", "resume_hash": "rh", "cookies": {}}
 
-    assert isinstance(get_client(mobile_acc), MobileHHClient)
+    # Phase 2: явный mobile → FallbackHHClient поверх MobileHHClient
+    # (auto-fallback на web-flow при 0/401/403/5xx/NotImplementedError).
+    mobile_client = get_client(mobile_acc)
+    assert isinstance(mobile_client, FallbackHHClient)
+    assert isinstance(mobile_client.mobile, MobileHHClient)
     assert isinstance(get_client(web_acc), WebHHClient)
 
 

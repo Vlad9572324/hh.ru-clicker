@@ -1,6 +1,7 @@
 """Factory HH-клиентов: выбор web/mobile реализации для аккаунта (Phase 0)."""
 from app.config import CONFIG
 from app.hh_client import HHClient
+from app.hh_client_fallback import FallbackHHClient
 from app.hh_client_web import WebHHClient
 from app.hh_client_mobile import MobileHHClient
 
@@ -17,14 +18,18 @@ def get_client(account: dict) -> HHClient:
     если поля нет — CONFIG.default_client_mode.
     Неизвестный mode трактуется как "web".
 
-    Решение Phase 0 (docs/PHASE_MATRIX.md): "auto" → всегда WebHHClient —
+    Решение (docs/PHASE_MATRIX.md): "auto" → всегда WebHHClient —
     mobile-клиент ещё не готов (почти все методы кидают NotImplementedError),
     поэтому авто-выбор не должен приводить к mobile даже при живом
-    OAuth-токене. MobileHHClient выбирается только при явном mode="mobile".
+    OAuth-токене. Явный mode="mobile" с Phase 2 возвращает
+    FallbackHHClient(MobileHHClient, WebHHClient): вызовы идут в
+    mobile-flow, а при fallback-статусах (0/401/403/5xx, см.
+    app.hh_mobile_transport.is_fallback_status) или NotImplementedError
+    (mobile-заглушки "phase N: TODO") прозрачно повторяются через web-flow.
     """
     mode = _normalize_mode(account.get("mode", _MODE_MISSING))
     if mode == "mobile":
-        return MobileHHClient(account)
+        return FallbackHHClient(MobileHHClient(account), WebHHClient(account))
     return WebHHClient(account)
 
 
