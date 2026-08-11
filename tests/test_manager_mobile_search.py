@@ -68,7 +68,9 @@ def test_api_collector_skips_unsupported_resume_filter(monkeypatch):
 
 
 def test_api_collector_routes_url_through_selected_client(monkeypatch):
-    url = "https://hh.ru/search/vacancy?resume=r1&text=python&area=2&schedule=remote"
+    # PR#22: resume-URL пропускаются в API-collector (api.hh.ru игнорирует resume),
+    # они идут через web-fallback. Здесь тестируем НЕ-resume URL.
+    url = "https://hh.ru/search/vacancy?text=python&area=2&schedule=remote"
     acc = {"mode": "mobile", "urls": [url], "url_pages": {url: 1}}
     state = SimpleNamespace(
         acc=acc, _deleted=False, short="M", status_detail="", vacancy_meta={}
@@ -86,6 +88,6 @@ def test_api_collector_routes_url_through_selected_client(monkeypatch):
     assert results == {url: {"42"}}
     assert calls == [(('python',), {
         "area_id": "2", "per_page": 50, "page": 0,
-        "filters": {"resume": "r1", "schedule": "remote"},
+        "filters": {"schedule": "remote"},
         "max_pages": 1,
     })]

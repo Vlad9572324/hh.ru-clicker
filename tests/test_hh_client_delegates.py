@@ -39,8 +39,8 @@ from app.hh_client_web import WebHHClient
 # ---------------------------------------------------------------------------
 SYNC_DELEGATES = [
     ("search_vacancies", hh_api, "fetch_hh_vacancies",
-     ("python", 2, 40, 1, {"experience": "between1And3"}),
-     (("python",), ("python", 1, 20, 0, None))),
+     ("python", 2, 40, 1, {"experience": "between1And3"}, 5),
+     (("python",), ("python", 113, 20, 0, None, 20))),
     # --- Группа A: переговоры / чат ---
     ("fetch_negotiations", hh_negotiations, "fetch_hh_negotiations_stats",
      (7,), ((), (20,))),
