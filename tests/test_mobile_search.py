@@ -55,3 +55,31 @@ def test_search_respects_configured_single_page_before_requesting_next(monkeypat
     assert [item["id"] for item in found] == ["first"]
     assert len(responses.calls) == 1
     assert "page=0" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_resume_search_uses_android_similar_vacancies_endpoint(monkeypatch):
+    monkeypatch.setattr("app.oauth._obtain_oauth_token", lambda acc: "token")
+    endpoint = "https://api.hh.ru/resumes/resume%2Fid/similar_vacancies"
+    responses.get(endpoint, json={
+        "pages": 5,
+        "items": [{"id": "136135317", "name": "Data Engineer"}],
+    })
+
+    found = search_vacancies(
+        ACC, "", area_id=113, per_page=50,
+        filters={"resume": "resume/id", "order_by": "publication_time"},
+        max_pages=1,
+    )
+
+    assert [item["id"] for item in found] == ["136135317"]
+    assert len(responses.calls) == 1
+    request = responses.calls[0].request
+    assert request.url.startswith(endpoint)
+    assert "per_page=20" in request.url
+    assert "area=113" in request.url
+    assert "responses_count_enabled=true" in request.url
+    assert "with_chat_info=true" in request.url
+    assert "check_misleading_vacancy_alert=true" in request.url
+    assert "with_skills_match=false" in request.url
+    assert request.headers["x-hh-app-active"] == "true"

@@ -35,6 +35,8 @@ def client(monkeypatch):
     states = [AccountState(acc0), AccountState(acc1)]
 
     monkeypatch.setattr(bot, "account_states", states)
+    monkeypatch.setattr(bot, "temp_sessions", [])
+    monkeypatch.setattr(bot, "temp_states", {})
     monkeypatch.setattr(config, "accounts_data", [acc0, acc1])
 
     save_calls = []
@@ -153,3 +155,27 @@ def test_get_mode_invalid_idx_404(client):
         res = client.get(f"/api/account/{idx}/mode")
         assert res.status_code == 404
         assert res.json()["ok"] is False
+
+
+def test_browser_session_mode_is_saved_and_updates_active_state(client, monkeypatch):
+    session = _make_acc("OTP Session", mode="mobile")
+    active = AccountState(dict(session))
+    monkeypatch.setattr(bot, "temp_sessions", [session])
+    monkeypatch.setattr(bot, "temp_states", {0: active})
+    saved = []
+    monkeypatch.setattr(
+        "app.routes.account_mode.save_browser_sessions",
+        lambda sessions: saved.append([dict(item) for item in sessions]),
+    )
+    global_idx = len(bot.account_states)
+
+    get_res = client.get(f"/api/account/{global_idx}/mode")
+    put_res = client.put(f"/api/account/{global_idx}/mode", json={"mode": "auto"})
+
+    assert get_res.status_code == 200
+    assert get_res.json()["mode"] == "mobile"
+    assert put_res.status_code == 200
+    assert session["mode"] == "auto"
+    assert active.acc["mode"] == "auto"
+    assert saved[-1][0]["mode"] == "auto"
+    assert client.save_calls == []

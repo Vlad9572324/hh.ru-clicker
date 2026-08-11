@@ -2,9 +2,8 @@
  * feat7_mode.js — per-account mode selector (auto / web / mobile) + badge effective-mode.
  *
  * Backend: GET/PUT /api/account/{idx}/mode (app/routes/account_mode.py).
- *   - PUT сохраняет mode в accounts.json; GET нужен для инициализации dropdown.
- *   - endpoint обслуживает только основные аккаунты (idx < len(account_states));
- *     browser-сессии (temp) получают 404 — UI это показывает статусом, без retry-шторма.
+ *   - PUT сохраняет mode в accounts.json или browser_sessions.json;
+ *     GET нужен для инициализации dropdown.
  *
  * Интеграция (без правок app.js): оборачиваем window.buildSessList,
  * window.buildAccCookiesList и window.updateCard — вызов оригинала сохраняется,
@@ -77,7 +76,7 @@
     }
   }
 
-  // Множество idx temp-сессий (их endpoint не обслуживает — пропускаем).
+  // Множество idx temp-сессий (нужно, чтобы не дублировать редактор в списках).
   function tempIdxSet(snap) {
     var set = {};
     var accs = (snap && Array.isArray(snap.accounts)) ? snap.accounts : lastSnapshotAccounts();
@@ -208,7 +207,7 @@
     window.updateCard = function (card, acc) {
       var r = origUpdateCard.apply(this, arguments);
       try {
-        if (card && acc && typeof acc.idx !== 'undefined' && !acc.temp) {
+        if (card && acc && typeof acc.idx !== 'undefined') {
           renderBadge(card, acc.idx);
           if (!modeCache[acc.idx] && !modeInflight[acc.idx]) {
             fetchMode(acc.idx).then(function () { renderBadge(card, acc.idx); });
@@ -242,12 +241,12 @@
   }
 
   // ── Обёртка buildAccCookiesList: dropdown mode у ОСНОВНЫХ аккаунтов ──
-  // #acc-cookies-list — настоящий список основных аккаунтов в Настройках
+  // #acc-cookies-list — список аккаунтов в Настройках
   // (buildAccCookiesList рендерит блок на каждый аккаунт snapshot'а: имя,
   // textarea#ck-ta-<idx>, flex-строка с кнопкой обновления кук; id у блоков нет).
   // Блоки пересоздаются при смене числа аккаунтов → идемпотентность по
-  // .feat7-mode-row внутри блока. Temp-аккаунты пропускаем (endpoint только
-  // для основных: idx < len(account_states)).
+  // .feat7-mode-row внутри блока. Temp пропускаем здесь, потому что их mode
+  // уже редактируется в отдельном списке браузерных сессий.
   var origBuildAccCookiesList = window.buildAccCookiesList;
   if (typeof origBuildAccCookiesList === 'function') {
     window.buildAccCookiesList = function (snap) {
@@ -278,7 +277,7 @@
     var snapAccounts = lastSnapshotAccounts();
     if (snapAccounts) {
       snapAccounts.forEach(function (acc) {
-        if (acc && !acc.temp) {
+        if (acc) {
           var card = document.getElementById('card-' + acc.idx);
           if (card && !modeCache[acc.idx] && !modeInflight[acc.idx]) {
             fetchMode(acc.idx).then(function () { renderBadge(card, acc.idx); });
