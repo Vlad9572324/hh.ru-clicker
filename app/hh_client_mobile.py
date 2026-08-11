@@ -332,9 +332,9 @@ class MobileHHClient(HHClient):
         """Streak-статистика откликов → oauth.fetch_negotiations_statistic."""
         return oauth.fetch_negotiations_statistic(self.acc)
 
-    def fetch_resume_status(self) -> dict:
+    def fetch_resume_status(self, force: bool = False) -> dict:
         """Статус резюме → oauth.fetch_resume_status."""
-        return oauth.fetch_resume_status(self.acc)
+        return oauth.fetch_resume_status(self.acc, force=force)
 
     def fetch_employer_rating_oauth(self, employer_id: str) -> dict:
         """Рейтинг работодателя через OAuth → oauth.fetch_employer_rating

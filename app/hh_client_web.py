@@ -137,8 +137,8 @@ class WebHHClient(HHClient):
     def fetch_negotiations_statistic(self) -> dict:
         return oauth.fetch_negotiations_statistic(self.acc)
 
-    def fetch_resume_status(self) -> dict:
-        return oauth.fetch_resume_status(self.acc)
+    def fetch_resume_status(self, force: bool = False) -> dict:
+        return oauth.fetch_resume_status(self.acc, force=force)
 
     def fetch_employer_rating_oauth(self, employer_id: str) -> dict:
         return oauth.fetch_employer_rating(self.acc, employer_id)

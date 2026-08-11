@@ -254,7 +254,7 @@ class HHClientBase(ABC):
         ...
 
     @abstractmethod
-    def fetch_resume_status(self) -> dict:
+    def fetch_resume_status(self, force: bool = False) -> dict:
         """Статус резюме (OAuth); web: oauth.fetch_resume_status."""
         ...
 
