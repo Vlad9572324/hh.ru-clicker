@@ -2982,6 +2982,12 @@ function renderAll(snap) {
   else if (State.currentTab === 'apply') {
     applyBuildAccountSelect(snap);
   }
+  // Опциональные feature-модули получают тот же фактический WS snapshot.
+  // Вызов через публичный API работает и для лексической renderAll(), которую
+  // невозможно надёжно перехватить заменой window.renderAll.
+  if (window.WsToggle && typeof window.WsToggle.syncSnapshot === 'function') {
+    window.WsToggle.syncSnapshot(snap);
+  }
   // applied/tests/views rendered on tab switch
 }
 

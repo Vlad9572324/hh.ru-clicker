@@ -12,6 +12,7 @@ env (HH_BOT_HOST=0.0.0.0 + HH_BOT_ALLOW_CONTAINER_BIND=1, ключ НЕ зада
 без RuntimeError и отвечает на loopback хоста.
 """
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -60,12 +61,16 @@ def _docker_available() -> bool:
 # ─── Вариант A: docker compose e2e ──────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    not _docker_available(),
-    reason="docker/docker compose недоступен или демон не отвечает",
-)
 def test_container_bind_docker_compose_smoke():
     """`docker compose up hh-bot` → curl 127.0.0.1:8000 → `compose down`."""
+    if not _docker_available():
+        # В обычном dev/CI без Docker всё равно проверяем критичный контракт
+        # compose: публикация только на host loopback и opt-in container bind.
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        assert "127.0.0.1:8000:8000" in compose
+        assert re.search(r'^\s*HH_BOT_HOST:\s*["\']?0\.0\.0\.0["\']?\s*$', compose, re.MULTILINE)
+        assert re.search(r'^\s*HH_BOT_ALLOW_CONTAINER_BIND:\s*["\']?1["\']?\s*$', compose, re.MULTILINE)
+        return
     up = subprocess.run(
         ["docker", "compose", "up", "-d", "hh-bot"],
         cwd=ROOT, capture_output=True, text=True, timeout=_COMPOSE_UP_TIMEOUT_S,

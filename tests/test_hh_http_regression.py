@@ -10,26 +10,17 @@ B (cross-account cookie confusion).
     - cookie_jar_key=None   → legacy общая сессия (запросы без аккаунтного
       контекста).
 
-Окружение: curl_cffi НЕ установлен → app.hh_http работает через requests
-fallback (_HAS_CFFI=False), поэтому `responses` перехватывает все запросы;
-тесты не ходят в сеть. Если curl_cffi когда-нибудь поставят, сетевые тесты
-скипаются (responses не перехватывает cffi-путь), стаб-тесты флоу останутся.
+Сетевые проверки явно включают requests fallback через `_force_requests=True`,
+поэтому `responses` перехватывает запросы независимо от наличия curl_cffi.
+Тесты никогда не ходят во внешнюю сеть.
 """
 from types import SimpleNamespace
 
-import pytest
 import responses
 
 import app.hh_http as hh_http
 import app.hh_negotiations as hh_neg
 from app.hh_http import HHClient
-
-# Скип для тестов, идущих через реальный HTTP-стек: при установленном
-# curl_cffi запросы уходят мимо responses.
-_needs_requests_fallback = pytest.mark.skipif(
-    hh_http._HAS_CFFI,
-    reason="curl_cffi установлен — requests/responses fallback не активен",
-)
 
 BASE = "https://hh.test"
 
@@ -49,7 +40,6 @@ def _cookie_header(call) -> dict:
 # ── 1. Cookies реально уходят в запрос ────────────────────────────────────────
 
 
-@_needs_requests_fallback
 @responses.activate
 def test_cookies_kwarg_actually_sent_in_request():
     client = HHClient()
@@ -59,6 +49,7 @@ def test_cookies_kwarg_actually_sent_in_request():
         f"{BASE}/api/me",
         cookies={"hhtoken": "AAA"},
         cookie_jar_key="accA",
+        _force_requests=True,
     )
 
     assert r.status_code == 200
@@ -70,7 +61,6 @@ def test_cookies_kwarg_actually_sent_in_request():
 # ── 2. Изоляция cookies между аккаунтами (суть бага) ─────────────────────────
 
 
-@_needs_requests_fallback
 @responses.activate
 def test_per_account_cookie_isolation_interleaved():
     """Перемежающиеся запросы двух аккаунтов: каждый несёт ТОЛЬКО свои cookies;
@@ -89,10 +79,11 @@ def test_per_account_cookie_isolation_interleaved():
         responses.add(responses.GET, f"{BASE}/b", json={"ok": True}, status=200)
 
     # Последовательность A → B → A → B
-    r_a1 = client.get(f"{BASE}/a", cookies=acc_a["cookies"], cookie_jar_key="accA")
-    r_b1 = client.get(f"{BASE}/b", cookies=acc_b["cookies"], cookie_jar_key="accB")
-    r_a2 = client.get(f"{BASE}/a", cookies=acc_a["cookies"], cookie_jar_key="accA")
-    r_b2 = client.get(f"{BASE}/b", cookies=acc_b["cookies"], cookie_jar_key="accB")
+    fallback = {"_force_requests": True}
+    r_a1 = client.get(f"{BASE}/a", cookies=acc_a["cookies"], cookie_jar_key="accA", **fallback)
+    r_b1 = client.get(f"{BASE}/b", cookies=acc_b["cookies"], cookie_jar_key="accB", **fallback)
+    r_a2 = client.get(f"{BASE}/a", cookies=acc_a["cookies"], cookie_jar_key="accA", **fallback)
+    r_b2 = client.get(f"{BASE}/b", cookies=acc_b["cookies"], cookie_jar_key="accB", **fallback)
     assert (r_a1.status_code, r_b1.status_code, r_a2.status_code, r_b2.status_code) == (200, 200, 200, 200)
     assert len(responses.calls) == 4
 
@@ -121,7 +112,6 @@ def test_per_account_cookie_isolation_interleaved():
     assert c_a2.get("srvA") == "from_server", f"jar аккаунта A не сохранил Set-Cookie: {c_a2}"
 
 
-@_needs_requests_fallback
 def test_per_account_sessions_are_distinct_objects():
     """Whitebox: разные cookie_jar_key → разные сессии (разные jars);
     один ключ → та же сессия (jar живёт между запросами); None → legacy
@@ -144,20 +134,19 @@ def test_per_account_sessions_are_distinct_objects():
 # ── 3. Legacy: запрос без cookie_jar_key продолжает работать ─────────────────
 
 
-@_needs_requests_fallback
 @responses.activate
 def test_legacy_request_without_cookie_jar_key_still_works():
     client = HHClient()
     responses.add(responses.GET, f"{BASE}/public", json={"ok": True}, status=200)
 
     # Ни cookie_jar_key, ни cookies — базовый запрос (probe-сценарий)
-    r = client.get(f"{BASE}/public")
+    r = client.get(f"{BASE}/public", _force_requests=True)
     assert r.status_code == 200
     assert r.json() == {"ok": True}
 
     # С cookies, но без cookie_jar_key — тоже работает (legacy общая сессия)
     responses.add(responses.GET, f"{BASE}/public2", json={"ok": 2}, status=200)
-    r2 = client.get(f"{BASE}/public2", cookies={"foo": "bar"})
+    r2 = client.get(f"{BASE}/public2", cookies={"foo": "bar"}, _force_requests=True)
     assert r2.status_code == 200
     assert _cookie_header(responses.calls[1]).get("foo") == "bar"
 
@@ -272,7 +261,6 @@ def test_auto_decline_discards_flow_passes_cookies_and_jar_key(monkeypatch):
 # ── 5. set_proxy("") после серии per-account запросов ────────────────────────
 
 
-@_needs_requests_fallback
 @responses.activate
 def test_set_proxy_empty_does_not_break_next_request(monkeypatch):
     """Серия per-account запросов через глобальный HH → set_proxy("") →
@@ -283,13 +271,13 @@ def test_set_proxy_empty_does_not_break_next_request(monkeypatch):
     responses.add(responses.GET, f"{BASE}/p2", json={"ok": 2}, status=200)
     responses.add(responses.GET, f"{BASE}/p3", json={"ok": 3}, status=200)
 
-    r1 = hh_http.HH.get(f"{BASE}/p1", cookies={"hhtoken": "AAA"}, cookie_jar_key="accA")
-    r2 = hh_http.HH.get(f"{BASE}/p2", cookies={"hhtoken": "BBB"}, cookie_jar_key="accB")
+    r1 = hh_http.HH.get(f"{BASE}/p1", cookies={"hhtoken": "AAA"}, cookie_jar_key="accA", _force_requests=True)
+    r2 = hh_http.HH.get(f"{BASE}/p2", cookies={"hhtoken": "BBB"}, cookie_jar_key="accB", _force_requests=True)
     assert (r1.status_code, r2.status_code) == (200, 200)
 
     assert hh_http.set_proxy("") == ""
 
-    r3 = hh_http.HH.get(f"{BASE}/p3", cookies={"hhtoken": "AAA"}, cookie_jar_key="accA")
+    r3 = hh_http.HH.get(f"{BASE}/p3", cookies={"hhtoken": "AAA"}, cookie_jar_key="accA", _force_requests=True)
     assert r3.status_code == 200, "запрос после set_proxy('') сломался"
     sent = _cookie_header(responses.calls[2])
     assert sent.get("hhtoken") == "AAA", f"после set_proxy cookies потерялись: {sent}"

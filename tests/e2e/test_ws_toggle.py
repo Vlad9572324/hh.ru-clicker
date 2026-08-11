@@ -8,10 +8,8 @@
   (точное равенство dict в ui.commands), плюс синхронизация чекбокса
   из state["config"]["use_websocket_realtime"].
 
-ВНИМАНИЕ: весь каталог tests/e2e автоматически помечается SKIP хуком в
-tests/e2e/conftest.py (решение заказчика) — тесты написаны так, чтобы пройти
-после снятия скипа и подключения static/js/features/feat8_ws_toggle.js в
-index.html (после inline-скрипта WS-блока). Запускать их сейчас не нужно.
+Тесты используют изолированную Playwright-страницу из e2e/conftest.py и
+проверяют фактический UI-контракт без sleep и недетерминированного polling.
 """
 
 from playwright.sync_api import expect
@@ -174,5 +172,6 @@ def test_ws_global_checkbox_syncs_from_snapshot(ui):
     page = _boot(ui, global_flag=True)
     cb = page.locator("#feat8-ws-global-cb")
     expect(cb).to_be_visible(timeout=15000)
-    _wait_until(ui, cb.is_checked, timeout=5,
-                message="чекбокс use_websocket_realtime взведён из снапшота")
+    # expect сам повторяет DOM-проверку до timeout. Это важно: снапшот приходит
+    # асинхронно по WS, но тест не должен вручную крутить event loop страницы.
+    expect(cb).to_be_checked(timeout=5000)

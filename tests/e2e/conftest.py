@@ -619,6 +619,22 @@ class UIController:
 
 
 @pytest.fixture
+def page(browser):
+    """Изолированная Playwright-страница для каждого e2e-теста.
+
+    Не полагаемся на fixture ``page`` из pytest-playwright: в минимальном
+    окружении проекта доступна только browser fixture. Отдельный context
+    также не даёт cookies, localStorage и route-мокам протекать между тестами.
+    """
+    context = browser.new_context()
+    page_obj = context.new_page()
+    try:
+        yield page_obj
+    finally:
+        context.close()
+
+
+@pytest.fixture
 def ui(page, static_url, ws_server):
     """Function-scoped контроллер UI: page + моки state/data/commands/calls."""
     yield UIController(page, static_url, ws_server)
@@ -715,13 +731,14 @@ def playwright():
 
 
 @pytest.fixture(scope="session")
-def browser(launch_browser):
-    """Override фикстуры pytest-playwright: реальный close в _pw_shutdown().
+def browser(playwright):
+    """Запустить Chromium без зависимости от pytest-playwright fixtures.
 
-    Без override родной финализатор `browser.close()` на конце сессии
-    выполнялся бы на уже остановленном Playwright и кидал Error.
+    В проектном venv установлена библиотека ``playwright``, но plugin может
+    отсутствовать. Поэтому ``launch_browser``/``page`` от внешнего plugin не
+    используются: весь жизненный цикл браузера контролирует этот conftest.
     """
-    _PW_STATE["browser"] = launch_browser()
+    _PW_STATE["browser"] = playwright.chromium.launch(headless=True)
     yield _PW_STATE["browser"]
     _pw_shutdown()
 

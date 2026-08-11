@@ -77,7 +77,7 @@ def test_priority_and_secret_mask(isolated_mobile, monkeypatch):
     assert data["sources"]["device_model"] == "web"
     assert data["values"]["app_client_token"] == ma.MASK
     assert ma.DEFAULTS["app_client_token"] not in json.dumps(data)
-    assert json.loads(ma.CONFIG_FILE.read_text())["unrelated"] == 1
+    assert json.loads(ma.CONFIG_FILE.read_text(encoding="utf-8"))["unrelated"] == 1
 
 
 def test_save_materializes_full_root_config_and_preserves_existing(isolated_mobile):

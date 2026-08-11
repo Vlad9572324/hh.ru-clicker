@@ -85,18 +85,18 @@
 
   // ── Глобальный чекбокс use_websocket_realtime ────────────────────────
 
-  function snapshotConfigValue() {
+  function snapshotConfigValue(snapshot) {
     return safe(function () {
-      var snap = window.State && window.State.lastSnapshot;
+      var snap = snapshot || (window.State && window.State.lastSnapshot);
       return snap && snap.config ? snap.config.use_websocket_realtime : undefined;
     }, undefined);
   }
 
   // Выставить чекбокс из снапшота, если значение известно (boolean).
-  function syncGlobalCheckbox() {
+  function syncGlobalCheckbox(snapshot) {
     var cb = document.getElementById('feat8-ws-global-cb');
     if (!cb) return;
-    var val = snapshotConfigValue();
+    var val = snapshotConfigValue(snapshot);
     if (typeof val === 'boolean' && cb.checked !== val) cb.checked = val;
   }
 
@@ -194,6 +194,11 @@
       return typeof window.wsFetchStatus === 'function'
         ? window.wsFetchStatus()
         : Promise.resolve({ ok: false, error: 'wsFetchStatus недоступен' });
+    },
+    // app.js вызывает это из реальной лексической renderAll(). Оборачивание
+    // window.renderAll недостаточно: обработчик WS обращается к функции прямо.
+    syncSnapshot: function (snapshot) {
+      safe(function () { syncGlobalCheckbox(snapshot); }, null);
     }
   };
 
