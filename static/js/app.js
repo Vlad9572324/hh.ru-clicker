@@ -1710,7 +1710,7 @@ async function llmInterviewsLoad() {
   _llmLoading = true;
   const acc = document.getElementById('llm-log-acc-filter')?.value || '';
   const statusF = document.getElementById('llm-log-sent-filter')?.value || '';
-  let url = `/api/interviews?limit=2000${acc ? '&acc=' + encodeURIComponent(acc) : ''}${statusF ? '&status=' + encodeURIComponent(statusF) : ''}`;
+  let url = `/api/interviews?limit=10000${acc ? '&acc=' + encodeURIComponent(acc) : ''}${statusF ? '&status=' + encodeURIComponent(statusF) : ''}`;
   let rows;
   try {
     const res = await fetch(url);
@@ -1861,7 +1861,7 @@ async function llmRenderAccStats() {
   if (!statsEl) return;
   let all;
   try {
-    const res = await fetch('/api/interviews?limit=2000');
+    const res = await fetch('/api/interviews?limit=10000');
     all = await res.json();
   } catch(e) { return; }
 

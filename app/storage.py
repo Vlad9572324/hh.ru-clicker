@@ -339,6 +339,19 @@ def get_interviews_list(acc: str = "", limit: int = 2000, status: str = "") -> l
     # Сначала по дате desc, потом stable sort по статусу — pending всегда первые
     items.sort(key=lambda r: r.get("last_seen", "") or "", reverse=True)
     items.sort(key=lambda r: status_order.get(r.get("status", ""), 9))
+    # Если pending переполняют limit — replied/draft вылетали за границу и UI
+    # показывал 0 отвеченных при десятках реально отправленных. Гарантируем
+    # что все не-pending попадают в выборку: pending clip'ается, остальные
+    # добавляются полностью.
+    if len(items) > limit and not status:
+        head = items[:limit]
+        head_ids = {r.get("neg_id") for r in head}
+        tail_non_pending = [
+            r for r in items[limit:]
+            if r.get("status") not in ("pending_reply", None)
+            and r.get("neg_id") not in head_ids
+        ]
+        return head + tail_non_pending
     return items[:limit]
 
 
