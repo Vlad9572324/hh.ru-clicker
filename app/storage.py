@@ -347,7 +347,16 @@ def load_browser_sessions() -> list:
     if SESSIONS_FILE.exists():
         try:
             with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                sessions = json.load(f)
+            if not isinstance(sessions, list):
+                return []
+            from app.session_migration import backup_file, deduplicate_sessions, write_json_atomic
+            merged, removed = deduplicate_sessions(sessions)
+            if removed:
+                backup = backup_file(SESSIONS_FILE)
+                write_json_atomic(SESSIONS_FILE, merged)
+                log_debug(f"browser sessions migration: merged {removed} duplicate(s); backup={backup}")
+            return merged
         except Exception as e:
             # Раньше swallowили silently — пользователь терял ВСЕ сессии без сообщения.
             log_debug(f"⚠️ Не могу прочитать {SESSIONS_FILE}: {type(e).__name__}: {e}")

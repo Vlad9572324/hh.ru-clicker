@@ -38,6 +38,33 @@ from app.instances import bot
 
 router = APIRouter()
 
+@router.put("/api/account/{idx}/active_resume")
+async def api_account_active_resume(idx: int, request: Request):
+    """Switch active resume after checking account ownership."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Некорректный JSON"}
+    resume_hash = str(body.get("resume_hash") or "").strip()
+    if 0 <= idx < len(bot.account_states):
+        acc = bot.account_states[idx].acc
+        persistent = accounts_data[idx] if idx < len(accounts_data) else acc
+        saver = save_accounts
+    else:
+        temp_idx = idx - len(bot.account_states)
+        if not (0 <= temp_idx < len(bot.temp_sessions)):
+            return {"ok": False, "error": "Аккаунт не найден"}
+        persistent = bot.temp_sessions[temp_idx]
+        acc = bot.temp_states[temp_idx].acc if temp_idx in bot.temp_states else persistent
+        saver = lambda: save_browser_sessions(bot.temp_sessions)
+    allowed = {str(r.get("hash") or "") for r in persistent.get("all_resumes") or [] if isinstance(r, dict)}
+    if not resume_hash or resume_hash not in allowed:
+        return {"ok": False, "error": "Резюме не принадлежит аккаунту"}
+    persistent["resume_hash"] = resume_hash
+    acc["resume_hash"] = resume_hash
+    saver()
+    return {"ok": True, "resume_hash": resume_hash}
+
 
 # ============================================================
 # COOKIE PARSING HELPERS (shared with sessions.py)

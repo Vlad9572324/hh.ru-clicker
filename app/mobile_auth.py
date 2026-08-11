@@ -570,7 +570,7 @@ class HHMobileClient:
 
 
 def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dict]) -> int:
-    """Merge verified autologin cookies into browser_sessions.json per resume."""
+    """Merge verified autologin cookies into one browser session per HH user."""
     if not cookies.get("hhtoken") or not cookies.get("_xsrf"):
         raise MobileAuthError("Нельзя сохранить неполную браузерную сессию")
     from app.storage import load_browser_sessions, save_browser_sessions
@@ -581,29 +581,33 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
     first_name = str(me.get("first_name") or "HH").strip()
     last_name = str(me.get("last_name") or "").strip()
     display_name = (first_name + " " + last_name).strip()
-    valid_resumes = [r for r in resumes if isinstance(r, dict) and str(r.get("id") or "").strip()]
-    if not valid_resumes:
-        valid_resumes = [{"id": "", "title": ""}]
-    changed = 0
-    for resume in valid_resumes:
-        resume_id = str(resume.get("id") or "").strip()
-        existing = next((s for s in sessions if isinstance(s, dict) and s.get("resume_hash") == resume_id), None)
-        all_resumes = [
-            {"hash": str(r.get("id")), "title": r.get("title", "")}
-            for r in valid_resumes if r.get("id")
-        ]
-        if existing is not None:
-            existing["cookies"] = dict(cookies)
-            existing["all_resumes"] = all_resumes
-            existing["use_oauth"] = True
-            existing["mode"] = "mobile"  # mobile OTP flow → mobile-clients
-        else:
-            sessions.append({
+    user_id = str(me.get("id") or "").strip()
+    all_resumes = [{"hash": str(r.get("id")).strip(), "title": r.get("title", "")}
+                   for r in resumes if isinstance(r, dict) and str(r.get("id") or "").strip()]
+    hashes = {r["hash"] for r in all_resumes}
+    existing = next((s for s in sessions if isinstance(s, dict) and user_id and str(s.get("user_id") or "") == user_id), None)
+    if existing is None:
+        existing = next((s for s in sessions if isinstance(s, dict) and hashes & {
+            str(r.get("hash") or "") for r in (s.get("all_resumes") or []) if isinstance(r, dict)
+        }), None)
+    if existing is not None:
+        active = str(existing.get("resume_hash") or "")
+        known = {r["hash"]: r for r in all_resumes}
+        for old in existing.get("all_resumes") or []:
+            if isinstance(old, dict) and str(old.get("hash") or "") not in known:
+                known[str(old.get("hash"))] = old
+        existing.update({"user_id": user_id, "cookies": dict(cookies), "all_resumes": list(known.values()),
+                         "use_oauth": True, "mode": "mobile"})
+        if not active:
+            existing["resume_hash"] = all_resumes[0]["hash"] if all_resumes else ""
+    else:
+        sessions.append({
+                "user_id": user_id,
                 "name": display_name or "HH Mobile",
                 "short": first_name or "HH",
                 "color": "cyan",
                 "cookies": dict(cookies),
-                "resume_hash": resume_id,
+                "resume_hash": all_resumes[0]["hash"] if all_resumes else "",
                 "enabled": True,
                 "bot_active": False,
                 "paused": False,
@@ -614,14 +618,13 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
                 "urls": [],
                 "url_pages": {},
             })
-        changed += 1
     save_browser_sessions(sessions)
     try:
         from app.instances import bot
         bot.temp_sessions[:] = sessions
     except Exception:
         pass
-    return changed
+    return 1
 
 
 def auth_status() -> dict[str, Any]:

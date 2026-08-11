@@ -2132,8 +2132,8 @@ async function resumeSelectSave(idx, btn) {
   if (btn) btn.disabled = true;
   if (st) { st.textContent = '⏳ переключаю…'; st.style.color = 'var(--dim)'; }
   try {
-    const r = await fetch(`/api/session/${idx}`, {
-      method: 'PATCH',
+    const r = await fetch(`/api/account/${idx}/active_resume`, {
+      method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ resume_hash: newHash })
     });
@@ -2142,6 +2142,7 @@ async function resumeSelectSave(idx, btn) {
       if (st) { st.textContent = '✅ Резюме переключено'; st.style.color = 'var(--green)'; }
       const opt = sel.options[sel.selectedIndex];
       if (cur && opt) cur.textContent = opt.textContent.split(' · ')[0];
+      showResumeToast('Активное резюме: ' + (opt ? opt.textContent.split(' · ')[0] : newHash));
     } else {
       if (st) { st.textContent = '❌ ' + (d.message || d.error || 'Ошибка'); st.style.color = 'var(--red)'; }
     }
@@ -2151,6 +2152,20 @@ async function resumeSelectSave(idx, btn) {
     if (btn) btn.disabled = false;
     if (st) setTimeout(() => { st.textContent = ''; }, 4000);
   }
+}
+
+function showResumeToast(message) {
+  let el = document.getElementById('resume-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'resume-toast';
+    el.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:9999;padding:10px 14px;border-radius:8px;background:var(--panel);color:var(--green);border:1px solid var(--green);box-shadow:0 4px 18px #0008';
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 3500);
 }
 
 async function sessRefresh(idx, btn) {
@@ -3264,13 +3279,12 @@ function buildCardHTML(acc) {
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">
           С каким резюме бот откликается. У аккаунта: <b>${(acc.all_resumes||[]).length}</b> шт.
         </div>
-        <select id="acc-resume-sel-${acc.idx}" class="apply-input" style="font-size:11px;padding:3px 6px;margin-bottom:6px;width:100%">
+        <select id="acc-resume-sel-${acc.idx}" class="apply-input" onchange="resumeSelectSave(${acc.idx},this)" style="font-size:11px;padding:3px 6px;margin-bottom:6px;width:100%">
           ${(acc.all_resumes||[]).map(r =>
             `<option value="${esc(r.hash)}" ${r.hash===acc.resume_hash?'selected':''}>${esc(normTitle(r.title))} · ${esc((r.hash||'').slice(0,10))}…</option>`
           ).join('') || '<option value="">— пусто, обнови сессию —</option>'}
         </select>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <button class="btn-sm" onclick="resumeSelectSave(${acc.idx},this)">💾 Применить</button>
           <button class="btn-sm" onclick="sessRefresh(${acc.idx},this)" title="Заново прочитать список резюме из HH">🔄 Обновить</button>
           <span id="acc-resume-st-${acc.idx}" style="font-size:11px;color:var(--dim)"></span>
         </div>
