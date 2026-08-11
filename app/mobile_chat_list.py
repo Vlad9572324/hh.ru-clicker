@@ -111,20 +111,34 @@ def fetch_chat_list(acc: dict, max_pages: int = 5,
             # ждут web-схему camelCase (`unreadCount`, `lastMessage`,
             # `participantId`, `writePossibility`). Без нормализации все чаты
             # попадали в skipped_read → бот молча игнорировал новых HR.
-            last_msg_raw = (item.get("messages") or {}).get("last") or {}
-            body = (last_msg_raw.get("body") or {})
-            text_obj = body.get("text") or {}
-            last_msg_camel = {
-                "id": last_msg_raw.get("id", ""),
-                "participantId": last_msg_raw.get("participant_id", ""),
-                "text": text_obj.get("content", "") if isinstance(text_obj, dict) else "",
-                "workflowTransition": last_msg_raw.get("workflow_transition") or {},
-                "createdAt": last_msg_raw.get("created_at", ""),
-                "type": last_msg_raw.get("type", ""),
-            }
-            item.setdefault("unreadCount", item.get("unread_count", 0))
-            item.setdefault("lastMessage", last_msg_camel)
-            item.setdefault("writePossibility", item.get("write_possibility") or {})
+            # Per-item try/except: schema-drift одного item (body не dict,
+            # messages не dict, etc.) не должен ронять сбор всей страницы.
+            try:
+                messages = item.get("messages")
+                last_msg_raw = messages.get("last") or {} if isinstance(messages, dict) else {}
+                body = last_msg_raw.get("body")
+                body = body if isinstance(body, dict) else {}
+                text_obj = body.get("text")
+                text_val = text_obj.get("content", "") if isinstance(text_obj, dict) else ""
+                wt = last_msg_raw.get("workflow_transition")
+                last_msg_camel = {
+                    "id": last_msg_raw.get("id", ""),
+                    "participantId": last_msg_raw.get("participant_id", ""),
+                    "text": text_val if isinstance(text_val, str) else "",
+                    "workflowTransition": wt if isinstance(wt, dict) else {},
+                    "createdAt": last_msg_raw.get("created_at", ""),
+                    "type": last_msg_raw.get("type", ""),
+                }
+                wp = item.get("write_possibility")
+                item.setdefault("unreadCount", item.get("unread_count", 0) or 0)
+                item.setdefault("lastMessage", last_msg_camel)
+                item.setdefault("writePossibility", wp if isinstance(wp, dict) else {})
+            except Exception as e:
+                log_debug(f"mobile fetch_chat_list: adapter error item_id={item_id}: {type(e).__name__}: {e}")
+                # Не блокируем остальные items — просто ставим safe defaults для этого.
+                item.setdefault("unreadCount", 0)
+                item.setdefault("lastMessage", {})
+                item.setdefault("writePossibility", {})
             items_by_id[item_id] = item
             display = item.get("display") or {}
             icon = display.get("icon") or {}

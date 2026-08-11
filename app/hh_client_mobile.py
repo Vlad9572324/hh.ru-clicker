@@ -113,12 +113,29 @@ class MobileHHClient(HHClient):
         всё равно требует ответа). Без первого прохода бот видел только
         последние 60 чатов и игнорировал сотни старых HR-веток.
         """
-        unread_items, unread_display, unread_cur = mobile_chat_list.fetch_chat_list(
-            self.acc, max_pages=20, filter_unread=True,
-        )
-        recent_items, recent_display, recent_cur = mobile_chat_list.fetch_chat_list(
-            self.acc, max_pages, filter_unread=False,
-        )
+        # Каждый вызов оборачиваем в свой try: если unread-пасс упадёт с
+        # MobileAPIError (fallback-статус) — FallbackHHClient снаружи перекинет
+        # весь метод на web, где нет filter_unread → мы бы тихо потеряли
+        # 300+ старых непрочитанных. Реrent-пасс должен отработать независимо.
+        # Re-raise только если оба пасса упали.
+        unread_items, unread_display, unread_cur = {}, {}, ""
+        recent_items, recent_display, recent_cur = {}, {}, ""
+        unread_err: Exception | None = None
+        recent_err: Exception | None = None
+        try:
+            unread_items, unread_display, unread_cur = mobile_chat_list.fetch_chat_list(
+                self.acc, max_pages=20, filter_unread=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            unread_err = e
+        try:
+            recent_items, recent_display, recent_cur = mobile_chat_list.fetch_chat_list(
+                self.acc, max_pages, filter_unread=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            recent_err = e
+        if unread_err and recent_err:
+            raise recent_err
         # merge: свежие перезаписывают unread (у recent актуальнее lastMessage
         # если между вызовами HR прислал новое сообщение).
         items = {**unread_items, **recent_items}

@@ -281,8 +281,23 @@ class BotManager:
                 return False
             if temp_idx in self.temp_states:
                 return True  # уже запущен
-            saved_urls = [_url_entry(item)["url"] for item in (ts.get("urls") or [])]
-            saved_urls = [url for url in saved_urls if url]
+            # Отфильтровываем сохранённые URL от других резюме — юзер мог
+            # сменить resume_hash сессии, а ts["urls"] содержит `resume=<старый_hash>`.
+            # Без фильтра mobile-collect соберёт вакансии по чужому фильтру,
+            # а отклики пойдут с текущего resume → шумовые отклики (audit #2).
+            _rh = str(ts["resume_hash"])
+            saved_urls = []
+            for item in (ts.get("urls") or []):
+                url = _url_entry(item)["url"]
+                if not url:
+                    continue
+                try:
+                    _text, _area, _flt = parse_search_url(url)
+                    url_rh = str(_flt.get("resume") or "")
+                except Exception:
+                    url_rh = ""
+                if not url_rh or url_rh == _rh:
+                    saved_urls.append(url)
             acc = {
                 "name": ts["name"],
                 "short": ts.get("short", ts["name"]),
@@ -684,6 +699,23 @@ class BotManager:
                 "extra": extra[:70],
             })
 
+    def _push_action(self, state: AccountState, entry: str) -> None:
+        """Thread-safe append в state.action_history под _deque_lock.
+        Раньше writers делали bare append, snap builder читал `list(deque)` —
+        при конкурентной мутации CPython бросает RuntimeError, broadcast_loop
+        ловил, но дропал ВЕСЬ snapshot того тика → UI подвисал на 300ms.
+        """
+        with state._deque_lock:
+            state.action_history.append(entry)
+
+    @staticmethod
+    def _snap_deque(dq, lock):
+        """Snapshot deque под lock — снапшот-ридер не должен ронять весь
+        snapshot тика из-за конкурентного append/appendleft (RuntimeError:
+        deque mutated during iteration). Возвращает обычный list."""
+        with lock:
+            return list(dq)
+
     def _check_auto_pause(self, state: AccountState):
         """Авто-пауза при превышении лимита ошибок подряд."""
         n = CONFIG.auto_pause_errors
@@ -741,7 +773,7 @@ class BotManager:
         # HR online/offline + chat status вытаскиваем из vacancy_meta —
         # фронт показывает их в карточке отклика без extra-fetch'ей.
         _vm = state.vacancy_meta.get(vid, {}) if hasattr(state, "vacancy_meta") else {}
-        self.recent_responses.appendleft({
+        entry = {
             "time": datetime.now().strftime("%H:%M:%S"),
             "acc": state.short,
             "color": state.color,
@@ -755,7 +787,11 @@ class BotManager:
             "chat_write": _vm.get("chat_write_possibility", ""),
             "accept_auto": _vm.get("accept_auto_response"),
             "employer_rating": _vm.get("employer_rating") or None,
-        })
+        }
+        # Держим _deque_lock т.к. snap builder читает `list(self.recent_responses)`
+        # без lock'а в другом потоке — иначе CPython RuntimeError и дроп тика.
+        with self._deque_lock:
+            self.recent_responses.appendleft(entry)
 
     def get_state_snapshot(self) -> dict:
         """Full JSON snapshot for WS broadcast"""
@@ -837,7 +873,7 @@ class BotManager:
                 "hh_stats_loading": s.hh_stats_loading,
                 "hh_interviews_list": _hh_interviews_list,
                 "hh_possible_offers": s.hh_possible_offers[:10],
-                "action_history": list(s.action_history),
+                "action_history": self._snap_deque(s.action_history, s._deque_lock),
                 "resume_views_7d": s.resume_views_7d,
                 "resume_views_new": s.resume_views_new,
                 "resume_shows_7d": s.resume_shows_7d,
@@ -847,7 +883,7 @@ class BotManager:
                 "resume_free_touches": s.resume_free_touches,
                 "resume_global_invitations": s.resume_global_invitations,
                 "resume_new_invitations_total": s.resume_new_invitations_total,
-                "acc_event_log": list(s.acc_event_log),
+                "acc_event_log": self._snap_deque(s.acc_event_log, s._deque_lock),
                 "apply_tests": s.apply_tests,
                 "consecutive_errors": s.consecutive_errors,
                 "url_stats": dict(s.url_stats),
@@ -954,7 +990,7 @@ class BotManager:
                     "hh_stats_loading": s.hh_stats_loading,
                     "hh_interviews_list": _hh_interviews_list,
                     "hh_possible_offers": s.hh_possible_offers[:10],
-                    "action_history": list(s.action_history),
+                    "action_history": self._snap_deque(s.action_history, s._deque_lock),
                     "resume_views_7d": s.resume_views_7d,
                     "resume_views_new": s.resume_views_new,
                     "resume_shows_7d": s.resume_shows_7d,
@@ -964,7 +1000,7 @@ class BotManager:
                     "resume_free_touches": s.resume_free_touches,
                     "resume_global_invitations": s.resume_global_invitations,
                     "resume_new_invitations_total": s.resume_new_invitations_total,
-                    "acc_event_log": list(s.acc_event_log),
+                    "acc_event_log": self._snap_deque(s.acc_event_log, s._deque_lock),
                     "apply_tests": s.apply_tests,
                     "consecutive_errors": s.consecutive_errors,
                     "url_stats": dict(s.url_stats),
@@ -1062,7 +1098,7 @@ class BotManager:
             "uptime_seconds": uptime,
             "paused": self.paused,
             "accounts": accounts,
-            "recent_responses": list(self.recent_responses),
+            "recent_responses": self._snap_deque(self.recent_responses, self._deque_lock),
             "log": list(self.activity_log),
             "llm_log": list(self.llm_log),
             "config": {
@@ -1393,7 +1429,7 @@ class BotManager:
             # Один запрос на цикл — берём последнюю applied как seed.
             if CONFIG.related_vacancies_enabled and unique_vacancies:
                 seed_vid = None
-                for rr in list(self.recent_responses)[:20]:
+                for rr in self._snap_deque(self.recent_responses, self._deque_lock)[:20]:
                     if rr.get("acc") == state.short:
                         cand = str(rr.get("id") or "")
                         if cand:
@@ -1865,7 +1901,7 @@ class BotManager:
 
                         state.current_vacancy_title = title
                         state.current_vacancy_company = company
-                        state.action_history.append(f"✅ {title[:30]}")
+                        self._push_action(state, f"✅ {title[:30]}")
 
                         self._add_response(state, vid, title, company, "sent", salary)
                         self._add_log(
@@ -1886,7 +1922,7 @@ class BotManager:
                             state.tests += 1
                             add_test_vacancy(vid, title, company,
                                              acc["name"], acc.get("resume_hash", ""))
-                            state.action_history.append(f"⏭️ {display_title[:25]}")
+                            self._push_action(state, f"⏭️ {display_title[:25]}")
                             self._add_response(state, vid, title, company, "test")
                             self._add_log(state.short, state.color,
                                           f"⏭️ Тест пропущен: {display_title}", "info")
@@ -1905,7 +1941,7 @@ class BotManager:
                                 state.daily_sent += 1
                                 state.current_vacancy_title = title
                                 state.current_vacancy_company = company
-                                state.action_history.append(f"\U0001f4dd {display_title[:25]}")
+                                self._push_action(state, f"\U0001f4dd {display_title[:25]}")
                                 self._add_response(state, vid, title, company, "sent")
                                 self._add_log(state.short, state.color,
                                               f"\U0001f4dd Опрос пройден: {display_title}", "success")
@@ -1944,7 +1980,7 @@ class BotManager:
                                     add_test_vacancy(vid, title, company,
                                                      acc["name"], acc.get("resume_hash", ""))
                                 state.tests += 1
-                                state.action_history.append(f"\U0001f9ea {display_title[:25]}")
+                                self._push_action(state, f"\U0001f9ea {display_title[:25]}")
                                 self._add_response(state, vid, title, company, "test")
                                 self._add_log(state.short, state.color,
                                               f"\U0001f9ea Тест (не пройден, попытка {state._test_failures[vid]}): {display_title}", "warning")
@@ -1955,7 +1991,7 @@ class BotManager:
                         state.already_applied += 1
                         already_info = state.vacancy_meta.get(vid, {})
                         add_applied(acc["name"], vid, already_info if already_info else None)
-                        state.action_history.append(f"\U0001f504 {vid}")
+                        self._push_action(state, f"\U0001f504 {vid}")
                         self._add_response(state, vid, "", "", "already")
 
                     elif result == "limit":
@@ -2023,7 +2059,7 @@ class BotManager:
 
                     elif result == "error":
                         state.errors += 1
-                        state.action_history.append(f"❌ {vid}")
+                        self._push_action(state, f"❌ {vid}")
                         self._add_response(state, vid, "", "", "error")
                         raw = info.get("raw", "")[:80] if info else ""
                         exc = info.get("exception", "") if info else ""
@@ -2357,7 +2393,21 @@ class BotManager:
             log_debug(f"LLM [{state.short}]: уже выполняется, пропуск")
             return
         try:
-            self._process_llm_replies_inner(state)
+            try:
+                self._process_llm_replies_inner(state)
+            finally:
+                # Live-статус для UI сбрасываем ВСЕГДА — иначе исключение внутри
+                # (fetch_chat_list бросил MobileAPIError и т.п.) оставит UI
+                # застрявшим на «обрабатывается 5/15» до следующего успешного
+                # цикла. Юзер думает что бот повис.
+                state.llm_current_neg_id = ""
+                state.llm_current_employer = ""
+                state.llm_current_idx = 0
+                state.llm_current_total = 0
+                state.llm_last_check_at = datetime.now().isoformat(timespec="seconds")
+                state.llm_next_check_at = (
+                    datetime.now() + timedelta(seconds=max(CONFIG.llm_check_interval * 60, 120))
+                ).isoformat(timespec="seconds")
         finally:
             state._llm_lock.release()
 
@@ -3122,5 +3172,14 @@ class BotManager:
             finally:
                 state.hh_stats_loading = False
 
-            if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):
-                return
+            # Back-to-back cycles когда backlog большой: если после цикла
+            # осталось pending > 15 (per-cycle cap), нет смысла спать полный
+            # интервал — HR-ответы задерживаются часами. Спим короткое время
+            # чтобы дать HH подышать, но не полный 2-минутный wait.
+            pending = getattr(state, "llm_pending_chats", 0) or 0
+            if pending > 15:
+                if self._stop_event.wait(15):  # короткая пауза между back-to-back
+                    return
+            else:
+                if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):
+                    return

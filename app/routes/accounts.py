@@ -391,6 +391,10 @@ async def api_update_cookies(idx: int, body: dict):
         state.acc["cookies"] = auth_cookies
         state.acc["_raw_cookie_line"] = raw_line
         state.cookies_expired = False
+        # Сбрасываем degraded одновременно — иначе UI ещё цикл (~2 мин)
+        # показывает «⚠️ Degraded» с только что обновлёнными куками, и apply
+        # без нужды жмётся к OAuth-only пути.
+        state.degraded_mode = False
         if 0 <= idx < len(accounts_data):
             accounts_data[idx]["cookies"] = auth_cookies
             save_accounts()

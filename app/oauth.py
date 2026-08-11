@@ -1046,11 +1046,15 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             except Exception:
                 return "error", {"raw": r.text[:100]}
             err = d.get("errors", [{}])[0].get("value", d.get("description", ""))
-            if "limit" in err.lower():
+            # Exact-match вместо substring: `"exist" in "does_not_exist"` = True
+            # → удалённая вакансия молча классифицировалась как «already» вместо
+            # error. Тот же паттерн ловил "test_completed" / "no_limit_left".
+            code = err.lower().strip()
+            if code in ("limit_exceeded", "daily_limit_exceeded", "limit"):
                 return "limit", {}
-            if "already" in err.lower() or "exist" in err.lower():
+            if code in ("already_applied", "already_exists", "already"):
                 return "already", {}
-            if "test" in err.lower():
+            if code in ("test_required", "test"):
                 return "test", {}
             return "error", {"raw": err}
         elif r.status_code == 401:
@@ -1073,12 +1077,14 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
             # Mobile HH API возвращает already_applied/limit/test со статусом 403
             # (в отличие от web-flow где 400). Без этих веток каждый повторный
             # отклик считался бы consecutive_error → auto_pause через 5 попыток.
-            low = raw.lower()
-            if "already" in low or "exist" in low:
-                return "already", {}
-            if "limit" in low:
+            # Exact-match: "exist" in "does_not_exist" = True — так удалённые
+            # вакансии молча уходили в "already" и не логировались как ошибка.
+            code = raw.lower().strip()
+            if code in ("limit_exceeded", "daily_limit_exceeded", "limit"):
                 return "limit", {}
-            if "test" in low:
+            if code in ("already_applied", "already_exists", "already"):
+                return "already", {}
+            if code in ("test_required", "test"):
                 return "test", {}
             return "error", {"raw": raw, "http_status": 403}
         elif r.status_code == 404:
