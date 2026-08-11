@@ -377,6 +377,16 @@
     <div id="llm-live-accounts" style="display:flex;flex-direction:column;gap:6px"></div>
   </div>
 
+  <!-- Ссылки от HR: формы/анкеты/telegram/etc. Извлекаем URL из employer_last_msg,
+       группируем по типу, показываем как чек-лист «пойти заполнить руками». -->
+  <details id="llm-links-details" style="margin-bottom:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px">
+    <summary style="cursor:pointer;font-weight:600;user-select:none;color:var(--yellow)">
+      🔗 <span id="llm-links-count">0</span> ссылок от HR
+      <span style="color:var(--dim);font-weight:400;font-size:11px">— формы, анкеты, тесты которые HR прислал в чат</span>
+    </summary>
+    <div id="llm-links-body" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+  </details>
+
   <!-- Feature toggles: HH-quick_replies / HH-AI-letter / related_vacancies -->
   <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;font-size:12px">
     <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="HH сам генерит варианты ответа. Берём их вместо своего LLM — бесплатно и не палится AI-детектом.">

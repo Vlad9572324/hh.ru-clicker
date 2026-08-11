@@ -1724,6 +1724,10 @@ async function llmInterviewsLoad() {
   }
   _llmRowsCache = Array.isArray(rows) ? rows : [];
   llmInterviewsRender();
+  // HR-ссылки (Google Forms / Yandex Forms / Telegram / etc.) — извлекаем при
+  // каждой перезагрузке interviews. Отдельный рендер, чтобы фильтры/сортировка
+  // основной таблицы не перезаписывали блок ссылок.
+  _llmRenderHrLinks(_llmRowsCache);
 }
 
 function llmInterviewsRender() {
@@ -1975,6 +1979,106 @@ function _llmFmtRel(iso) {
   if (d < 60) return `${d} с назад`;
   if (d < 3600) return `${Math.round(d/60)} мин назад`;
   return `${Math.round(d/3600)} ч назад`;
+}
+
+// URL типизация — по домену / vendor'у формы. Позволяет группировать «все Google Forms»,
+// «все Яндекс.Формы», «все Telegram», «прочие». HR обычно шлёт в чат ссылку и просит пройти
+// анкету/тест — заполнение через API невозможно (Google captcha), но юзер должен видеть эти
+// ссылки одним списком и не искать вручную по 100+ чатам.
+const _LINK_TYPES = [
+  {re: /docs\.google\.com\/forms|forms\.gle/i,           icon: '📝', label: 'Google Forms',   color: '#4285f4'},
+  {re: /forms\.yandex\.|yandex\.ru\/forms/i,            icon: '📋', label: 'Яндекс.Формы',   color: '#fc3f1d'},
+  {re: /forms\.office\.com|forms\.microsoft/i,          icon: '📊', label: 'MS Forms',        color: '#0078d4'},
+  {re: /typeform\.com/i,                                 icon: '✏️', label: 'Typeform',        color: '#262627'},
+  {re: /surveymonkey/i,                                  icon: '🐵', label: 'SurveyMonkey',   color: '#00bf6f'},
+  {re: /(https?:\/\/)?t\.me\/|telegram\.me/i,           icon: '✈️', label: 'Telegram',        color: '#0088cc'},
+  {re: /wa\.me\/|whatsapp\.com\/send/i,                 icon: '💬', label: 'WhatsApp',        color: '#25d366'},
+  {re: /calendly\.com|calendar\.google/i,               icon: '📅', label: 'Календарь',       color: '#eb4335'},
+  {re: /zoom\.us\/j\/|meet\.google\.com|teams\.microsoft/i, icon: '📹', label: 'Видеозвонок', color: '#2d8cff'},
+  {re: /hh\.ru\/employer|career\.habr/i,                icon: '🏢', label: 'Профиль HH',      color: '#d6001c'},
+];
+
+// URL regex — покрывает http(s) + без протокола (typeform.com/xyz, t.me/handle).
+// НЕ хватаем trailing punctuation ") ] . , ! ? »" — они часто в конце предложения.
+const _URL_RE = /((?:https?:\/\/|www\.)[^\s<>«»"']+?|(?:forms\.gle|t\.me|wa\.me|clck\.ru|bit\.ly)\/[^\s<>«»"']+)(?=[\s.,!?»)\]]|$)/gi;
+
+function _classifyLink(url) {
+  for (const t of _LINK_TYPES) if (t.re.test(url)) return t;
+  return {icon: '🔗', label: 'Прочее', color: 'var(--dim)'};
+}
+
+function _extractHrLinks(rows) {
+  // Пробегаем все интервью, вытаскиваем URL из employer_last_msg + llm_reply.
+  // Dedup по (neg_id, url) — один и тот же линк в разных сообщениях не дублируем.
+  const seen = new Set();
+  const out = [];
+  for (const r of rows || []) {
+    const text = String(r.employer_last_msg || '');
+    if (!text) continue;
+    const matches = text.match(_URL_RE);
+    if (!matches) continue;
+    for (const rawUrl of matches) {
+      let url = rawUrl.trim();
+      if (!url.match(/^https?:\/\//i)) url = 'https://' + url;
+      const key = `${r.neg_id}|${url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        url, neg_id: r.neg_id,
+        acc: r.acc || '',
+        employer: r.employer || '',
+        vacancy_title: r.vacancy_title || '',
+        last_seen: r.last_seen || r.first_seen || '',
+        snippet: text.length > 140 ? text.slice(0, 140) + '…' : text,
+        status: r.status || '',
+        type: _classifyLink(url),
+      });
+    }
+  }
+  // Сортировка: свежие сверху.
+  out.sort((a, b) => (Date.parse(b.last_seen) || 0) - (Date.parse(a.last_seen) || 0));
+  return out;
+}
+
+function _llmRenderHrLinks(rows) {
+  const body = document.getElementById('llm-links-body');
+  const countEl = document.getElementById('llm-links-count');
+  if (!body || !countEl) return;
+  const links = _extractHrLinks(rows);
+  countEl.textContent = String(links.length);
+  if (links.length === 0) {
+    body.innerHTML = `<div style="color:var(--dim);font-size:11px">Пока ни один HR не прислал ссылку — здесь появятся формы, тесты и приглашения.</div>`;
+    return;
+  }
+  // Группировка по типу.
+  const byType = new Map();
+  for (const l of links) {
+    if (!byType.has(l.type.label)) byType.set(l.type.label, {type: l.type, items: []});
+    byType.get(l.type.label).items.push(l);
+  }
+  const groups = [...byType.values()].sort((a, b) => b.items.length - a.items.length);
+  body.innerHTML = groups.map(g => {
+    const rows = g.items.map(l => `
+      <div style="display:flex;gap:8px;padding:4px 6px;background:rgba(255,255,255,0.03);border-radius:4px;align-items:flex-start;font-size:11px">
+        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+           style="color:${g.type.color};text-decoration:none;font-weight:600;flex-shrink:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+           title="${esc(l.url)}">${esc(l.url)}</a>
+        <span style="color:var(--dim);flex:1;min-width:0">
+          <b>${esc(l.employer)}</b> · ${esc(l.vacancy_title || '—')}
+          <span style="color:var(--dim);font-size:10px;margin-left:6px">${_llmFmtRel(l.last_seen)}</span>
+          <div style="color:var(--fg);opacity:0.75;font-size:10px;margin-top:2px;font-style:italic">«${esc(l.snippet)}»</div>
+        </span>
+      </div>
+    `).join('');
+    return `
+      <div style="margin-top:6px">
+        <div style="font-weight:600;color:${g.type.color};font-size:11px;margin-bottom:4px">
+          ${g.type.icon} ${esc(g.type.label)} <span style="color:var(--dim);font-weight:400">(${g.items.length})</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px">${rows}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 function _llmRenderLiveBar(snap) {
