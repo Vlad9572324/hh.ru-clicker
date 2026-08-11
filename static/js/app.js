@@ -1998,9 +1998,26 @@ const _LINK_TYPES = [
   {re: /hh\.ru\/employer|career\.habr/i,                icon: '🏢', label: 'Профиль HH',      color: '#d6001c'},
 ];
 
-// URL regex — покрывает http(s) + без протокола (typeform.com/xyz, t.me/handle).
-// НЕ хватаем trailing punctuation ") ] . , ! ? »" — они часто в конце предложения.
-const _URL_RE = /((?:https?:\/\/|www\.)[^\s<>«»"']+?|(?:forms\.gle|t\.me|wa\.me|clck\.ru|bit\.ly)\/[^\s<>«»"']+)(?=[\s.,!?»)\]]|$)/gi;
+// URL regex — greedy до whitespace/HTML-скобок/кавычек. Trailing punctuation
+// (запятая, точка, ), ], !, ?, », ; :) обрезаем ПОСЛЕ match — иначе non-greedy
+// съедал важные символы (query-string с ? или fragment с #).
+const _URL_RE = /(?:https?:\/\/|www\.)[^\s<>«»"'`]+|(?:forms\.gle|t\.me|wa\.me|clck\.ru|bit\.ly|clickup\.com|notion\.so|typeform\.com)\/[^\s<>«»"'`]+/gi;
+// Символы которые часто оказываются после URL в русском тексте.
+const _URL_TRIM = /[.,;:!?)\]»}"']+$/;
+
+// Короткий label для отображения: [domain]/…[последние-15-символов-path].
+// Полный URL остаётся в href/title — юзер видит куда идёт при hover.
+function _shortUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    let tail = u.pathname + u.search + u.hash;
+    if (tail.length <= 32) return host + tail;
+    return host + '/…' + tail.slice(-28);
+  } catch(e) {
+    return url.length > 60 ? url.slice(0, 30) + '…' + url.slice(-25) : url;
+  }
+}
 
 function _classifyLink(url) {
   for (const t of _LINK_TYPES) if (t.re.test(url)) return t;
@@ -2018,8 +2035,11 @@ function _extractHrLinks(rows) {
     const matches = text.match(_URL_RE);
     if (!matches) continue;
     for (const rawUrl of matches) {
-      let url = rawUrl.trim();
-      if (!url.match(/^https?:\/\//i)) url = 'https://' + url;
+      // Триммим trailing пунктуацию (`«` , `.` , `?` etc.). Она попадает в match
+      // потому что regex greedy до whitespace, но не является частью URL.
+      let url = rawUrl.trim().replace(_URL_TRIM, '');
+      if (url.length < 8) continue;
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       const key = `${r.neg_id}|${url}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2040,40 +2060,102 @@ function _extractHrLinks(rows) {
   return out;
 }
 
+// «Пройдено» персистится в localStorage — SPA-only, отдельный backend
+// не заводим ради single-user клика. Ключ = neg_id|url (тот же что для dedup),
+// значение = ISO-timestamp когда отметили. Восстанавливается после reload.
+const _LLM_DONE_KEY = 'hh-links-done-v1';
+let _llmLinksDone = (() => {
+  try { return JSON.parse(localStorage.getItem(_LLM_DONE_KEY) || '{}') || {}; }
+  catch(e) { return {}; }
+})();
+
+function _llmLinkKey(l) { return `${l.neg_id}|${l.url}`; }
+
+function _llmToggleLinkDone(neg_id, url, btn) {
+  const key = `${neg_id}|${url}`;
+  if (_llmLinksDone[key]) {
+    delete _llmLinksDone[key];
+  } else {
+    _llmLinksDone[key] = new Date().toISOString();
+  }
+  try { localStorage.setItem(_LLM_DONE_KEY, JSON.stringify(_llmLinksDone)); } catch(e) {}
+  // Ре-рендер только этой панели — не трогаем всю таблицу интервью.
+  _llmRenderHrLinks(_llmRowsCache);
+}
+
 function _llmRenderHrLinks(rows) {
   const body = document.getElementById('llm-links-body');
   const countEl = document.getElementById('llm-links-count');
   if (!body || !countEl) return;
   const links = _extractHrLinks(rows);
-  countEl.textContent = String(links.length);
+  const doneCount = links.filter(l => _llmLinksDone[_llmLinkKey(l)]).length;
+  countEl.textContent = doneCount
+    ? `${links.length - doneCount} осталось / ${doneCount} ✓`
+    : String(links.length);
   if (links.length === 0) {
     body.innerHTML = `<div style="color:var(--dim);font-size:11px">Пока ни один HR не прислал ссылку — здесь появятся формы, тесты и приглашения.</div>`;
     return;
   }
-  // Группировка по типу.
+  // Группировка по типу + сортировка: pending сверху, done снизу.
   const byType = new Map();
   for (const l of links) {
     if (!byType.has(l.type.label)) byType.set(l.type.label, {type: l.type, items: []});
     byType.get(l.type.label).items.push(l);
   }
+  for (const g of byType.values()) {
+    g.items.sort((a, b) => {
+      const da = _llmLinksDone[_llmLinkKey(a)] ? 1 : 0;
+      const db = _llmLinksDone[_llmLinkKey(b)] ? 1 : 0;
+      if (da !== db) return da - db;
+      return (Date.parse(b.last_seen) || 0) - (Date.parse(a.last_seen) || 0);
+    });
+  }
   const groups = [...byType.values()].sort((a, b) => b.items.length - a.items.length);
   body.innerHTML = groups.map(g => {
-    const rows = g.items.map(l => `
-      <div style="display:flex;gap:8px;padding:4px 6px;background:rgba(255,255,255,0.03);border-radius:4px;align-items:flex-start;font-size:11px">
+    const rows = g.items.map(l => {
+      const key = _llmLinkKey(l);
+      const done = !!_llmLinksDone[key];
+      const negIdAttr = String(l.neg_id).replace(/'/g, "&#39;");
+      const urlAttr = l.url.replace(/'/g, "&#39;");
+      // Вся строка — <a>. Клик где угодно на строке (кроме кнопки «Пройти»)
+      // открывает URL в новой вкладке. Кнопка имеет свой onclick с event.stopPropagation.
+      const rowStyle = done
+        ? 'display:flex;gap:8px;padding:6px 8px;background:rgba(0,200,80,0.06);border-radius:4px;align-items:flex-start;font-size:11px;opacity:0.55;text-decoration:none;color:inherit;cursor:pointer;border:1px solid transparent'
+        : 'display:flex;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:4px;align-items:flex-start;font-size:11px;text-decoration:none;color:inherit;cursor:pointer;border:1px solid transparent;transition:border-color 0.15s';
+      const urlStyle = done
+        ? `color:${g.type.color};text-decoration:line-through;font-weight:600;flex-shrink:0;white-space:nowrap`
+        : `color:${g.type.color};text-decoration:underline;font-weight:600;flex-shrink:0;white-space:nowrap`;
+      const shortLabel = _shortUrl(l.url);
+      const btn = done
+        ? `<button onclick="event.preventDefault();event.stopPropagation();_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
+                    style="background:transparent;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:10px;flex-shrink:0"
+                    title="Снять отметку — вернуть в список активных">✓ Пройдено</button>`
+        : `<button onclick="event.preventDefault();event.stopPropagation();_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
+                    style="background:transparent;border:1px solid var(--dim);color:var(--dim);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:10px;flex-shrink:0"
+                    title="Отметить что заполнил/прошёл — уберётся из активных">☐ Пройти</button>`;
+      return `
         <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
-           style="color:${g.type.color};text-decoration:none;font-weight:600;flex-shrink:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-           title="${esc(l.url)}">${esc(l.url)}</a>
-        <span style="color:var(--dim);flex:1;min-width:0">
-          <b>${esc(l.employer)}</b> · ${esc(l.vacancy_title || '—')}
-          <span style="color:var(--dim);font-size:10px;margin-left:6px">${_llmFmtRel(l.last_seen)}</span>
-          <div style="color:var(--fg);opacity:0.75;font-size:10px;margin-top:2px;font-style:italic">«${esc(l.snippet)}»</div>
-        </span>
-      </div>
-    `).join('');
+           style="${rowStyle}"
+           onmouseover="this.style.borderColor='${g.type.color}'"
+           onmouseout="this.style.borderColor='transparent'">
+          <span style="${urlStyle}" title="${esc(l.url)}">🔗 ${esc(shortLabel)}</span>
+          <span style="color:var(--dim);flex:1;min-width:0">
+            <b style="color:var(--fg)">${esc(l.employer)}</b> · ${esc(l.vacancy_title || '—')}
+            <span style="color:var(--dim);font-size:10px;margin-left:6px">${_llmFmtRel(l.last_seen)}</span>
+            <div style="color:var(--fg);opacity:0.75;font-size:10px;margin-top:2px;font-style:italic">«${esc(l.snippet)}»</div>
+          </span>
+          ${btn}
+        </a>
+      `;
+    }).join('');
+    const gDone = g.items.filter(l => _llmLinksDone[_llmLinkKey(l)]).length;
+    const gLabel = gDone
+      ? `<span style="color:var(--dim);font-weight:400">(${g.items.length - gDone} / ${g.items.length}, ${gDone} ✓)</span>`
+      : `<span style="color:var(--dim);font-weight:400">(${g.items.length})</span>`;
     return `
       <div style="margin-top:6px">
         <div style="font-weight:600;color:${g.type.color};font-size:11px;margin-bottom:4px">
-          ${g.type.icon} ${esc(g.type.label)} <span style="color:var(--dim);font-weight:400">(${g.items.length})</span>
+          ${g.type.icon} ${esc(g.type.label)} ${gLabel}
         </div>
         <div style="display:flex;flex-direction:column;gap:3px">${rows}</div>
       </div>
