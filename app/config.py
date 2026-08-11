@@ -360,6 +360,7 @@ def save_config():
 
 def load_config():
     """Загрузить CONFIG с диска (если файл есть)."""
+    global _url_pages_map_cache
     if not CONFIG_FILE.exists():
         return
     try:
@@ -378,6 +379,9 @@ def load_config():
             CONFIG.letter_templates = data["letter_templates"]
         if "url_pool" in data and isinstance(data["url_pool"], list):
             CONFIG.url_pool = data["url_pool"]
+            # load_config вызывается при старте уже после импортов. Не оставляем
+            # map, построенный ранее из class defaults/старого значения.
+            _url_pages_map_cache = None
         for k in ("llm_api_key", "llm_base_url", "llm_model", "llm_system_prompt", "llm_applicant_gender"):
             if k in data and isinstance(data[k], str):
                 setattr(CONFIG, k, data[k])

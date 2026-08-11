@@ -8,4 +8,5 @@ def test_all_collection_paths_log_the_page_sent_for_processing():
 
     assert "COLLECT_PAGE start" in manager and "url={page_url}" in manager
     assert "COLLECT_PAGE start" in mobile and "page_index={current}" in mobile
+    assert "configured_pages={request_limit}" in mobile
     assert "COLLECT_PAGE start" in fallback and "page_index={current}" in fallback

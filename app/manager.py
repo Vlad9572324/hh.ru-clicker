@@ -243,21 +243,32 @@ class BotManager:
         _schedule_save(_write)
 
     def _build_session_urls(self, resume_hash: str) -> list[str]:
-        """URL поиска для браузерной сессии: resume-URL + keyword-URLs из глобального пула."""
-        resume_url = (
+        """Собрать URL конкретной сессии, не изменяя глобальный конфиг.
+
+        Этот метод вызывается при автоматическом восстановлении активных
+        сессий во время старта. Поэтому он обязан быть read-only: resume URL
+        является runtime URL аккаунта, а не пользовательской настройкой
+        ``CONFIG.url_pool``.
+        """
+        default_resume_url = (
             f"{hh_base()}/search/vacancy?resume={resume_hash}"
             "&area=113&order_by=publication_time&items_on_page=20"
         )
-        urls = [resume_url]
+        urls = []
         for item in CONFIG.url_pool:
             entry = _url_entry(item)
-            if entry["url"] and "resume=" not in entry["url"]:
-                urls.append(entry["url"])
-        # Добавляем resume-URL в пул, если ещё нет
-        pool_urls = [_url_entry(u)["url"] for u in CONFIG.url_pool]
-        if resume_url not in pool_urls:
-            CONFIG.url_pool.append({"url": resume_url, "pages": CONFIG.pages_per_url})
-            save_config()
+            url = entry["url"]
+            if not url:
+                continue
+            _text, _area, filters = parse_search_url(url)
+            url_resume = str(filters.get("resume") or "")
+            # Берём настройки поиска именно выбранного резюме. URL другого
+            # резюме нельзя подмешивать в эту сессию.
+            if not url_resume or url_resume == str(resume_hash):
+                urls.append(url)
+        if not any(str(parse_search_url(url)[2].get("resume") or "") == str(resume_hash)
+                   for url in urls):
+            urls.insert(0, default_resume_url)
         return urls
 
     def activate_session(self, temp_idx: int) -> bool:
@@ -270,6 +281,8 @@ class BotManager:
                 return False
             if temp_idx in self.temp_states:
                 return True  # уже запущен
+            saved_urls = [_url_entry(item)["url"] for item in (ts.get("urls") or [])]
+            saved_urls = [url for url in saved_urls if url]
             acc = {
                 "name": ts["name"],
                 "short": ts.get("short", ts["name"]),
@@ -277,7 +290,10 @@ class BotManager:
                 "resume_hash": ts["resume_hash"],
                 "letter": ts.get("letter", ""),
                 "cookies": ts.get("cookies", {}),
-                "urls": self._build_session_urls(ts["resume_hash"]),
+                # Настройки конкретного аккаунта имеют приоритет. Если их нет,
+                # используем URL из глобального пула для выбранного resume.
+                "urls": saved_urls or self._build_session_urls(ts["resume_hash"]),
+                "url_pages": dict(ts.get("url_pages") or {}),
                 # Подтягиваем persistent флаги из temp_sessions — без этого
                 # после restart browser-сессии теряли use_oauth/apply_tests (swarm-12 #9).
                 "use_oauth": bool(ts.get("use_oauth", False)),
@@ -2124,19 +2140,27 @@ class BotManager:
         the apply loop can skip vacancies we can't fulfil without cookies.
         """
         acc = state.acc
-        url_pages = _url_pages_map()
-        acc_url_pages = acc.get("url_pages", {})
         effective_urls = acc.get("urls") or [_url_entry(u)["url"] for u in CONFIG.url_pool]
         results_by_url = {url: [] for url in effective_urls}
         salary_map: dict = {}
         schedule_map: dict = {}
         total_pages = 0
         completed = 0
-        for url in effective_urls:
-            total_pages += acc_url_pages.get(url) or url_pages.get(url, CONFIG.pages_per_url)
+        # Mobile collection has one authoritative page limit. Old
+        # browser_sessions/url_pool overrides must not silently request more
+        # pages than the value currently shown in Settings.
+        try:
+            configured_pages = max(1, min(int(CONFIG.pages_per_url), 20))
+        except (TypeError, ValueError):
+            configured_pages = 1
+        total_pages = len(effective_urls) * configured_pages
+        log_debug(
+            f"MOBILE_COLLECT_CONFIG [{state.short}] configured_pages={configured_pages} "
+            f"urls={len(effective_urls)}"
+        )
         # Translate one search URL → OAuth API request
         for url in effective_urls:
-            pages = acc_url_pages.get(url) or url_pages.get(url, CONFIG.pages_per_url)
+            pages = configured_pages
             text, area, query = parse_search_url(url)
             ids_for_url: set = set()
             if state._deleted:

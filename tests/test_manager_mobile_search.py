@@ -62,6 +62,7 @@ def test_api_collector_routes_url_through_selected_client(monkeypatch):
         ]
     )
     monkeypatch.setattr("app.manager.get_client", lambda account: client)
+    monkeypatch.setattr("app.manager.CONFIG.pages_per_url", 1)
 
     results, _, _ = BotManager.__new__(BotManager)._collect_via_oauth_api(state)
 
@@ -71,3 +72,26 @@ def test_api_collector_routes_url_through_selected_client(monkeypatch):
         "filters": {"schedule": "remote"},
         "max_pages": 1,
     })]
+
+
+def test_api_collector_uses_global_config_page_limit_not_stale_session_override(monkeypatch):
+    url = "https://hh.ru/search/vacancy?resume=r1&area=2&text=data"
+    acc = {
+        "mode": "mobile", "urls": [url], "url_pages": {url: 9},
+    }
+    state = SimpleNamespace(
+        acc=acc, _deleted=False, short="M", status_detail="", vacancy_meta={}
+    )
+    calls = []
+    client = SimpleNamespace(
+        search_vacancies=lambda *args, **kwargs: calls.append((args, kwargs)) or []
+    )
+    monkeypatch.setattr("app.manager.get_client", lambda account: client)
+    monkeypatch.setattr("app.manager.CONFIG.pages_per_url", 1)
+
+    BotManager.__new__(BotManager)._collect_via_oauth_api(state)
+
+    assert calls[0][0] == ("data",)
+    assert calls[0][1]["area_id"] == "2"
+    assert calls[0][1]["filters"]["resume"] == "r1"
+    assert calls[0][1]["max_pages"] == 1

@@ -72,7 +72,8 @@ def search_vacancies(acc: dict, text: str, area_id=113, per_page: int = 20,
         label = acc.get("short") or acc.get("name") or acc.get("resume_hash", "?")
         log_debug(
             f"COLLECT_PAGE start [{label}] mode={mode} "
-            f"page={current + 1} page_index={current} url={page_url}"
+            f"page={current + 1} page_index={current} "
+            f"configured_pages={request_limit} url={page_url}"
         )
         payload = mobile_request(acc, "GET", endpoint, params=params)
         if not isinstance(payload, dict):
