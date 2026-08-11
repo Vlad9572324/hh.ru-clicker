@@ -24,13 +24,13 @@ def test_parse_search_url_defaults_to_all_russia():
     assert filters == {"resume": "r1", "order_by": "publication_time"}
 
 
-def test_mobile_resume_search_uses_exact_web_url_with_live_cookies():
+def test_mobile_resume_search_uses_apk_native_api_with_live_cookies():
     state = SimpleNamespace(cookies_expired=False, degraded_fallback_enabled=False)
 
     assert _uses_api_search({
         "mode": " mobile ",
         "urls": ["https://hh.ru/search/vacancy?resume=r1&area=113"],
-    }, state) is False
+    }, state) is True
     assert _uses_api_search({
         "mode": "mobile",
         "urls": ["https://hh.ru/search/vacancy?text=python&area=113"],
@@ -38,33 +38,13 @@ def test_mobile_resume_search_uses_exact_web_url_with_live_cookies():
     assert _uses_api_search({"mode": "web", "resume_hash": "r1"}, state) is False
 
 
-def test_mobile_resume_search_does_not_fall_back_to_incorrect_api_when_cookies_dead():
+def test_mobile_resume_search_remains_available_when_cookies_dead():
     state = SimpleNamespace(cookies_expired=True, degraded_fallback_enabled=True)
 
     assert _uses_api_search({
         "mode": "mobile", "resume_hash": "r1",
         "urls": ["https://hh.ru/search/vacancy?resume=r1&area=113"],
     }, state) is True
-
-
-def test_api_collector_skips_unsupported_resume_filter(monkeypatch):
-    url = "https://hh.ru/search/vacancy?resume=r1&area=113"
-    acc = {"mode": "mobile", "urls": [url], "url_pages": {url: 1}}
-    state = SimpleNamespace(
-        acc=acc, _deleted=False, short="M", status_detail="", vacancy_meta={}
-    )
-    calls = []
-    monkeypatch.setattr(
-        "app.manager.get_client",
-        lambda account: SimpleNamespace(
-            search_vacancies=lambda *args, **kwargs: calls.append(1) or []
-        ),
-    )
-
-    results, _, _ = BotManager.__new__(BotManager)._collect_via_oauth_api(state)
-
-    assert results == {url: set()}
-    assert calls == []
 
 
 def test_api_collector_routes_url_through_selected_client(monkeypatch):

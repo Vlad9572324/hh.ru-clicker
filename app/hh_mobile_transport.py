@@ -25,9 +25,10 @@ import requests
 from app import oauth
 from app.hh_http import egress_proxies
 from app.logging_utils import log_debug
+from app.user_agent import mobile_user_agent
 
 MOBILE_BASE = "https://api.hh.ru"
-MOBILE_UA = "ru.hh.android/26.28.1"
+MOBILE_UA = "ru.hh.android/26.29.11476"
 
 
 class MobileAPIError(Exception):
@@ -55,8 +56,10 @@ def is_fallback_status(status_code: int) -> bool:
 def mobile_headers(token: str) -> dict:
     return {
         "Authorization": f"Bearer {token}",
-        "User-Agent": MOBILE_UA,
+        # Полный формат Android 26.29: package/versionCode + device/UUID.
+        "User-Agent": mobile_user_agent() or MOBILE_UA,
         "x-force-app-access": "true",
+        "x-hh-app-active": "true",
         "Accept": "application/json",
     }
 

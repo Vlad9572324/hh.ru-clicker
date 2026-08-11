@@ -50,22 +50,8 @@ def parse_search_url(url: str) -> tuple[str, int | str, dict]:
 
 
 def _uses_api_search(acc: dict, state) -> bool:
-    """Выбрать API-поиск, не меняя семантику сохранённых web-запросов.
-
-    Публичный ``api.hh.ru/vacancies`` не поддерживает персонализированный
-    query-параметр ``resume``: он молча игнорирует его и отдаёт общий поток.
-    Поэтому такие URL при живых cookies обязательно собираем с web-страницы.
-    """
+    """Mobile accounts use APK-native API search; web uses it in degradation."""
     if str(acc.get("mode", "")).strip().lower() == "mobile":
-        effective_urls = acc.get("urls") or [
-            _url_entry(item)["url"] for item in CONFIG.url_pool
-        ]
-        has_resume_search = any(
-            "resume" in urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
-            for url in effective_urls if isinstance(url, str)
-        )
-        if has_resume_search and not state.cookies_expired:
-            return False
         return True
     return bool(
         state.cookies_expired
@@ -2155,17 +2141,6 @@ class BotManager:
             ids_for_url: set = set()
             if state._deleted:
                 break
-            if "resume" in query:
-                # api.hh.ru/vacancies игнорирует resume и возвращает общий поток.
-                # В degraded mode web cookies уже недоступны, поэтому безопаснее
-                # пропустить URL, чем обрабатывать нерелевантные вакансии.
-                log_debug(
-                    f"COLLECT_URL skipped [{state.short}] mode=mobile "
-                    f"reason=resume_filter_requires_web url={url}"
-                )
-                results_by_url[url] = ids_for_url
-                completed += pages
-                continue
             try:
                 # Ограничение передаём внутрь клиента: он не должен сначала
                 # загрузить 20 страниц, а затем выбросить лишние результаты.
