@@ -17,7 +17,7 @@ ACC = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
 def test_headers_contract():
     h = mobile_headers("tok123")
     assert h["Authorization"] == "Bearer tok123"
-    assert h["User-Agent"] == "ru.hh.android/26.28.1"
+    assert h["User-Agent"] == "ru.hh.android/26.29.11476, Device: Pixel 10, Android OS: 17 (UUID: 8f42e879-43c7-4d86-a671-31ea36ed924b)"
     assert h["x-force-app-access"] == "true"
 
 
