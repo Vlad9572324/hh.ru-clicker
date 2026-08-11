@@ -12,6 +12,7 @@ from pathlib import Path
 import time
 import threading
 import requests
+import urllib.parse
 from app.hh_http import HH
 from app.user_agent import mobile_user_agent, webview_user_agent
 try:
@@ -21,6 +22,40 @@ except Exception:
     _MSK = None  # fallback на local
 
 from app.logging_utils import log_debug, log_exception, _is_login_page
+
+
+def parse_search_url(url: str) -> tuple[str, int | str, dict]:
+    """Convert an HH web/API search URL to ``search_vacancies`` arguments."""
+    query = urllib.parse.parse_qs(
+        urllib.parse.urlparse(url).query, keep_blank_values=False
+    )
+
+    def _take(name, default):
+        values = query.pop(name, None)
+        return values[-1] if values else default
+
+    text = _take("text", "")
+    area = _take("area", 1)
+    # Pagination is controlled by the collector/mobile client.  These keys are
+    # properties of the SSR URL, not vacancy filters.
+    for key in ("page", "per_page", "items_on_page", "no_magic", "ored_clusters"):
+        query.pop(key, None)
+    filters = {
+        key: values[0] if len(values) == 1 else values
+        for key, values in query.items()
+    }
+    return text, area, filters
+
+
+def _uses_api_search(acc: dict, state) -> bool:
+    """Mobile accounts always search via API; web only uses API degradation."""
+    if str(acc.get("mode", "")).strip().lower() == "mobile":
+        return True
+    return bool(
+        state.cookies_expired
+        and acc.get("resume_hash")
+        and state.degraded_fallback_enabled
+    )
 
 
 def _server_next_publish_datetime(status: dict) -> datetime | None:
@@ -242,6 +277,7 @@ class BotManager:
                 # после restart browser-сессии теряли use_oauth/apply_tests (swarm-12 #9).
                 "use_oauth": bool(ts.get("use_oauth", False)),
                 "apply_tests": bool(ts.get("apply_tests", False)),
+                "mode": ts.get("mode", "web"),
             }
             state = AccountState(acc)
             self.temp_states[temp_idx] = state
@@ -1272,11 +1308,7 @@ class BotManager:
             # Используем api.hh.ru/vacancies вместо cookie-based scraping.
             # Per-account тумблер degraded_fallback_enabled (default True) даёт
             # юзеру отключить авто-fallback для конкретного аккаунта.
-            use_oauth_collect = (
-                state.cookies_expired
-                and bool(acc.get("resume_hash"))
-                and state.degraded_fallback_enabled
-            )
+            use_oauth_collect = _uses_api_search(acc, state)
             try:
                 if use_oauth_collect:
                     results_by_url, salary_map, schedule_map = self._collect_via_oauth_api(state)
@@ -2086,7 +2118,6 @@ class BotManager:
         collector. Also writes has_test / response_letter_required into vacancy_meta so
         the apply loop can skip vacancies we can't fulfil without cookies.
         """
-        import urllib.parse as _up
         acc = state.acc
         url_pages = _url_pages_map()
         acc_url_pages = acc.get("url_pages", {})
@@ -2101,13 +2132,7 @@ class BotManager:
         # Translate one search URL → OAuth API request
         for url in effective_urls:
             pages = acc_url_pages.get(url) or url_pages.get(url, CONFIG.pages_per_url)
-            parsed = _up.urlparse(url)
-            base_params = _up.parse_qsl(parsed.query, keep_blank_values=False)
-            # remove cookie-search-only keys; keep the rest verbatim
-            base_params = [(k, v) for k, v in base_params if k not in ("items_on_page", "no_magic", "ored_clusters")]
-            query = dict(base_params)
-            text = query.pop("text", "")
-            area = query.pop("area", 1)
+            text, area, query = parse_search_url(url)
             ids_for_url: set = set()
             if state._deleted:
                 break

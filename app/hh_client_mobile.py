@@ -334,7 +334,9 @@ class MobileHHClient(HHClient):
 
     def fetch_resume_status(self, force: bool = False) -> dict:
         """Статус резюме → oauth.fetch_resume_status."""
-        return oauth.fetch_resume_status(self.acc, force=force)
+        if force:
+            return oauth.fetch_resume_status(self.acc, force)
+        return oauth.fetch_resume_status(self.acc)
 
     def fetch_employer_rating_oauth(self, employer_id: str) -> dict:
         """Рейтинг работодателя через OAuth → oauth.fetch_employer_rating
