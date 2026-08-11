@@ -110,7 +110,7 @@ class Config:
     llm_use_resume: bool = True        # Включать текст резюме в системный промпт
     # HH сам генерит quick_replies под каждое HR-сообщение — пробуем сначала их,
     # только на пустой ответ идём в свой LLM (экономит токены + официально-выглядящий текст).
-    llm_use_quick_replies: bool = True
+    llm_use_quick_replies: bool = False
     # HH-Pro AI cover letter: `POST /shards/hhpro_ai_letter` даёт 1 бесплатное
     # письмо на пару (resumeHash, vacancyId) даже без подписки. Пробуем первым —
     # доменная модель HH пишет письмо под конкретную вакансию с учётом резюме.

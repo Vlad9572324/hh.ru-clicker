@@ -1070,6 +1070,16 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
                 raw = errors[0].get("value", "forbidden") if errors and isinstance(errors[0], dict) else "forbidden"
             except Exception:
                 raw = "forbidden"
+            # Mobile HH API возвращает already_applied/limit/test со статусом 403
+            # (в отличие от web-flow где 400). Без этих веток каждый повторный
+            # отклик считался бы consecutive_error → auto_pause через 5 попыток.
+            low = raw.lower()
+            if "already" in low or "exist" in low:
+                return "already", {}
+            if "limit" in low:
+                return "limit", {}
+            if "test" in low:
+                return "test", {}
             return "error", {"raw": raw, "http_status": 403}
         elif r.status_code == 404:
             return "error", {"raw": "Вакансия не найдена"}

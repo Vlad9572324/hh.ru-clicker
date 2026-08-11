@@ -785,6 +785,11 @@ function llmProfileAdd(profile) {
     </div>
   `;
   list.appendChild(row);
+  // oninput не срабатывает при программной установке value, поэтому явно
+  // обновим fingerprint — иначе новый row всегда рендерится с пустым span'ом,
+  // даже когда backend знает про сохранённый ключ этого профиля.
+  const keyInp = row.querySelector('.lp-key');
+  if (keyInp) _llmUpdateKeyFingerprint(keyInp);
 }
 
 // Alias: llmProfileAutoSave = _llmAutoSave (используется в oninput каждого поля
@@ -826,8 +831,10 @@ function _llmUpdateKeyFingerprint(inp) {
     fp.style.color = 'var(--cyan)';
     fp.title = 'Ключ хранится на сервере. Введи новый чтобы перезаписать, или оставь пустым.';
   } else {
-    fp.textContent = '⚠ пусто';
+    // Явный плейсхолдер вместо пустого span — юзеру видно "ключа нет" вместо "визуально пусто".
+    fp.textContent = '⚠ ключ не задан';
     fp.style.color = 'var(--red)';
+    fp.title = 'Вставь API ключ в поле ниже и подожди 1.5с — автосохранение включится.';
   }
 }
 
@@ -1158,10 +1165,22 @@ function syncLlmSettings(snap) {
   if (sp && cfg.llm_system_prompt !== undefined && !_llmSettingsEditing && document.activeElement !== sp) {
     if (sp.value !== cfg.llm_system_prompt) sp.value = cfg.llm_system_prompt;
   }
-  // Render profiles only if list is empty to avoid wiping user edits
+  // Пересобираем список профилей когда backend не совпадает с UI и юзер не
+  // редактирует — иначе после reload юзер видел "пустой список" пока snap
+  // с 0 профилей не сменялся snap'ом с N (типичная race после autosave).
+  // Во время редактирования не трогаем — иначе стёрли бы наполовину набранный ключ.
   const list = document.getElementById('llm-profiles-list');
-  if (list && list.children.length === 0 && cfg.llm_profiles?.length) {
-    cfg.llm_profiles.forEach(p => llmProfileAdd(p));
+  if (list && !_llmSettingsEditing) {
+    const snapCount = (cfg.llm_profiles || []).length;
+    const uiCount = list.children.length;
+    if (uiCount === 0 && snapCount > 0) {
+      cfg.llm_profiles.forEach(p => llmProfileAdd(p));
+    } else if (uiCount !== snapCount && snapCount > 0) {
+      // Backend знает больше/меньше — синхронизируем (перерисуем, ключи в snap нет,
+      // fingerprint подтянется на строке ниже через _llmUpdateKeyFingerprint).
+      list.innerHTML = '';
+      cfg.llm_profiles.forEach(p => llmProfileAdd(p));
+    }
   }
   // Обновим fingerprint api_key для каждой строки — даже если строка уже
   // существует (юзер потёр поле или восстановил из конфига). type=password
