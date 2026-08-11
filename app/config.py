@@ -291,9 +291,13 @@ def hh_url(path: str) -> str:
     return hh_base() + path
 
 
-def save_config():
-    """Сохранить текущий CONFIG на диск."""
-    global _url_pages_map_cache, _url_pool_version
+def config_snapshot() -> dict:
+    """Полный JSON-совместимый снимок текущих настроек приложения.
+
+    Функция не пишет на диск. Она также используется мобильной авторизацией,
+    чтобы первый созданный ``config.json`` сразу содержал всю схему, а не
+    только namespaced-секцию ``mobile_auth``.
+    """
     data = {k: getattr(CONFIG, k) for k in _CONFIG_KEYS}
     data["questionnaire_templates"] = CONFIG.questionnaire_templates
     data["letter_templates"] = CONFIG.letter_templates
@@ -319,6 +323,13 @@ def save_config():
     data["llm_openclaw_agent"] = CONFIG.llm_openclaw_agent
     data["llm_openclaw_model"] = CONFIG.llm_openclaw_model
     data["llm_openclaw_timeout"] = CONFIG.llm_openclaw_timeout
+    return data
+
+
+def save_config():
+    """Сохранить текущий CONFIG на диск."""
+    global _url_pages_map_cache, _url_pool_version
+    data = config_snapshot()
     _url_pool_version += 1
     _url_pages_map_cache = None
     def _write():

@@ -906,14 +906,15 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
     if not H:
         return {}
     try:
-        from datetime import datetime
-        try:
-            from zoneinfo import ZoneInfo
-            MSK = ZoneInfo("Europe/Moscow")
-        except Exception:
-            MSK = None
-        today_msk = datetime.now(MSK).date() if MSK else datetime.now().date()
-        midnight = datetime.combine(today_msk, datetime.min.time(), tzinfo=MSK) if MSK else None
+        from datetime import datetime, timedelta, timezone
+        # Москва с 2014 года постоянно UTC+3. Используем fixed offset, чтобы
+        # подсчёт не зависел от наличия системной базы IANA/tzdata. На Windows
+        # ZoneInfo("Europe/Moscow") часто недоступен; прежний fallback MSK=None
+        # делал midnight=None и ошибочно считал все 500 загруженных переговоров
+        # сегодняшними.
+        MSK = timezone(timedelta(hours=3), name="MSK")
+        today_msk = datetime.now(MSK).date()
+        midnight = datetime.combine(today_msk, datetime.min.time(), tzinfo=MSK)
         n_today = 0
         total_found = 0
         oldest_dt = None
@@ -937,14 +938,14 @@ def fetch_negotiations_today_count(acc: dict) -> dict:
                 except Exception:
                     continue
                 msk_dt = dt.astimezone(MSK) if MSK else dt
-                if midnight is None or msk_dt >= midnight:
+                if msk_dt >= midnight:
                     n_today += 1
                 oldest_dt = dt
             # Лента отсортирована по новейшим первая. Как только дошли до
             # вакансии раньше midnight — дальше тоже только старые, можно стоп.
             if oldest_dt:
                 msk_oldest = oldest_dt.astimezone(MSK) if MSK else oldest_dt
-                if midnight and msk_oldest < midnight:
+                if msk_oldest < midnight:
                     break
         info = {
             "today": n_today,
@@ -1185,7 +1186,7 @@ def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
         return False
 
 
-def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = True):
+def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = False):
     """Отправить сообщение в чат через ОФИЦИАЛЬНЫЙ HH OAuth API.
 
     POST https://api.hh.ru/common/chats/{chat_id}/messages с Bearer token.

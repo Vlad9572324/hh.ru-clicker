@@ -469,7 +469,7 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
             # 2) /common/chats/{chat_id}/messages — fallback (предполагает chat_id == neg_id)
             try:
                 from app.oauth import send_chat_message_oauth as _oauth_send
-                _r = _oauth_send(acc, neg_id, text, is_automated=True)
+                _r = _oauth_send(acc, neg_id, text, is_automated=False)
                 if _r is True:
                     return True
                 if _r == "chat_not_found":

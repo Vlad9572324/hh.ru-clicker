@@ -80,6 +80,22 @@ def test_priority_and_secret_mask(isolated_mobile, monkeypatch):
     assert json.loads(ma.CONFIG_FILE.read_text())["unrelated"] == 1
 
 
+def test_save_materializes_full_root_config_and_preserves_existing(isolated_mobile):
+    ma.CONFIG_FILE.write_text(
+        json.dumps({"pages_per_url": 17, "future_setting": {"enabled": True}}),
+        encoding="utf-8",
+    )
+
+    ma.save_config({"device_model": "Pixel Full Config"})
+
+    saved = json.loads(ma.CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["pages_per_url"] == 17
+    assert saved["future_setting"] == {"enabled": True}
+    assert saved["max_concurrent"] > 0
+    assert isinstance(saved["letter_templates"], list)
+    assert saved["mobile_auth"]["device_model"] == "Pixel Full Config"
+
+
 def test_mask_does_not_overwrite_secret(isolated_mobile):
     ma.save_config({"app_client_token": "custom-secret"})
     ma.save_config({"app_client_token": ma.MASK, "device_model": "Changed"})

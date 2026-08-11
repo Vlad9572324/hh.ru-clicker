@@ -628,6 +628,7 @@ const State = {
   compactCards: new Set(), // idx карточек в компактном режиме
   logLevel: '',          // фильтр уровня лога
   lastResponsesHash: '',
+  settingsDrafts: new Map(), // key -> number; защищает ввод от фоновых WS snapshot
 };
 let _llmSettingsEditing = false;
 let _llmSettingsEditTimer = null;
@@ -659,10 +660,17 @@ function buildSettings() {
       <div class="setting-label" data-setting-label="${s.key}">${t(s.labelKey)} <span id="sv-${s.key}">—</span></div>
       <div class="setting-desc" data-setting-desc="${s.key}">${t(s.descKey)}</div>
       <input type="range" id="sr-${s.key}" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.min}"
-        oninput="document.getElementById('sv-${s.key}').textContent=this.value">
+        oninput="settingsInput('${s.key}', this)">
     `;
     grid.appendChild(row);
   });
+}
+
+function settingsInput(key, input) {
+  const value = Number(input.value);
+  State.settingsDrafts.set(key, value);
+  const label = document.getElementById('sv-' + key);
+  if (label) label.textContent = input.value;
 }
 
 // ── Letter templates (Settings) ──────────────────────────────
@@ -2850,7 +2858,13 @@ async function updateCookiesFromTextarea(idx, textareaId, statusId) {
 function applySettings() {
   SETTINGS_DEF.forEach(s => {
     const el = document.getElementById('sr-' + s.key);
-    if (el) sendCmd({ type: 'set_config', key: s.key, value: Number(el.value) });
+    if (el) {
+      const value = Number(el.value);
+      // Оставляем значение pending до snapshot-подтверждения от backend.
+      // Иначе следующий ещё старый snapshot визуально отменит изменение.
+      State.settingsDrafts.set(s.key, value);
+      sendCmd({ type: 'set_config', key: s.key, value });
+    }
   });
   const st = document.getElementById('settings-status');
   st.textContent = t('settings_applied');
@@ -4409,6 +4423,12 @@ function syncSettingsSliders(snap) {
     const el = document.getElementById('sr-' + s.key);
     const sv = document.getElementById('sv-' + s.key);
     if (el && snap.config[s.key] !== undefined) {
+      if (State.settingsDrafts.has(s.key)) {
+        const draft = State.settingsDrafts.get(s.key);
+        if (Number(snap.config[s.key]) !== draft) return;
+        // Backend подтвердил применённое значение; снова синхронизируем с ним.
+        State.settingsDrafts.delete(s.key);
+      }
       el.value = snap.config[s.key];
       if (sv) sv.textContent = snap.config[s.key];
     }

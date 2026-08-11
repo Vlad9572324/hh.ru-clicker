@@ -250,9 +250,15 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
     with _lock:
         # Share the main config write lock so bot settings and mobile settings
         # cannot overwrite each other during concurrent saves.
-        from app.config import _config_write_lock
+        from app.config import _config_write_lock, config_snapshot
         with _config_write_lock:
-            root_config = _read_object(CONFIG_FILE)
+            existing = _read_object(CONFIG_FILE)
+            # На чистой установке OTP-авторизация является первой операцией,
+            # создающей config.json. Материализуем полную основную схему сразу.
+            # Существующие и неизвестные корневые ключи имеют приоритет, чтобы
+            # сохранение mobile_auth никогда не сбрасывало настройки пользователя.
+            root_config = config_snapshot()
+            root_config.update(existing)
             root_config["mobile_auth"] = merged
             _atomic_write(CONFIG_FILE, root_config)
             LEGACY_CONFIG_FILE.unlink(missing_ok=True)
