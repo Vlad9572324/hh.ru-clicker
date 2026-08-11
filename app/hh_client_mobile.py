@@ -104,8 +104,27 @@ class MobileHHClient(HHClient):
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
         """Список чатов: GET api.hh.ru/chats (page/per_page<=20). Возврат
         совместим с web hh_chat._fetch_chat_list:
-        (items_by_id, display_info, current_participant_id)."""
-        return mobile_chat_list.fetch_chat_list(self.acc, max_pages)
+        (items_by_id, display_info, current_participant_id).
+
+        Гибридная стратегия: сначала все непрочитанные (filter_unread=true —
+        сервер вернёт даже старые из глубины 2000+ переговоров), затем top-N
+        свежих без фильтра (чтобы поймать «unread=0 от работодателя, не
+        отвечали» — новые reads/updates могут сбросить unread до 0 но чат
+        всё равно требует ответа). Без первого прохода бот видел только
+        последние 60 чатов и игнорировал сотни старых HR-веток.
+        """
+        unread_items, unread_display, unread_cur = mobile_chat_list.fetch_chat_list(
+            self.acc, max_pages=20, filter_unread=True,
+        )
+        recent_items, recent_display, recent_cur = mobile_chat_list.fetch_chat_list(
+            self.acc, max_pages, filter_unread=False,
+        )
+        # merge: свежие перезаписывают unread (у recent актуальнее lastMessage
+        # если между вызовами HR прислал новое сообщение).
+        items = {**unread_items, **recent_items}
+        display = {**unread_display, **recent_display}
+        cur = recent_cur or unread_cur
+        return items, display, cur
 
     def fetch_chat_history(self, chat_id: str, max_messages: int = 20) -> list:
         """История сообщений чата:
