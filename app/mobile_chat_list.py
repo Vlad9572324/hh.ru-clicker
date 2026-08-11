@@ -106,6 +106,25 @@ def fetch_chat_list(acc: dict, max_pages: int = 5,
             if chat_type and item.get("type") != chat_type:
                 # Сервер параметр type игнорирует — фильтруем на клиенте.
                 continue
+            # Mobile API отдаёт snake_case (`unread_count`, `messages.last`,
+            # `write_possibility`, `participant_id`), а manager.py + hh_chat.py
+            # ждут web-схему camelCase (`unreadCount`, `lastMessage`,
+            # `participantId`, `writePossibility`). Без нормализации все чаты
+            # попадали в skipped_read → бот молча игнорировал новых HR.
+            last_msg_raw = (item.get("messages") or {}).get("last") or {}
+            body = (last_msg_raw.get("body") or {})
+            text_obj = body.get("text") or {}
+            last_msg_camel = {
+                "id": last_msg_raw.get("id", ""),
+                "participantId": last_msg_raw.get("participant_id", ""),
+                "text": text_obj.get("content", "") if isinstance(text_obj, dict) else "",
+                "workflowTransition": last_msg_raw.get("workflow_transition") or {},
+                "createdAt": last_msg_raw.get("created_at", ""),
+                "type": last_msg_raw.get("type", ""),
+            }
+            item.setdefault("unreadCount", item.get("unread_count", 0))
+            item.setdefault("lastMessage", last_msg_camel)
+            item.setdefault("writePossibility", item.get("write_possibility") or {})
             items_by_id[item_id] = item
             display = item.get("display") or {}
             icon = display.get("icon") or {}
