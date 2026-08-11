@@ -866,6 +866,12 @@ class BotManager:
                 "llm_status": s.llm_status,
                 "llm_replied_count": s.llm_replied_count,
                 "llm_pending_chats": s.llm_pending_chats,
+                "llm_current_neg_id": getattr(s, "llm_current_neg_id", ""),
+                "llm_current_employer": getattr(s, "llm_current_employer", ""),
+                "llm_current_idx": getattr(s, "llm_current_idx", 0),
+                "llm_current_total": getattr(s, "llm_current_total", 0),
+                "llm_last_check_at": getattr(s, "llm_last_check_at", ""),
+                "llm_next_check_at": getattr(s, "llm_next_check_at", ""),
                 "use_oauth": s.use_oauth,
                 "daily_sent": s.daily_sent,
                 "daily_limit": CONFIG.daily_apply_limit,
@@ -971,6 +977,14 @@ class BotManager:
                     "hh_daily_limit": CONFIG.hh_daily_limit or 200,
                     "oauth_status": get_oauth_status(s.acc.get("resume_hash", "")),
                     "llm_enabled": s.llm_enabled,
+                    "llm_status": s.llm_status,
+                    "llm_pending_chats": s.llm_pending_chats,
+                    "llm_current_neg_id": getattr(s, "llm_current_neg_id", ""),
+                    "llm_current_employer": getattr(s, "llm_current_employer", ""),
+                    "llm_current_idx": getattr(s, "llm_current_idx", 0),
+                    "llm_current_total": getattr(s, "llm_current_total", 0),
+                    "llm_last_check_at": getattr(s, "llm_last_check_at", ""),
+                    "llm_next_check_at": getattr(s, "llm_next_check_at", ""),
                     "use_oauth": s.use_oauth,
                     "daily_sent": s.daily_sent,
                     "daily_limit": CONFIG.daily_apply_limit,
@@ -2452,16 +2466,30 @@ class BotManager:
         log_debug(f"LLM [{state.short}]: {len(candidates)} кандидатов (прочитанных: {skipped_read}, наших: {skipped_ours}, системных: {skipped_system})")
         if not candidates:
             state.llm_pending_chats = 0
+            state.llm_current_neg_id = ""
+            state.llm_current_employer = ""
+            state.llm_current_idx = 0
+            state.llm_current_total = 0
+            state.llm_last_check_at = datetime.now().isoformat(timespec="seconds")
+            state.llm_next_check_at = (
+                datetime.now() + timedelta(seconds=max(CONFIG.llm_check_interval * 60, 120))
+            ).isoformat(timespec="seconds")
             state.llm_status = f"\U0001f4a4 Нет новых (наших: {skipped_ours}, закр.: {skipped_locked})"
             self._add_log(state.short, state.color,
                 f"\U0001f916 LLM: нет новых сообщений (прочит.: {skipped_read}, наших: {skipped_ours}, сист.: {skipped_system}, закрыт: {skipped_locked})", "info")
             return
 
+        # Cap на 15 — LLM цикл ограничен чтобы не сжигать токены за один заход.
+        cycle = candidates[:15]
         state.llm_pending_chats = len(candidates)
-        state.llm_status = f"\U0001f504 Обработка {len(candidates)} чатов..."
+        state.llm_current_total = len(cycle)
+        state.llm_current_idx = 0
+        state.llm_current_neg_id = ""
+        state.llm_current_employer = ""
+        state.llm_status = f"\U0001f504 Обработка {len(cycle)} чатов..."
         self._add_log(state.short, state.color, f"\U0001f916 LLM: {len(candidates)} чатов требуют ответа", "info")
 
-        for i, neg_id in enumerate(candidates[:15]):  # limit to 15 per cycle
+        for i, neg_id in enumerate(cycle):
             if not state.llm_enabled or not CONFIG.llm_enabled:
                 self._add_log(state.short, state.color, f"\U0001f916 LLM: выключен в процессе цикла, прерываю", "warning")
                 break
@@ -2489,6 +2517,12 @@ class BotManager:
                 employer = thread.get("employer_name", neg_id)[:35]
                 employer_msg = thread.get("last_employer_msg", "")
                 vacancy_title = thread.get("vacancy_title", "")
+                # Live-статус в UI: какой чат сейчас в работе + позиция в цикле.
+                # Обновляем ПОСЛЕ построения thread'а — до этого могли выпасть
+                # по фильтрам (закрыт/DISCARD/wf) и не считались бы обработанными.
+                state.llm_current_idx = i + 1
+                state.llm_current_neg_id = str(neg_id)
+                state.llm_current_employer = employer
                 # vacancy_id из resources чата — нужен фронту чтобы дёрнуть рейтинг
                 # работодателя по цепочке vid→employerId→rating (без extra fetch
                 # здесь — фронт делает lazy lookup только когда строка видна).
@@ -2917,6 +2951,15 @@ class BotManager:
             log_debug(f"LLM auto-reply [{state.short}]: {replied} ответов отправлено")
         elif candidates:
             state.llm_status = f"⏳ {len(candidates)} чатов, 0 отправлено"
+        # Цикл завершён — сбрасываем «текущий чат» и ставим таймеры для UI.
+        state.llm_current_neg_id = ""
+        state.llm_current_employer = ""
+        state.llm_current_idx = 0
+        state.llm_current_total = 0
+        state.llm_last_check_at = datetime.now().isoformat(timespec="seconds")
+        state.llm_next_check_at = (
+            datetime.now() + timedelta(seconds=max(CONFIG.llm_check_interval * 60, 120))
+        ).isoformat(timespec="seconds")
 
     def _fetch_hh_stats_worker(self, idx: int, state: AccountState) -> None:
         """Thread worker for HH stats polling — auto-restarts on crash.

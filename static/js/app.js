@@ -1961,6 +1961,61 @@ function _llmUpdateAccToggles(snap) {
   });
 }
 
+function _llmFmtRel(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const d = Math.round((Date.now() - t) / 1000);
+  if (d < 0) {
+    const s = -d;
+    if (s < 60) return `через ${s} с`;
+    if (s < 3600) return `через ${Math.round(s/60)} мин`;
+    return `через ${Math.round(s/3600)} ч`;
+  }
+  if (d < 60) return `${d} с назад`;
+  if (d < 3600) return `${Math.round(d/60)} мин назад`;
+  return `${Math.round(d/3600)} ч назад`;
+}
+
+function _llmRenderLiveBar(snap) {
+  const bar = document.getElementById('llm-live-bar');
+  const wrap = document.getElementById('llm-live-accounts');
+  if (!bar || !wrap) return;
+  const accs = (snap.accounts || []).filter(a =>
+    a.llm_enabled !== false && (
+      a.llm_current_neg_id || a.llm_current_total || a.llm_last_check_at || a.llm_next_check_at || a.llm_pending_chats
+    )
+  );
+  if (accs.length === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  wrap.innerHTML = accs.map(a => {
+    const busy = a.llm_current_idx && a.llm_current_total;
+    let mid;
+    if (busy) {
+      const neg = a.llm_current_neg_id || '';
+      const negLink = neg
+        ? `<a href="https://hh.ru/negotiations/item?topicId=${esc(neg)}" target="_blank" style="color:var(--cyan);text-decoration:none" title="Открыть чат в HH">#${esc(neg)}</a>`
+        : '';
+      mid = `<span style="color:var(--cyan);font-weight:600">🔄 [${a.llm_current_idx}/${a.llm_current_total}]</span>
+             <span style="color:var(--fg)">${esc(a.llm_current_employer || '?')}</span>
+             ${negLink}`;
+    } else if (a.llm_pending_chats) {
+      mid = `<span style="color:var(--yellow)">⏳ ${a.llm_pending_chats} в очереди, цикл завершён</span>`;
+    } else {
+      mid = `<span style="color:var(--dim)">💤 нет активных чатов</span>`;
+    }
+    const last = a.llm_last_check_at
+      ? `<span style="color:var(--dim)" title="${esc(a.llm_last_check_at)}">последняя: ${_llmFmtRel(a.llm_last_check_at)}</span>` : '';
+    const next = a.llm_next_check_at
+      ? `<span style="color:var(--dim)" title="${esc(a.llm_next_check_at)}">следующая: ${_llmFmtRel(a.llm_next_check_at)}</span>` : '';
+    return `<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;padding:2px 0">
+      <span style="color:${colorVar(a.color || 'yellow')};font-weight:600;min-width:80px">${esc(a.name || a.short || '')}</span>
+      ${mid}
+      <span style="margin-left:auto;display:flex;gap:12px">${last}${next}</span>
+    </div>`;
+  }).join('');
+}
+
 function renderLlmLog(snap) {
   if (!snap) return;
 
@@ -1984,6 +2039,12 @@ function renderLlmLog(snap) {
 
   // Update per-account LLM toggles
   _llmUpdateAccToggles(snap);
+
+  // Live-статус LLM-цикла: пер-аккаунт «сейчас обрабатывает X/N [chat_id]»
+  // + «следующая проверка через Y сек» / «последняя завершилась Z сек назад».
+  // Без этого юзер не понимал что происходит между визуально-статичными
+  // ре-рендерами таблицы (цикл идёт ~10 сек на чат, log в дебаг-панели прокручен).
+  _llmRenderLiveBar(snap);
 
   // Auto-refresh interviews table from DB every 30s
   const now = Date.now();

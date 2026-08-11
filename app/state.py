@@ -185,6 +185,16 @@ class AccountState:
         self.llm_status: str = ""            # human-readable LLM status for dashboard display
         self.llm_replied_count: int = 0      # total replies sent this session
         self.llm_pending_chats: int = 0      # chats awaiting reply (from last scan)
+        # Live-статус LLM-цикла для UI: какой чат прямо сейчас обрабатывается
+        # и когда закончился/запланирован следующий проход. Раньше UI видел
+        # только summary («N чатов требуют ответа») и юзер не понимал что
+        # происходит между двумя циклами.
+        self.llm_current_neg_id: str = ""    # neg_id чата, который в этот момент отправляется в LLM
+        self.llm_current_employer: str = ""  # employer чата, для человекочитаемого label
+        self.llm_current_idx: int = 0        # позиция в текущем цикле (1..N)
+        self.llm_current_total: int = 0      # длина текущего цикла (N)
+        self.llm_last_check_at: str = ""     # ISO-timestamp конца последнего цикла (для «X сек назад»)
+        self.llm_next_check_at: str = ""     # ISO-timestamp когда стартует следующий цикл
         self._llm_lock = threading.Lock()    # prevents concurrent _process_llm_replies for this account
         self._msg_consecutive: dict = {}     # {neg_id: count} consecutive applicant messages without HR reply
         self._test_failures: dict = {}       # {vid: fail_count} questionnaire fill failures
