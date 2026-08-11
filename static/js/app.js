@@ -3709,10 +3709,19 @@ function updateCard(card, acc) {
       const rsNote = rs.blocked
         ? ` · 🚨 резюме заблокировано HH`
         : (rs.progress && rs.progress < 80 ? ` · 📝 резюме ${rs.progress}%` : '');
-      cookiesBadge.innerHTML = acc.degraded_mode
-        ? `⚠️ Degraded OAuth-режим (${oa.expires_hours}ч)${skipNote}${rsNote}`
-        : `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)${rsNote}`;
-      cookiesBadge.style.color = rs.blocked ? 'var(--red)' : 'var(--yellow)';
+      // Mobile-native (OTP-логин, cookies никогда не было) — это штатный
+      // режим, не «Degraded». Юзеров пугала предупреждающая жёлтая плашка
+      // при вполне рабочем аккаунте.
+      const isMobileNative = (acc.mode || '').toLowerCase() === 'mobile';
+      if (isMobileNative) {
+        cookiesBadge.innerHTML = `📱 Mobile OAuth (${oa.expires_hours}ч)${skipNote}${rsNote}`;
+        cookiesBadge.style.color = rs.blocked ? 'var(--red)' : 'var(--cyan)';
+      } else {
+        cookiesBadge.innerHTML = acc.degraded_mode
+          ? `⚠️ Degraded OAuth-режим (${oa.expires_hours}ч)${skipNote}${rsNote}`
+          : `⚠️ Куки протухли | 🔑 OAuth: ✅ токен (${oa.expires_hours}ч)${rsNote}`;
+        cookiesBadge.style.color = rs.blocked ? 'var(--red)' : 'var(--yellow)';
+      }
     } else if (acc.cookies_expired && !oa.has_token) {
       cookiesBadge.style.display = '';
       cookiesBadge.innerHTML = `⚠️ Куки протухли | 🔑 OAuth: ❌ нет токена — обновите куки!`;

@@ -854,6 +854,7 @@ class BotManager:
                 "cookies_expired": s.cookies_expired,
                 "degraded_mode": s.degraded_mode,
                 "degraded_skipped": s.degraded_skipped,
+                "mode": str(s.acc.get("mode", "") or "").strip().lower(),
                 "degraded_fallback_enabled": s.degraded_fallback_enabled,
                 "resume_status_oauth": dict(s.resume_status or {}),
                 "hh_today_applies": s.hh_today_applies,
@@ -971,6 +972,7 @@ class BotManager:
                     "degraded_mode": s.degraded_mode,
                     "degraded_skipped": s.degraded_skipped,
                     "degraded_fallback_enabled": s.degraded_fallback_enabled,
+                    "mode": str(s.acc.get("mode", "") or "").strip().lower(),
                     "resume_status_oauth": dict(s.resume_status or {}),
                     "hh_today_applies": s.hh_today_applies,
                     "hh_today_applies_updated": s.hh_today_applies_updated,
@@ -1347,7 +1349,14 @@ class BotManager:
             try:
                 if use_oauth_collect:
                     results_by_url, salary_map, schedule_map = self._collect_via_oauth_api(state)
-                    state.degraded_mode = bool(any(v for v in results_by_url.values()))
+                    # degraded_mode = "web cookies были живые и умерли, теперь
+                    # едем на OAuth-fallback". Для чисто mobile-flow (OTP-логин,
+                    # никогда не было web cookies) это НЕ degraded — это штатный
+                    # native mode. UI-баджа с "⚠️ Degraded" пугала юзеров без
+                    # реальной проблемы.
+                    is_mobile_native = str(acc.get("mode", "")).strip().lower() == "mobile"
+                    has_results = bool(any(v for v in results_by_url.values()))
+                    state.degraded_mode = has_results and not is_mobile_native
                     if state.degraded_mode:
                         self._add_log(
                             state.short, state.color,
@@ -1505,10 +1514,13 @@ class BotManager:
                 if "DISCARD" in hh_labels:
                     discard_skipped += 1
                     continue
-                # Degraded mode: без cookies не заполнить опросник и тест —
-                # пропускаем вакансии где они требуются. Поле `has_test`
-                # отдаёт OAuth-сборщик; `response_letter_required` тоже.
-                if state.degraded_mode and (
+                # Без cookies не заполнить опросник/тест — пропускаем вакансии
+                # где они требуются. Работает и для degraded (web→oauth fallback),
+                # и для mobile-native (OTP-логин без cookies) — обоим доступен
+                # только POST /negotiations без формы. Счётчик один — юзеру
+                # неважно почему пропущено, важно сколько.
+                no_web_cookies = state.degraded_mode or str(state.acc.get("mode", "")).strip().lower() == "mobile"
+                if no_web_cookies and (
                     meta.get("has_test") or meta.get("response_letter_required")
                 ):
                     state.degraded_skipped += 1
