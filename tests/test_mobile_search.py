@@ -29,6 +29,7 @@ def test_search_paginates_normalises_and_sends_mobile_headers(monkeypatch):
     assert "page=0" in responses.calls[0].request.url
     assert "page=1" in responses.calls[1].request.url
     assert "experience=between1And3" in responses.calls[0].request.url
+    assert "area=113" in responses.calls[0].request.url
 
 
 @responses.activate
@@ -40,3 +41,17 @@ def test_search_stops_after_twenty_pages(monkeypatch):
         })
     assert len(search_vacancies(ACC, "x")) == 20
     assert len(responses.calls) == 20
+
+
+@responses.activate
+def test_search_respects_configured_single_page_before_requesting_next(monkeypatch):
+    monkeypatch.setattr("app.oauth._obtain_oauth_token", lambda acc: "token")
+    responses.get("https://api.hh.ru/vacancies", json={
+        "pages": 20, "items": [{"id": "first"}],
+    })
+
+    found = search_vacancies(ACC, "x", per_page=50, max_pages=1)
+
+    assert [item["id"] for item in found] == ["first"]
+    assert len(responses.calls) == 1
+    assert "page=0" in responses.calls[0].request.url

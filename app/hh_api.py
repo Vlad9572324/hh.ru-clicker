@@ -13,8 +13,9 @@ from app.user_agent import webview_user_agent
 from app.config import CONFIG, hh_base
 
 
-def fetch_hh_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
-                       page: int = 0, filters=None) -> list[dict]:
+def fetch_hh_vacancies(acc: dict, text: str, area_id=113, per_page: int = 20,
+                       page: int = 0, filters=None,
+                       max_pages: int = 20) -> list[dict]:
     """Cookie/SSR vacancy-search fallback with the mobile result shape.
 
     This deliberately uses the existing HTML parsers; it does not call the
@@ -27,8 +28,19 @@ def fetch_hh_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
     cookies = acc.get("cookies", {}) or {}
     headers = get_headers(cookies.get("_xsrf", ""))
     out = []
-    for current in range(max(0, int(page)), max(0, int(page)) + 20):
+    start_page = max(0, int(page))
+    request_limit = max(0, min(int(max_pages), 20))
+    for current in range(start_page, start_page + request_limit):
         params["page"] = current
+        page_url = (
+            f"{hh_base().rstrip('/')}/search/vacancy?"
+            + urllib.parse.urlencode(params, doseq=True)
+        )
+        label = acc.get("short") or acc.get("name") or acc.get("resume_hash", "?")
+        log_debug(
+            f"COLLECT_PAGE start [{label}] mode=web-fallback "
+            f"page={current + 1} page_index={current} url={page_url}"
+        )
         response = HH.get(
             f"{hh_base().rstrip('/')}/search/vacancy",
             params=params, headers=headers, cookies=cookies, timeout=15,
@@ -36,6 +48,10 @@ def fetch_hh_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
         response.raise_for_status()
         parsed = parse_search_page(response.text)
         ids = parsed["ids"]
+        log_debug(
+            f"COLLECT_PAGE parsed [{label}] mode=web-fallback "
+            f"page={current + 1} vacancies={len(ids)} url={page_url}"
+        )
         for vid in ids:
             meta = parsed["meta"].get(vid, {})
             out.append({

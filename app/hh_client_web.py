@@ -144,7 +144,7 @@ class WebHHClient(HHClient):
 
     def fetch_employer_rating_oauth(self, employer_id: str) -> dict:
         return oauth.fetch_employer_rating(self.acc, employer_id)
-    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
-                         page: int = 0, filters=None) -> list:
+    def search_vacancies(self, text: str, area_id=113, per_page: int = 20,
+                         page: int = 0, filters=None, max_pages: int = 20) -> list:
         return hh_api.fetch_hh_vacancies(
-            self.acc, text, area_id, per_page, page, filters)
+            self.acc, text, area_id, per_page, page, filters, max_pages)

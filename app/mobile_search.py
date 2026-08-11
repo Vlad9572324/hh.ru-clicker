@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from urllib.parse import urlencode
 
 from app.hh_mobile_transport import mobile_request
+from app.logging_utils import log_debug
 
 
 def _normalise_item(item: dict) -> dict:
@@ -21,9 +23,10 @@ def _normalise_item(item: dict) -> dict:
     return result
 
 
-def search_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
-                     page: int = 0, filters: Mapping | None = None) -> list[dict]:
-    """Return all search pages, starting at *page* (at most 20 requests).
+def search_vacancies(acc: dict, text: str, area_id=113, per_page: int = 20,
+                     page: int = 0, filters: Mapping | None = None,
+                     max_pages: int = 20) -> list[dict]:
+    """Return at most *max_pages* search pages, starting at *page*.
 
     ``filters`` is passed to HH verbatim and supports scalar as well as list
     values (``requests`` serialises both correctly).  Explicit arguments win
@@ -41,12 +44,27 @@ def search_vacancies(acc: dict, text: str, area_id=1, per_page: int = 20,
     current = start_page
     last_page = start_page
 
-    for _ in range(20):
+    request_limit = max(0, min(int(max_pages), 20))
+    for _ in range(request_limit):
         params["page"] = current
+        page_url = "https://api.hh.ru/vacancies?" + urlencode(params, doseq=True)
+        label = acc.get("short") or acc.get("name") or acc.get("resume_hash", "?")
+        log_debug(
+            f"COLLECT_PAGE start [{label}] mode=mobile "
+            f"page={current + 1} page_index={current} url={page_url}"
+        )
         payload = mobile_request(acc, "GET", "/vacancies", params=params)
         if not isinstance(payload, dict):
+            log_debug(
+                f"COLLECT_PAGE invalid [{label}] mode=mobile "
+                f"page={current + 1} url={page_url}"
+            )
             break
         items = payload.get("items") or []
+        log_debug(
+            f"COLLECT_PAGE parsed [{label}] mode=mobile "
+            f"page={current + 1} vacancies={len(items)} url={page_url}"
+        )
         result.extend(_normalise_item(item) for item in items if isinstance(item, dict))
 
         try:

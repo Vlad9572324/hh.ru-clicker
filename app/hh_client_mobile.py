@@ -72,10 +72,10 @@ class MobileHHClient(HHClient):
     def __init__(self, acc: dict):
         super().__init__(acc)
 
-    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
-                         page: int = 0, filters=None) -> list:
+    def search_vacancies(self, text: str, area_id=113, per_page: int = 20,
+                         page: int = 0, filters=None, max_pages: int = 20) -> list:
         return mobile_search.search_vacancies(
-            self.acc, text, area_id, per_page, page, filters)
+            self.acc, text, area_id, per_page, page, filters, max_pages)
     def start_hedi(self) -> str:
         """Start the mobile-only HH AI vacancy-search assistant."""
         return mobile_hedi.start_hedi(self.acc)

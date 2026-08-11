@@ -754,10 +754,10 @@ async def api_suggest_urls(idx: int, extra_terms: str = ""):
         term = cmp_item.get("term", "").strip()
         if not term:
             continue
-        # ?text=...&area=1&order_by=publication_time для свежих
+        # ?text=...&area=113&order_by=publication_time для свежих
         url = (
             f"{hh_base()}/search/vacancy?text={_up.quote(term)}"
-            f"&area=1&order_by=publication_time&items_on_page=20"
+            f"&area=113&order_by=publication_time&items_on_page=20"
         )
         suggestions.append({
             "term": term,
@@ -769,7 +769,7 @@ async def api_suggest_urls(idx: int, extra_terms: str = ""):
     if resume_hash:
         url_resume = (
             f"{hh_base()}/search/vacancy?resume={resume_hash}"
-            f"&order_by=publication_time&items_on_page=20"
+            f"&area=113&order_by=publication_time&items_on_page=20"
         )
         suggestions.insert(0, {
             "term": f"По резюме «{audit.get('title', '?')}»",
@@ -1091,7 +1091,7 @@ def _url_preview_compute(url: str, cookies: dict) -> dict:
             text = qs.get("text", "").strip()
             if text and result["vacancies"]:
                 r2 = HH.get(
-                    f"{hh_base()}/search/applicant?text={_up.quote(text)}&area=1&clusters=true",
+                    f"{hh_base()}/search/applicant?text={_up.quote(text)}&area=113&clusters=true",
                     headers={"User-Agent": ua, "Accept": "application/json,text/html"},
                     cookies=cookies, timeout=10,
                 )

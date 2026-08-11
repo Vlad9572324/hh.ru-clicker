@@ -5673,7 +5673,7 @@ const JSON_CONFIG_TEMPLATE = {
     {"name": "Название шаблона", "text": "Текст сопроводительного письма..."}
   ],
   "url_pool": [
-    {"url": "https://hh.ru/search/vacancy?text=QA&area=1&order_by=publication_time&items_on_page=20", "pages": 40}
+    {"url": "https://hh.ru/search/vacancy?text=QA&area=113&order_by=publication_time&items_on_page=20", "pages": 40}
   ]
 };
 

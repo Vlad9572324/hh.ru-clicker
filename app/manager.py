@@ -35,7 +35,9 @@ def parse_search_url(url: str) -> tuple[str, int | str, dict]:
         return values[-1] if values else default
 
     text = _take("text", "")
-    area = _take("area", 1)
+    # HH area 113 = вся Россия. Ссылки без явного area (в частности старые
+    # автоссылки по resume) не должны молча ограничиваться Москвой (area=1).
+    area = _take("area", 113)
     # Pagination is controlled by the collector/mobile client.  These keys are
     # properties of the SSR URL, not vacancy filters.
     for key in ("page", "per_page", "items_on_page", "no_magic", "ored_clusters"):
@@ -48,8 +50,22 @@ def parse_search_url(url: str) -> tuple[str, int | str, dict]:
 
 
 def _uses_api_search(acc: dict, state) -> bool:
-    """Mobile accounts always search via API; web only uses API degradation."""
+    """Выбрать API-поиск, не меняя семантику сохранённых web-запросов.
+
+    Публичный ``api.hh.ru/vacancies`` не поддерживает персонализированный
+    query-параметр ``resume``: он молча игнорирует его и отдаёт общий поток.
+    Поэтому такие URL при живых cookies обязательно собираем с web-страницы.
+    """
     if str(acc.get("mode", "")).strip().lower() == "mobile":
+        effective_urls = acc.get("urls") or [
+            _url_entry(item)["url"] for item in CONFIG.url_pool
+        ]
+        has_resume_search = any(
+            "resume" in urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            for url in effective_urls if isinstance(url, str)
+        )
+        if has_resume_search and not state.cookies_expired:
+            return False
         return True
     return bool(
         state.cookies_expired
@@ -242,7 +258,10 @@ class BotManager:
 
     def _build_session_urls(self, resume_hash: str) -> list[str]:
         """URL поиска для браузерной сессии: resume-URL + keyword-URLs из глобального пула."""
-        resume_url = f"{hh_base()}/search/vacancy?resume={resume_hash}&order_by=publication_time&items_on_page=20"
+        resume_url = (
+            f"{hh_base()}/search/vacancy?resume={resume_hash}"
+            "&area=113&order_by=publication_time&items_on_page=20"
+        )
         urls = [resume_url]
         for item in CONFIG.url_pool:
             entry = _url_entry(item)
@@ -2136,11 +2155,24 @@ class BotManager:
             ids_for_url: set = set()
             if state._deleted:
                 break
+            if "resume" in query:
+                # api.hh.ru/vacancies игнорирует resume и возвращает общий поток.
+                # В degraded mode web cookies уже недоступны, поэтому безопаснее
+                # пропустить URL, чем обрабатывать нерелевантные вакансии.
+                log_debug(
+                    f"COLLECT_URL skipped [{state.short}] mode=mobile "
+                    f"reason=resume_filter_requires_web url={url}"
+                )
+                results_by_url[url] = ids_for_url
+                completed += pages
+                continue
             try:
-                # search_vacancies performs API pagination itself.  Restrict
-                # the manager's configured page window by slicing below.
+                # Ограничение передаём внутрь клиента: он не должен сначала
+                # загрузить 20 страниц, а затем выбросить лишние результаты.
                 items = get_client(acc).search_vacancies(
-                    text, area_id=area, per_page=50, page=0, filters=query)
+                    text, area_id=area, per_page=50, page=0, filters=query,
+                    max_pages=pages)
+                # Defensive cap для сторонних реализаций контракта.
                 items = items[:pages * 50]
                 completed += pages
                 state.status_detail = f"OAuth-сбор {min(completed, total_pages)}/{total_pages}"
@@ -2233,6 +2265,10 @@ class BotManager:
                 nonlocal completed
                 if state._deleted:
                     return url, set(), {}, {}, {}
+                log_debug(
+                    f"COLLECT_PAGE start [{state.short}] mode=web "
+                    f"page={page + 1} page_index={page} url={page_url}"
+                )
                 html = await fetch_page(session, page_url, sem, collect_req_kw)
                 completed += 1
                 state.status_detail = f"Загрузка {completed}/{total_tasks}"
@@ -2243,6 +2279,10 @@ class BotManager:
                     return url, set(), {}, {}, {}
                 if html:
                     ids = parse_ids(html)
+                    log_debug(
+                        f"COLLECT_PAGE parsed [{state.short}] mode=web "
+                        f"page={page + 1} vacancies={len(ids)} url={page_url}"
+                    )
                     salaries = parse_salaries(html, ids)
                     meta = parse_vacancy_meta(html)
                     schedules = parse_work_schedules(html, ids)
@@ -2256,6 +2296,10 @@ class BotManager:
                         else:
                             meta[vid] = sm
                     return url, ids, salaries, meta, schedules
+                log_debug(
+                    f"COLLECT_PAGE empty [{state.short}] mode=web "
+                    f"page={page + 1} url={page_url}"
+                )
                 return url, set(), {}, {}, {}
 
             tasks = [

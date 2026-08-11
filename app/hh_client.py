@@ -66,8 +66,8 @@ class HHClientBase(ABC):
         self.acc = acc
 
     @abstractmethod
-    def search_vacancies(self, text: str, area_id=1, per_page: int = 20,
-                         page: int = 0, filters=None) -> list:
+    def search_vacancies(self, text: str, area_id=113, per_page: int = 20,
+                         page: int = 0, filters=None, max_pages: int = 20) -> list:
         """Поиск вакансий; mobile: GET api.hh.ru/vacancies."""
         ...
 
