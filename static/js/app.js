@@ -2117,35 +2117,43 @@ function _llmRenderHrLinks(rows) {
       const done = !!_llmLinksDone[key];
       const negIdAttr = String(l.neg_id).replace(/'/g, "&#39;");
       const urlAttr = l.url.replace(/'/g, "&#39;");
-      // Вся строка — <a>. Клик где угодно на строке (кроме кнопки «Пройти»)
-      // открывает URL в новой вкладке. Кнопка имеет свой onclick с event.stopPropagation.
+      // 3 отдельных clickable-зоны:
+      //   [🔗 URL]        → открыть саму ссылку HR-а (форма/Telegram/…)
+      //   [employer/msg]  → открыть чат с этим HR на hh.ru
+      //   [Пройти]        → toggle localStorage-метки «сделано»
+      // Раньше вся строка была одним <a> на URL — юзер не мог перейти в чат.
       const rowStyle = done
-        ? 'display:flex;gap:8px;padding:6px 8px;background:rgba(0,200,80,0.06);border-radius:4px;align-items:flex-start;font-size:11px;opacity:0.55;text-decoration:none;color:inherit;cursor:pointer;border:1px solid transparent'
-        : 'display:flex;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:4px;align-items:flex-start;font-size:11px;text-decoration:none;color:inherit;cursor:pointer;border:1px solid transparent;transition:border-color 0.15s';
+        ? 'display:flex;gap:8px;padding:6px 8px;background:rgba(0,200,80,0.06);border-radius:4px;align-items:flex-start;font-size:11px;opacity:0.55;border:1px solid transparent'
+        : 'display:flex;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:4px;align-items:flex-start;font-size:11px;border:1px solid transparent;transition:border-color 0.15s';
       const urlStyle = done
         ? `color:${g.type.color};text-decoration:line-through;font-weight:600;flex-shrink:0;white-space:nowrap`
         : `color:${g.type.color};text-decoration:underline;font-weight:600;flex-shrink:0;white-space:nowrap`;
       const shortLabel = _shortUrl(l.url);
+      // URL в чат HH — открывает переговоры конкретного employer'а. Работает
+      // и для web, и для mobile app'а (deep-link).
+      const chatUrl = `https://hh.ru/negotiations/item?topicId=${encodeURIComponent(l.neg_id)}`;
       const btn = done
-        ? `<button onclick="event.preventDefault();event.stopPropagation();_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
+        ? `<button onclick="_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
                     style="background:transparent;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:10px;flex-shrink:0"
                     title="Снять отметку — вернуть в список активных">✓ Пройдено</button>`
-        : `<button onclick="event.preventDefault();event.stopPropagation();_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
+        : `<button onclick="_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
                     style="background:transparent;border:1px solid var(--dim);color:var(--dim);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:10px;flex-shrink:0"
                     title="Отметить что заполнил/прошёл — уберётся из активных">☐ Пройти</button>`;
       return `
-        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
-           style="${rowStyle}"
-           onmouseover="this.style.borderColor='${g.type.color}'"
-           onmouseout="this.style.borderColor='transparent'">
-          <span style="${urlStyle}" title="${esc(l.url)}">🔗 ${esc(shortLabel)}</span>
-          <span style="color:var(--dim);flex:1;min-width:0">
+        <div style="${rowStyle}"
+             onmouseover="this.style.borderColor='${g.type.color}'"
+             onmouseout="this.style.borderColor='transparent'">
+          <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer"
+             style="${urlStyle}" title="Открыть форму: ${esc(l.url)}">🔗 ${esc(shortLabel)}</a>
+          <a href="${esc(chatUrl)}" target="_blank" rel="noopener noreferrer"
+             style="color:var(--dim);flex:1;min-width:0;text-decoration:none;cursor:pointer"
+             title="Открыть чат с ${esc(l.employer)} на hh.ru">
             <b style="color:var(--fg)">${esc(l.employer)}</b> · ${esc(l.vacancy_title || '—')}
             <span style="color:var(--dim);font-size:10px;margin-left:6px">${_llmFmtRel(l.last_seen)}</span>
-            <div style="color:var(--fg);opacity:0.75;font-size:10px;margin-top:2px;font-style:italic">«${esc(l.snippet)}»</div>
-          </span>
+            <div style="color:var(--fg);opacity:0.75;font-size:10px;margin-top:2px;font-style:italic">«${esc(l.snippet)}» <span style="color:var(--cyan);font-style:normal">→ открыть чат</span></div>
+          </a>
           ${btn}
-        </a>
+        </div>
       `;
     }).join('');
     const gDone = g.items.filter(l => _llmLinksDone[_llmLinkKey(l)]).length;
