@@ -6586,7 +6586,12 @@ function exportDbCSV() {
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────
+// Значения — data-tab у <div class="tab">. `llm` был добавлен в HTML, но
+// пропущен здесь → whitelist в restore-таб-с-localStorage не пропускал `llm`
+// → после F5 юзер оказывался на Главной. TAB_KEYS также используется для
+// hotkey переключения (1-9,0), llm сейчас без хоткея (закончились цифры).
 const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'hh','7':'views','8':'apply','9':'settings','0':'hedi'};
+const _ALL_TAB_IDS = new Set([...Object.values(TAB_KEYS), 'llm']);
 
 // ── HH mobile OTP authentication ───────────────────────────
 const MOBILE_AUTH_FIELDS = [
@@ -6834,9 +6839,9 @@ document.getElementById('lang-btn').textContent = lang.toUpperCase();
 try {
   const savedTab = localStorage.getItem('hh-tab');
   // Whitelist check: localStorage controllable, не вставляем сырое значение
-  // в CSS селектор (kimi-r14-3 #7).
-  const VALID_TABS = new Set(Object.values(TAB_KEYS));
-  if (savedTab && VALID_TABS.has(savedTab)) {
+  // в CSS селектор (kimi-r14-3 #7). Используем _ALL_TAB_IDS вместо
+  // TAB_KEYS.values() — TAB_KEYS это хоткей-мапа, там нет `llm`.
+  if (savedTab && _ALL_TAB_IDS.has(savedTab)) {
     const tabEl = document.querySelector(`.tab[data-tab="${savedTab}"]`);
     if (tabEl) tabEl.click();
   }
