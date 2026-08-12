@@ -2129,9 +2129,10 @@ function _llmRenderHrLinks(rows) {
         ? `color:${g.type.color};text-decoration:line-through;font-weight:600;flex-shrink:0;white-space:nowrap`
         : `color:${g.type.color};text-decoration:underline;font-weight:600;flex-shrink:0;white-space:nowrap`;
       const shortLabel = _shortUrl(l.url);
-      // URL в чат HH — открывает переговоры конкретного employer'а. Работает
-      // и для web, и для mobile app'а (deep-link).
-      const chatUrl = `https://hh.ru/negotiations/item?topicId=${encodeURIComponent(l.neg_id)}`;
+      // URL в чат HH: `hh.ru/chat/<neg_id>` — тот же формат что использует
+      // интервью-таблица (renderInterviews). `negotiations/item?topicId=`
+      // возвращает 404 (deprecated).
+      const chatUrl = `https://hh.ru/chat/${encodeURIComponent(l.neg_id)}`;
       const btn = done
         ? `<button onclick="_llmToggleLinkDone('${negIdAttr}','${urlAttr}',this)"
                     style="background:transparent;border:1px solid var(--green);color:var(--green);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:10px;flex-shrink:0"
@@ -2188,7 +2189,7 @@ function _llmRenderLiveBar(snap) {
     if (busy) {
       const neg = a.llm_current_neg_id || '';
       const negLink = neg
-        ? `<a href="https://hh.ru/negotiations/item?topicId=${esc(neg)}" target="_blank" style="color:var(--cyan);text-decoration:none" title="Открыть чат в HH">#${esc(neg)}</a>`
+        ? `<a href="https://hh.ru/chat/${esc(neg)}" target="_blank" style="color:var(--cyan);text-decoration:none" title="Открыть чат в HH">#${esc(neg)}</a>`
         : '';
       mid = `<span style="color:var(--cyan);font-weight:600">🔄 [${a.llm_current_idx}/${a.llm_current_total}]</span>
              <span style="color:var(--fg)">${esc(a.llm_current_employer || '?')}</span>
