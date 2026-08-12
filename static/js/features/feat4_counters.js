@@ -103,7 +103,10 @@
 
   function refresh(snap) {
     if (refreshInFlight) return;
-    const accs = ((snap && snap.accounts) || []).filter(a => a && !a.temp);
+    // Раньше фильтровали `!a.temp` — но mobile OTP-логин создаёт temp-account'ы,
+    // а /api/account/{idx}/counters_v2 работает и для них через
+    // bot._get_apply_acc. При одном mobile-аккаунте counters в header были пустые.
+    const accs = ((snap && snap.accounts) || []).filter(a => a && !a._deleted);
     if (!accs.length) return; // нет основных аккаунтов — показывать нечего
     refreshInFlight = true;
     Promise.allSettled(accs.map(a => fetchOne(a.idx)))

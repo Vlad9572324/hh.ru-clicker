@@ -49,7 +49,11 @@
   function getAccounts() {
     var snap = window.State && window.State.lastSnapshot;
     var accs = (snap && snap.accounts) || [];
-    return accs.filter(function (a) { return a && !a.temp; });
+    // Раньше фильтровали `!a.temp` — но mobile OTP-логин создаёт ИМЕННО
+    // temp-account'ы (a.temp=true), для них /api/account/{idx}/hh_recommendations
+    // работает через bot._get_apply_acc. Юзер видел пустой dropdown при
+    // единственном mobile-аккаунте. Оставляем только не-удалённые.
+    return accs.filter(function (a) { return a && !a._deleted; });
   }
 
   function currentAccIdx() {
