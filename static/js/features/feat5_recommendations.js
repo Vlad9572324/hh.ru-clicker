@@ -47,7 +47,12 @@
   function $(id) { return document.getElementById(id); }
 
   function getAccounts() {
-    var snap = window.State && window.State.lastSnapshot;
+    // app.js объявляет State через top-level `const`. Такой binding доступен
+    // последующим classic scripts, но (в отличие от `var`) не становится
+    // window.State. Чтение только через window.State поэтому всегда давало
+    // пустой список, хотя аккаунты уже были в основном UI.
+    var appState = (typeof State !== 'undefined') ? State : window.State;
+    var snap = appState && appState.lastSnapshot;
     var accs = (snap && snap.accounts) || [];
     // Раньше фильтровали `!a.temp` — но mobile OTP-логин создаёт ИМЕННО
     // temp-account'ы (a.temp=true), для них /api/account/{idx}/hh_recommendations
