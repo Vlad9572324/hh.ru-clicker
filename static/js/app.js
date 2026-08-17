@@ -7,8 +7,18 @@ let lang = (_storedLang === 'ru' || _storedLang === 'en') ? _storedLang : 'ru';
 // Если backend требует HH_BOT_API_KEY, прокидываем X-API-Key в каждый запрос.
 // Поддерживаются 2 источника: ?key=... в URL → переносится в localStorage; либо вручную в localStorage.
 (function() {
-  const apiKey = (new URLSearchParams(location.search).get('key') || localStorage.getItem('hh-api-key') || '').trim();
+  const _urlParams = new URLSearchParams(location.search);
+  const _urlKey = _urlParams.get('key');
+  const apiKey = (_urlKey || localStorage.getItem('hh-api-key') || '').trim();
   if (apiKey) localStorage.setItem('hh-api-key', apiKey);
+  // Ключ в query string → в history/bookmarks/sync → утечка. Убираем сразу
+  // после чтения, оставляя остальные параметры (аудит 2026-08-17, critical).
+  if (_urlKey && window.history && typeof window.history.replaceState === 'function') {
+    _urlParams.delete('key');
+    const q = _urlParams.toString();
+    const clean = location.pathname + (q ? '?' + q : '') + location.hash;
+    try { window.history.replaceState(null, '', clean); } catch (_) {}
+  }
   if (!apiKey) return;
   const _origFetch = window.fetch.bind(window);
   window.fetch = (resource, init = {}) => {
@@ -917,7 +927,17 @@ function llmProfilesRead() {
   });
 }
 
+// Аудит 2026-08-17 #14: раньше два быстрых кликa на «Сохранить» стартовали
+// параллельные POST, завершившиеся в непредсказуемом порядке — устаревший
+// snapshot затирал более свежий. Сериализуем через promise-chain: пока
+// предыдущий save не завершён, следующий ждёт.
+let _llmSaveChain = Promise.resolve();
 async function llmSave(btn) {
+  const prev = _llmSaveChain;
+  _llmSaveChain = prev.catch(() => {}).then(() => _llmSaveImpl(btn));
+  return _llmSaveChain;
+}
+async function _llmSaveImpl(btn) {
   _llmSettingsEditing = false;
   clearTimeout(_llmSettingsEditTimer);
   const st = document.getElementById('llm-status');
@@ -926,11 +946,15 @@ async function llmSave(btn) {
   try {
     const profiles = llmProfilesRead();
     const mode = document.getElementById('llm-profile-mode')?.value || 'fallback';
-    // Save profiles separately
-    await fetch('/api/llm_profiles', {
+    // Аудит #30: раньше не проверяли res.ok первого запроса → ошибка
+    // сохранения профилей отображалась зелёным «Сохранено». Теперь падаем.
+    const rProfiles = await fetch('/api/llm_profiles', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({profiles, mode})
     });
+    if (!rProfiles.ok) throw new Error(`profiles HTTP ${rProfiles.status}`);
+    const pData = await rProfiles.json().catch(() => ({}));
+    if (pData && pData.ok === false) throw new Error(pData.error || 'profiles rejected');
     // Save other settings via llm_config
     const res = await fetch('/api/llm_config', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -944,7 +968,9 @@ async function llmSave(btn) {
         model: profiles[0]?.model || '',
       })
     });
-    const data = await res.json();
+    if (!res.ok) throw new Error(`config HTTP ${res.status}`);
+    const data = await res.json().catch(() => ({}));
+    if (data && data.ok === false) throw new Error(data.error || 'config rejected');
     if (st) {
       const ts = new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
       const promptLen = (document.getElementById('llm-system-prompt')?.value || '').length;
@@ -952,14 +978,11 @@ async function llmSave(btn) {
       st.innerHTML = `✅ Сохранено в ${ts} · профилей: <b>${profiles.length}</b> (с ключом: <b>${withKey}</b>) · промпт: <b>${promptLen}</b> симв.`;
       st.style.color = 'var(--green)';
     }
-    // Перерисуем fingerprint у каждого ключа — теперь юзер видит «sk-p…oTuvw (164 симв.)»
     document.querySelectorAll('#llm-profiles-list .lp-key').forEach(inp => _llmUpdateKeyFingerprint(inp));
   } catch(e) {
-    if (st) { st.textContent = '❌ ' + e; st.style.color = 'var(--red)'; }
+    if (st) { st.textContent = '❌ ' + (e.message || e); st.style.color = 'var(--red)'; }
   } finally {
     if (btn) btn.disabled = false;
-    // Дольше держим зелёный статус — юзер должен увидеть подтверждение.
-    setTimeout(() => { if (st && st.style.color === 'rgb(67, 207, 71)' || st && st.style.color === 'var(--green)') { /* keep until next edit */ } }, 8000);
   }
 }
 
@@ -1171,15 +1194,20 @@ function syncLlmSettings(snap) {
   // Во время редактирования не трогаем — иначе стёрли бы наполовину набранный ключ.
   const list = document.getElementById('llm-profiles-list');
   if (list && !_llmSettingsEditing) {
-    const snapCount = (cfg.llm_profiles || []).length;
-    const uiCount = list.children.length;
-    if (uiCount === 0 && snapCount > 0) {
-      cfg.llm_profiles.forEach(p => llmProfileAdd(p));
-    } else if (uiCount !== snapCount && snapCount > 0) {
-      // Backend знает больше/меньше — синхронизируем (перерисуем, ключи в snap нет,
-      // fingerprint подтянется на строке ниже через _llmUpdateKeyFingerprint).
+    const snapProfiles = cfg.llm_profiles || [];
+    // Аудит 2026-08-17 #13: раньше сравнивали только количество → правки в
+    // другой вкладке (переименование/смена модели/перестановка при том же
+    // количестве) не подтягивались. Fingerprint по несекретным полям всех
+    // профилей ловит любую содержательную правку.
+    const fpOf = p => (p && [p.name || '', p.model || '', p.base_url || '', p.provider || ''].join('|')) || '';
+    const snapFp = snapProfiles.map(fpOf).join('||');
+    const uiFp = Array.from(list.children).map(el => {
+      const q = sel => (el.querySelector(sel)?.value || '');
+      return [q('.lp-name'), q('.lp-model'), q('.lp-base'), q('.lp-provider')].join('|');
+    }).join('||');
+    if (snapFp !== uiFp) {
       list.innerHTML = '';
-      cfg.llm_profiles.forEach(p => llmProfileAdd(p));
+      snapProfiles.forEach(p => llmProfileAdd(p));
     }
   }
   // Обновим fingerprint api_key для каждой строки — даже если строка уже
@@ -3167,8 +3195,13 @@ function connect() {
   ws.onopen = () => {
     document.getElementById('conn-dot').classList.add('connected');
     State.reconnectDelay = 1000;
-    document.querySelectorAll('.btn-sm, .apply-btn, button[onclick]').forEach(b => {
-      if (b.id !== 'pause-btn') b.disabled = false;
+    // Аудит 2026-08-17 #16: раньше onopen делал disabled=false ВСЕМ кнопкам,
+    // включая кнопки in-flight async операций (save/apply/toggle) → юзер мог
+    // повторно кликнуть и запустить дубликат. Снимаем только у тех, у кого
+    // стоит наш ws-marker (был выключен ИМЕННО из-за разрыва WS).
+    document.querySelectorAll('button[data-ws-disabled="1"]').forEach(b => {
+      b.disabled = false;
+      b.removeAttribute('data-ws-disabled');
     });
   };
 
@@ -3198,8 +3231,13 @@ function connect() {
 
   ws.onclose = (ev) => {
     document.getElementById('conn-dot').classList.remove('connected');
+    // Помечаем ws-marker'ом, чтобы onopen снял disabled только с этих кнопок
+    // и не тронул те, что заблокированы in-flight операциями (аудит #16).
     document.querySelectorAll('.btn-sm, .apply-btn, button[onclick]').forEach(b => {
-      if (b.id !== 'pause-btn') b.disabled = true;
+      if (b.id !== 'pause-btn' && !b.disabled) {
+        b.disabled = true;
+        b.setAttribute('data-ws-disabled', '1');
+      }
     });
     // 4401 = server отверг api_key. Бесконечный reconnect — спам и пустой стрим
     // ошибок в логах (kimi-r14-2 #10). Останавливаем и показываем баннер.
@@ -6591,7 +6629,10 @@ function exportDbCSV() {
 // → после F5 юзер оказывался на Главной. TAB_KEYS также используется для
 // hotkey переключения (1-9,0), llm сейчас без хоткея (закончились цифры).
 const TAB_KEYS = {'1':'main','2':'log','3':'applied','4':'tests','5':'db','6':'hh','7':'views','8':'apply','9':'settings','0':'hedi'};
-const _ALL_TAB_IDS = new Set([...Object.values(TAB_KEYS), 'llm']);
+// 'recoh' — динамическая вкладка от feat5_recommendations.js, вставляется
+// после DOMContentLoaded. Whitelist обязан её знать, иначе F5 на вкладке
+// «Рекомендации» кидает юзера на Главную (аудит 2026-08-17 #29).
+const _ALL_TAB_IDS = new Set([...Object.values(TAB_KEYS), 'llm', 'recoh']);
 
 // ── HH mobile OTP authentication ───────────────────────────
 const MOBILE_AUTH_FIELDS = [
@@ -6835,17 +6876,29 @@ connect();
 // overwriting the saved prompt. Removing the init keeps the textarea empty
 // until the WS snapshot arrives (~200ms) which is the actual saved value.
 document.getElementById('lang-btn').textContent = lang.toUpperCase();
-// Restore last active tab from localStorage
-try {
-  const savedTab = localStorage.getItem('hh-tab');
-  // Whitelist check: localStorage controllable, не вставляем сырое значение
-  // в CSS селектор (kimi-r14-3 #7). Используем _ALL_TAB_IDS вместо
-  // TAB_KEYS.values() — TAB_KEYS это хоткей-мапа, там нет `llm`.
-  if (savedTab && _ALL_TAB_IDS.has(savedTab)) {
+// Restore last active tab from localStorage.
+// Whitelist check: localStorage controllable, не вставляем сырое значение
+// в CSS селектор (kimi-r14-3 #7). Используем _ALL_TAB_IDS вместо
+// TAB_KEYS.values() — TAB_KEYS это хоткей-мапа, там нет `llm`/`recoh`.
+// Аудит 2026-08-17 #29: 'recoh' — динамическая вкладка (feat5 инжектит на
+// DOMContentLoaded), в момент этого блока её ещё нет. Ретраим короткое окно.
+function _restoreSavedTab() {
+  try {
+    const savedTab = localStorage.getItem('hh-tab');
+    if (!savedTab || !_ALL_TAB_IDS.has(savedTab)) return true;
     const tabEl = document.querySelector(`.tab[data-tab="${savedTab}"]`);
-    if (tabEl) tabEl.click();
-  }
-} catch(e) {}
+    if (tabEl) { tabEl.click(); return true; }
+  } catch(e) { return true; }
+  return false;
+}
+if (!_restoreSavedTab()) {
+  // Дожидаемся регистрации динамических вкладок feature-скриптами.
+  let _tries = 0;
+  const _tabTimer = setInterval(() => {
+    _tries++;
+    if (_restoreSavedTab() || _tries > 20) clearInterval(_tabTimer);
+  }, 100);
+}
 // Request browser notification permission
 if ('Notification' in window && Notification.permission === 'default') {
   setTimeout(() => Notification.requestPermission(), 3000);

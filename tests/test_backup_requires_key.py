@@ -130,15 +130,26 @@ def test_resolve_host_external_host_without_expose_falls_back(monkeypatch):
 # ─── container opt-in: 0.0.0.0 без ключа только внутри контейнера ──────────
 
 
-def test_resolve_host_container_bind_optin_allows_wildcard(monkeypatch):
-    """0.0.0.0 + HH_BOT_ALLOW_CONTAINER_BIND=1 без ключа → bind разрешён.
+def test_resolve_host_container_bind_optin_requires_api_key(monkeypatch):
+    """0.0.0.0 + HH_BOT_ALLOW_CONTAINER_BIND=1 БЕЗ ключа → RuntimeError.
 
-    Docker DNAT идёт на container IP, поэтому внутри контейнера нужно слушать
-    0.0.0.0; граница безопасности — host-side loopback publish в `ports`.
+    Аудит 2026-08-17 CRITICAL #4: раньше opt-in давал bind без ключа с
+    одним лишь WARNING; стирание .env оголяло dashboard в LAN. Теперь
+    ALLOW_CONTAINER_BIND тоже требует HH_BOT_API_KEY.
     """
     monkeypatch.setenv("HH_BOT_HOST", "0.0.0.0")
     monkeypatch.setenv("HH_BOT_ALLOW_CONTAINER_BIND", "1")
     monkeypatch.delenv("HH_BOT_API_KEY", raising=False)
+    monkeypatch.delenv("HH_BOT_UNSAFE_EXPOSE", raising=False)
+    with pytest.raises(RuntimeError):
+        web_app._resolve_host()
+
+
+def test_resolve_host_container_bind_optin_with_key_allows_wildcard(monkeypatch):
+    """0.0.0.0 + HH_BOT_ALLOW_CONTAINER_BIND=1 С ключом → bind разрешён."""
+    monkeypatch.setenv("HH_BOT_HOST", "0.0.0.0")
+    monkeypatch.setenv("HH_BOT_ALLOW_CONTAINER_BIND", "1")
+    monkeypatch.setenv("HH_BOT_API_KEY", "test-key-value")
     monkeypatch.delenv("HH_BOT_UNSAFE_EXPOSE", raising=False)
     assert web_app._resolve_host() == "0.0.0.0"
 

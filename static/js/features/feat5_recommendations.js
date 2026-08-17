@@ -208,6 +208,12 @@
           .then(function (data) { return { res: res, data: data }; });
       })
       .then(function (out) {
+        // Аудит 2026-08-17 #15: раньше игнорировали, что юзер мог переключить
+        // аккаунт пока летел fetch → офферы аккаунта A прописывались в state
+        // как офферы аккаунта B (autoApplyAll потом слал по чужому). Сверяем.
+        if (currentAccIdx() !== accIdx) {
+          return;  // юзер уже сменил аккаунт, ответ невалиден
+        }
         var res = out.res, data = out.data;
         if (!res.ok || !data.ok) {
           state.offers = [];
@@ -283,6 +289,13 @@
     var accIdx = currentAccIdx();
     if (accIdx === null) {
       setStatus('Сначала выберите аккаунт', 'err');
+      return;
+    }
+    // Аудит 2026-08-17 #15: офферы могли быть загружены под другим аккаунтом
+    // (юзер переключился до нажатия «Применить все»). Отправка по чужому
+    // vacancy_id даст фиктивные ошибки. Требуем совпадения.
+    if (state.loadedAccIdx !== accIdx) {
+      setStatus('Список офферов не соответствует выбранному аккаунту — обновите', 'err');
       return;
     }
 

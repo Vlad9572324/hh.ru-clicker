@@ -46,4 +46,14 @@ def tmp_data_dir(tmp_path, monkeypatch):
                 monkeypatch.setattr(_config, name, data_dir / orig.name, raising=False)
     except ImportError:
         pass
+    # oauth.py держит СВОЮ Path-константу; без этого патча тесты OAuth-refresh
+    # реально перезаписывают data/oauth_tokens.json (аудит 2026-08-17, critical).
+    try:
+        from app import oauth as _oauth
+        if hasattr(_oauth, "_OAUTH_FILE"):
+            orig = _oauth._OAUTH_FILE
+            monkeypatch.setattr(_oauth, "_OAUTH_FILE",
+                                data_dir / orig.name, raising=False)
+    except ImportError:
+        pass
     yield data_dir

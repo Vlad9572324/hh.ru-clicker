@@ -67,7 +67,13 @@ def test_container_bind_docker_compose_smoke():
         # В обычном dev/CI без Docker всё равно проверяем критичный контракт
         # compose: публикация только на host loopback и opt-in container bind.
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        assert "127.0.0.1:8000:8000" in compose
+        # LAN-режим: bind 8000:8000 (без 127.0.0.1 префикса) + env_file с ключом.
+        # Аудит 2026-08-17 #4: ALLOW_CONTAINER_BIND теперь требует API_KEY,
+        # web_app.py fail-closed без ключа — .env файл обязателен.
+        assert re.search(r'^\s*-\s*"?8000:8000"?\s*$', compose, re.MULTILINE), \
+            "compose должен публиковать 8000:8000"
+        assert re.search(r'^\s*env_file:\s*$', compose, re.MULTILINE), \
+            "compose должен подгружать env_file (.env с HH_BOT_API_KEY)"
         assert re.search(r'^\s*HH_BOT_HOST:\s*["\']?0\.0\.0\.0["\']?\s*$', compose, re.MULTILINE)
         assert re.search(r'^\s*HH_BOT_ALLOW_CONTAINER_BIND:\s*["\']?1["\']?\s*$', compose, re.MULTILINE)
         return
@@ -110,13 +116,11 @@ def test_container_bind_subprocess_smoke(tmp_path):
     env = os.environ.copy()
     env.update({
         "HH_BOT_HOST": "0.0.0.0",
-        "HH_BOT_ALLOW_CONTAINER_BIND": "1",  # container opt-in, ключ НЕ задан
+        "HH_BOT_ALLOW_CONTAINER_BIND": "1",  # container opt-in
+        "HH_BOT_API_KEY": "smoke-test-key",   # аудит #4: opt-in требует ключ
         "HH_BOT_PORT": str(port),
         "PYTHONPATH": str(ROOT),
     })
-    # Защита от leak'а из внешнего окружения: smoke должен идти ровно по пути
-    # «0.0.0.0 без ключа», который в контейнере даёт только opt-in.
-    env.pop("HH_BOT_API_KEY", None)
     env.pop("HH_BOT_UNSAFE_EXPOSE", None)
 
     proc = subprocess.Popen(
@@ -149,10 +153,9 @@ def test_container_bind_subprocess_smoke(tmp_path):
             f"(последняя ошибка: {last_err}); лог:\n"
             f"{log_file.read_text(encoding='utf-8', errors='replace')[-4000:]}"
         )
-        # Opt-in сработал штатно: в stderr было предупреждение про границу
-        # безопасности (host-side loopback publish), а не RuntimeError.
-        log_text = log_file.read_text(encoding="utf-8", errors="replace")
-        assert "HH_BOT_ALLOW_CONTAINER_BIND" in log_text
+        # Opt-in сработал штатно: сервер поднялся без RuntimeError.
+        # Warning про ALLOW_CONTAINER_BIND убран (аудит #4) — теперь opt-in
+        # штатный путь с обязательным API-ключом, а не «фолбэк с оповещением».
     finally:
         if proc.poll() is None:
             proc.terminate()  # SIGTERM → graceful shutdown hook web_app.py

@@ -2465,7 +2465,17 @@ class BotManager:
             sender_id = last_msg.get("participantId", "")
             last_text = (last_msg.get("text") or "")[:40]
             wf = last_msg.get("workflowTransition") or {}
-            from_employer = bool(sender_id and cur_pid and sender_id != cur_pid)
+            # Аудит 2026-08-17 #27: если cur_pid не определён (пустой ответ
+            # /participants от mobile API), раньше from_employer всегда False
+            # → чаты с unread=0 от работодателя (ключевой кейс: HR прочитал
+            # твоё, ответил, HH сбросил unread) молча пропускались. Без cur_pid
+            # достоверно определить нельзя — консервативно считаем sender_id
+            # employer'ом (наш ответ всё равно ловится через _llm_sent_global /
+            # llm_replied_msgs дедупом на уровне цикла).
+            if cur_pid:
+                from_employer = bool(sender_id and sender_id != cur_pid)
+            else:
+                from_employer = bool(sender_id)
             # Early check: known 409 (persisted from DB or current session)
             if item_id in state._llm_no_chat:
                 skipped_locked += 1
@@ -2516,11 +2526,16 @@ class BotManager:
                 continue
             if wf:
                 wf_id = wf.get("id", "") if isinstance(wf, dict) else ""
-                if isinstance(wf_id, str) and wf_id:
+                # Аудит 2026-08-17 #26: mobile API возвращает и системные типы
+                # ("APPLICATION_ACCEPTED"), и числовые reference ("1234") строкой.
+                # Раньше любая непустая строка считалась системным событием и
+                # чат пропускался, включая обычные сообщения HR с числовым
+                # workflow_transition.id. Пропускаем только НЕ-цифровые строки.
+                if isinstance(wf_id, str) and wf_id and not wf_id.isdigit():
                     skipped_system += 1
                     log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, системное событие wf={wf_id!r}, пропуск")
                     continue
-                log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, wf.id={wf_id!r} (числовой, реальное сообщение)")
+                log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, wf.id={wf_id!r} (числовой/int, реальное сообщение)")
             # Не флудим логи структурой каждого item — только метаданные кандидата (swarm-16 #8).
             log_debug(f"LLM [{state.short}] {item_id}: ✅ кандидат unread={unread}, sender={sender_id}, len={len(last_text)}")
             candidates.append(item_id)
@@ -2603,7 +2618,9 @@ class BotManager:
                             f"\U0001f916 [{employer_short}] \U0001f6ab чат закрыт работодателем (chatWritePossibility=DISABLED), пропуск",
                             "warning", neg_id=neg_id)
                         state._llm_no_chat.add(neg_id)
-                        state.llm_replied_msgs[key] = None
+                        # Аудит 2026-08-17 #21/#28: раньше здесь state.llm_replied_msgs[key] = None,
+                        # но `key` создаётся позже (2655) → UnboundLocalError на каждом DISABLED-чате.
+                        # _llm_no_chat достаточно: этот neg_id больше в кандидаты не попадёт.
                         continue
 
                 if not thread.get("needs_reply") and not thread.get("chat_locked"):
@@ -2724,10 +2741,30 @@ class BotManager:
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                      employer=employer_short, vacancy_title=vacancy_title, vacancy_id=vacancy_id,
                                      chat_status="robot")
-                    ok = get_client(state.acc).send_message(neg_id, btn_text)
+                    # Аудит 2026-08-17 #10: раньше robot-flow отправлял сразу без
+                    # резервации global_key → под конкурентными циклами двух
+                    # аккаунтов один и тот же workflow_button слался дважды.
+                    # Резервируем ДО send, discard при неудаче — как в auto-send.
+                    with self._llm_sent_lock:
+                        if global_key in self._llm_sent_global:
+                            log_debug(f"LLM [{state.short}] {neg_id}: робот-кнопка уже отправлена (pid={cur_pid}), пропуск")
+                            state.llm_replied_msgs[key] = None
+                            continue
+                        self._llm_sent_global.add(global_key)
+                    try:
+                        ok = get_client(state.acc).send_message(neg_id, btn_text)
+                    except Exception:
+                        with self._llm_sent_lock:
+                            self._llm_sent_global.discard(global_key)
+                        raise
                     if ok and ok != "chat_not_found":
                         state.llm_replied_msgs[key] = None
                         replied += 1
+                        # Аудит #22: persist llm_sent+replied_msg_id, чтобы после
+                        # рестарта дедуп удержал factor robot-ответы, а не только
+                        # in-memory. Без этого перезапуск снова жмёт ту же кнопку.
+                        upsert_interview(neg_id, acc=state.short, employer=employer_short,
+                                         llm_sent=True, replied_msg_id=str(last_msg_id))
                         ts = datetime.now().strftime("%H:%M")
                         self.llm_log.appendleft({
                             "time": ts, "acc": state.short, "color": state.color,
@@ -2750,6 +2787,10 @@ class BotManager:
                         state.llm_replied_msgs[key] = None
                         log_debug(f"LLM [{state.short}] {neg_id}: робот-кнопка 409, чат закрыт — добавлен в _llm_no_chat")
                     elif not ok:
+                        # Отправка не удалась — отпускаем резервацию, чтобы
+                        # следующий цикл смог попробовать снова.
+                        with self._llm_sent_lock:
+                            self._llm_sent_global.discard(global_key)
                         state._llm_temp_skip[key] = time.time() + 1800
                     continue
 
@@ -2986,6 +3027,12 @@ class BotManager:
                 time.sleep(3)  # rate limit between messages
             except Exception as e:
                 log_exception(f"_process_llm_replies {neg_id}", e)
+            finally:
+                # Аудит 2026-08-17 #34: pending_chats раньше держал начальное
+                # число кандидатов до конца цикла — UI показывал «12 висят» уже
+                # после того, как 10 обработано. Декрементим по факту, чтобы
+                # прогресс был виден в реальном времени.
+                state.llm_pending_chats = max(0, state.llm_pending_chats - 1)
                 try:
                     # Чистим только текущий global_key. На иммедиатных exception'ах
                     # (до reserve блока) он = None — ничего не трогаем.

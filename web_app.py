@@ -56,25 +56,21 @@ def _resolve_host() -> str:
     raw = os.environ.get("HH_BOT_HOST", "127.0.0.1").strip()
     if raw in _SAFE_HOSTS:
         return raw
-    # Container opt-in проверяем ДО ключа: для 0.0.0.0 он самодостаточен,
-    # для любого другого non-loopback — нет (fallthrough на fail-closed путь).
-    if os.environ.get("HH_BOT_ALLOW_CONTAINER_BIND", "").strip() in ("1", "true", "yes"):
-        if raw == "0.0.0.0":
-            sys.stderr.write(
-                "[hh-bot] WARNING: bind 0.0.0.0 без HH_BOT_API_KEY разрешён через "
-                "HH_BOT_ALLOW_CONTAINER_BIND (container opt-in). Граница безопасности — "
-                "host-side loopback publish `127.0.0.1:8000:8000` в docker-compose ports. "
-                "Не убирай 127.0.0.1 префикс без HH_BOT_API_KEY.\n"
-            )
-            return raw
-    # Ключ проверяем ДО UNSAFE_EXPOSE: non-loopback bind без API-ключа
-    # запрещён даже при HH_BOT_UNSAFE_EXPOSE=1.
+    # Ключ проверяем ПЕРВЫМ: любой non-loopback bind, включая container opt-in,
+    # без HH_BOT_API_KEY = LAN-доступ к cookies/токенам/управлению без auth.
+    # Аудит 2026-08-17 CRITICAL #4: раньше ALLOW_CONTAINER_BIND=1 давал bind
+    # 0.0.0.0 без ключа с одним лишь WARNING — стирание .env полностью
+    # оголяло dashboard в LAN. Теперь fail-closed для ВСЕХ веток.
     if not os.environ.get("HH_BOT_API_KEY", "").strip():
         raise RuntimeError(
             f"HH_BOT_HOST={raw!r}: non-loopback bind без HH_BOT_API_KEY запрещён "
-            f"(даже при HH_BOT_UNSAFE_EXPOSE=1 и HH_BOT_ALLOW_CONTAINER_BIND=1). "
+            f"(включая HH_BOT_ALLOW_CONTAINER_BIND=1 и HH_BOT_UNSAFE_EXPOSE=1). "
             f"Задай API-ключ или верни host на loopback."
         )
+    # Container opt-in: с ключом bind на 0.0.0.0 допустим для Docker DNAT.
+    if os.environ.get("HH_BOT_ALLOW_CONTAINER_BIND", "").strip() in ("1", "true", "yes"):
+        if raw == "0.0.0.0":
+            return raw
     if os.environ.get("HH_BOT_UNSAFE_EXPOSE", "").strip() in ("1", "true", "yes"):
         return raw  # admin signed off, ключ задан
     sys.stderr.write(

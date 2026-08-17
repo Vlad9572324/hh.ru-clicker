@@ -1191,8 +1191,11 @@ def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
         log_debug(f"OAuth /negotiations send neg={neg_id}: HTTP {r.status_code} | {r.text[:200]}")
         if r.status_code in (200, 201, 204):
             return True
-        if r.status_code == 403:
-            # Invalidate token — потом lazy-refresh подхватит
+        if r.status_code == 401:
+            # 401 = auth failure → invalidate, следующий вызов сделает refresh.
+            # Аудит 2026-08-17 #25: раньше на 403 тоже invalidate, но 403 =
+            # permission denied (write forbidden/чат заблокирован) — валидный
+            # токен не спасёт, и wipe заставляет лишний refresh на каждый чат.
             rh = acc.get("resume_hash", "")
             if rh:
                 invalidate_oauth_token(rh, acc)
@@ -1245,12 +1248,26 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
             return True
         if r.status_code == 404:
             return "chat_not_found"
-        if r.status_code == 403:
-            # OAuth token может протухнуть. Invalidate чтобы _obtain_oauth_token
-            # сделал refresh на следующем вызове.
+        if r.status_code == 401:
+            # 401 = auth failure → invalidate + lazy refresh на следующем вызове.
+            # Аудит 2026-08-17 #25: 403 не инвалидируем — это permission denied
+            # (chat locked/write forbidden), валидный токен не спасёт, wipe
+            # только форсит лишний refresh на каждую заблокированную беседу.
             resume_hash = acc.get("resume_hash", "")
             if resume_hash:
                 invalidate_oauth_token(resume_hash, acc)
+            return False
+        if r.status_code == 403:
+            # Разбираем тело: forbidden с "not_found/closed/archived" → chat_not_found;
+            # без явного маркера — просто False (не трогаем токен).
+            try:
+                body = r.json()
+                errs = body.get("errors") or []
+                joined = " ".join(str(e.get("type","")) + " " + str(e.get("value","")) for e in errs).lower()
+                if any(m in joined for m in ("not_found", "not_exist", "archived", "closed", "chat_not_found")):
+                    return "chat_not_found"
+            except Exception:
+                pass
             return False
         if r.status_code == 409:
             try:

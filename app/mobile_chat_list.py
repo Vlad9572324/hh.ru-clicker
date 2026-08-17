@@ -140,12 +140,19 @@ def fetch_chat_list(acc: dict, max_pages: int = 5,
                 item.setdefault("lastMessage", {})
                 item.setdefault("writePossibility", {})
             items_by_id[item_id] = item
-            display = item.get("display") or {}
-            icon = display.get("icon") or {}
+            # Аудит 2026-08-17 #24: display/icon могут прийти строкой/None →
+            # раньше .get() на строке падал AttributeError и прерывал ВСЮ
+            # страницу чатов. Нормализуем через isinstance перед .get.
+            display = item.get("display")
+            if not isinstance(display, dict):
+                display = {}
+            icon = display.get("icon")
+            if not isinstance(icon, dict):
+                icon = {}
             display_info[item_id] = {
-                "title": display.get("title", ""),
-                "subtitle": display.get("subtitle", ""),
-                "icon_url": icon.get("url", "") if isinstance(icon, dict) else "",
+                "title": display.get("title", "") if isinstance(display.get("title"), str) else "",
+                "subtitle": display.get("subtitle", "") if isinstance(display.get("subtitle"), str) else "",
+                "icon_url": icon.get("url", "") if isinstance(icon.get("url"), str) else "",
             }
 
         if not current_participant_id:

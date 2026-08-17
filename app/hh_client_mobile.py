@@ -118,6 +118,7 @@ class MobileHHClient(HHClient):
         # весь метод на web, где нет filter_unread → мы бы тихо потеряли
         # 300+ старых непрочитанных. Реrent-пасс должен отработать независимо.
         # Re-raise только если оба пасса упали.
+        from app.hh_mobile_transport import MobileAPIError, is_fallback_status
         unread_items, unread_display, unread_cur = {}, {}, ""
         recent_items, recent_display, recent_cur = {}, {}, ""
         unread_err: Exception | None = None
@@ -136,6 +137,14 @@ class MobileHHClient(HHClient):
             recent_err = e
         if unread_err and recent_err:
             raise recent_err
+        # Аудит 2026-08-17 #12: раньше success recent + fail unread молча
+        # возвращал только recent → бот терял 300+ старых непрочитанных, а
+        # FallbackHHClient не переключался на web (никто не бросил ошибку).
+        # Если ЛЮБОЙ пасс упал с fallback-статусом (401/5xx) — пере-raise,
+        # чтобы FallbackHHClient сделал полный switch на web со всей глубиной.
+        for err in (unread_err, recent_err):
+            if isinstance(err, MobileAPIError) and is_fallback_status(err.status_code):
+                raise err
         # merge: свежие перезаписывают unread (у recent актуальнее lastMessage
         # если между вызовами HR прислал новое сообщение).
         items = {**unread_items, **recent_items}
