@@ -430,12 +430,18 @@ async def api_session_delete(idx: int):
             new_temp_states[new_i] = state
         bot.temp_states = new_temp_states
     # Join за пределами lock — сам worker может пытаться взять lock изнутри.
+    # Аудит round-2 #2: раньше sync join(timeout=5) блокировал uvicorn event
+    # loop на 10s (два worker'а × 5с). Уводим join в thread чтобы loop дышал.
     if removed_state is not None:
-        for t in getattr(removed_state, "_workers", []):
-            try:
-                t.join(timeout=5)
-            except Exception:
-                pass
+        import asyncio as _aio
+        threads = list(getattr(removed_state, "_workers", []))
+        def _join_all():
+            for t in threads:
+                try:
+                    t.join(timeout=5)
+                except Exception:
+                    pass
+        await _aio.get_event_loop().run_in_executor(None, _join_all)
     save_browser_sessions(bot.temp_sessions)
     return {"status": "ok", "message": f"Сессия удалена: {removed.get('name')}"}
 

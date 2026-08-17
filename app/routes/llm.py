@@ -222,20 +222,18 @@ async def api_llm_reset_replied():
     """Сбросить историю отправленных LLM-ответов для всех аккаунтов."""
     all_states = list(bot.account_states) + list(bot.temp_states.values())
     cleared = []
-    # Аудит 2026-08-17 #11: раньше clear() без per-account _llm_lock мог
-    # снести резервацию сообщения, которое прямо сейчас отправляется в другом
-    # потоке → повторный цикл найдёт chat как un-replied и отправит дубликат.
-    # Держим глобальный _llm_sent_lock ПЛЮС per-state._llm_lock во время сброса.
-    with bot._llm_sent_lock:
-        n_global = len(bot._llm_sent_global)
-        for state in all_states:
-            lock = getattr(state, "_llm_lock", None)
-            if lock is None:
-                # старые state без lock — работаем как раньше
-                pass
-            else:
-                lock.acquire()
-            try:
+    # Аудит round-2 #1: раньше держали _llm_sent_lock и внутри пытались взять
+    # per-state _llm_lock → deadlock с worker'ом, который держит _llm_lock и
+    # берёт _llm_sent_lock внутри (LM manager.py:2445→2492). Fix: тот же
+    # lock-order, что worker (per-state ПЕРВЫМ, потом global).
+    # Round-1 #11: держим оба lock'а всё же нужно — иначе clear между worker's
+    # send и post-check создаст дубликат. Просто в правильном порядке.
+    for state in all_states:
+        lock = getattr(state, "_llm_lock", None)
+        if lock is not None:
+            lock.acquire()
+        try:
+            with bot._llm_sent_lock:
                 n_replied = len(state.llm_replied_msgs)
                 n_skip = len(state._llm_temp_skip)
                 n_no_chat = len(state._llm_no_chat)
@@ -248,10 +246,12 @@ async def api_llm_reset_replied():
                 cleared.append({"acc": state.short, "replied_cleared": n_replied,
                                 "skip_cleared": n_skip, "no_chat_cleared": n_no_chat,
                                 "drafts_cleared": n_drafts})
-            finally:
-                if lock is not None:
-                    lock.release()
-        # Глобальный dedup чистим последним, уже под _llm_sent_lock (see above).
+        finally:
+            if lock is not None:
+                lock.release()
+    # Глобальный dedup чистим последним — все per-state циклы уже разошлись.
+    with bot._llm_sent_lock:
+        n_global = len(bot._llm_sent_global)
         bot._llm_sent_global.clear()
     bot._add_log("system", "green", f"\U0001f916 История LLM-ответов сброшена для {len(cleared)} аккаунтов + {n_global} глобальных записей", "success")
     return {"ok": True, "cleared": cleared, "global_cleared": n_global}

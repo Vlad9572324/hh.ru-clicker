@@ -324,10 +324,14 @@ class BotManager:
         t2 = threading.Thread(target=self._fetch_hh_stats_worker, args=(900 + temp_idx, state), daemon=True, name=f"stats-{temp_idx}")
         t1.start()
         t2.start()
-        # Store handles + attach на state — stop()/deactivate join'ит их (аудит #6/#19).
+        # Store handles + attach на state — stop()/deactivate join'ит их (round-1 #6/#19).
+        # Round-2 #4: раньше _temp_workers extend без cleanup → каждый цикл
+        # activate/deactivate добавлял 2 dead Thread-объекта навсегда. Чистим
+        # завершённые перед extend.
         state._workers = [t1, t2]
         if not hasattr(self, "_temp_workers"):
             self._temp_workers = []
+        self._temp_workers[:] = [t for t in self._temp_workers if t.is_alive()]
         self._temp_workers.extend([t1, t2])
         try:
             self._start_ws_push(state)
@@ -585,21 +589,18 @@ class BotManager:
             ws_manager.stop_all()
         except Exception:
             pass
-        # Аудит 2026-08-17 #6: join всех worker'ов с общим timeout, чтобы
-        # in-flight цикл добежал до `if _stop_event: return` ДО того как
-        # save_executor выключится. Иначе поставленные в очередь save-задачи
-        # ловят RuntimeError и applied-запись теряется.
-        workers = list(getattr(self, "_workers", []))
-        for t in workers:
+        # Аудит round-1 #6: join всех worker'ов чтобы in-flight цикл добежал
+        # до `if _stop_event: return` ДО того как save_executor выключится.
+        # Round-2 #3: раньше join(timeout=15) на каждый = 300с для 10 accounts.
+        # Используем ОБЩИЙ deadline, чтобы shutdown был ограничен сверху.
+        import time as _time
+        deadline = _time.monotonic() + 20  # весь shutdown уложить в ~20с
+        for t in list(getattr(self, "_workers", [])) + list(getattr(self, "_temp_workers", [])):
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                t.join(timeout=15)
-            except Exception:
-                pass
-        # Аналогично для temp-session воркеров, стартующих в activate_session.
-        temp_workers = list(getattr(self, "_temp_workers", []))
-        for t in temp_workers:
-            try:
-                t.join(timeout=5)
+                t.join(timeout=remaining)
             except Exception:
                 pass
 

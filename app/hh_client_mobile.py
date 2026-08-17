@@ -60,6 +60,7 @@ from app import (
 from app.hh_client import HHClient
 from app.hh_http import egress_proxies
 from app.llm import _randomize_text
+from app.logging_utils import log_debug
 
 
 class MobileHHClient(HHClient):
@@ -137,14 +138,22 @@ class MobileHHClient(HHClient):
             recent_err = e
         if unread_err and recent_err:
             raise recent_err
-        # Аудит 2026-08-17 #12: раньше success recent + fail unread молча
-        # возвращал только recent → бот терял 300+ старых непрочитанных, а
-        # FallbackHHClient не переключался на web (никто не бросил ошибку).
-        # Если ЛЮБОЙ пасс упал с fallback-статусом (401/5xx) — пере-raise,
-        # чтобы FallbackHHClient сделал полный switch на web со всей глубиной.
-        for err in (unread_err, recent_err):
-            if isinstance(err, MobileAPIError) and is_fallback_status(err.status_code):
-                raise err
+        # Round-1 #12: раньше success recent + fail unread молча возвращал
+        # только recent → терял 300+ старых непрочитанных, FallbackHHClient
+        # не переключался.
+        # Round-2 #11 correction: полный re-raise выбрасывает уже собранные
+        # recent → если web-fallback тоже упадёт, теряем оба источника.
+        # Компромисс: если fallback-статус пришёл в recent-пассе (основной
+        # backlog) — re-raise. Если только в unread-пассе — логируем и
+        # возвращаем recent как есть (backlog хотя бы частично живёт).
+        if isinstance(recent_err, MobileAPIError) and is_fallback_status(recent_err.status_code):
+            raise recent_err
+        if isinstance(unread_err, MobileAPIError) and is_fallback_status(unread_err.status_code):
+            log_debug(
+                f"mobile fetch_chat_list: unread-пасс упал HTTP {unread_err.status_code}, "
+                f"возвращаем только recent ({len(recent_items)} шт.) — часть старых "
+                f"непрочитанных может быть невидна до следующего цикла"
+            )
         # merge: свежие перезаписывают unread (у recent актуальнее lastMessage
         # если между вызовами HR прислал новое сообщение).
         items = {**unread_items, **recent_items}

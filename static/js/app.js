@@ -1199,11 +1199,16 @@ function syncLlmSettings(snap) {
     // другой вкладке (переименование/смена модели/перестановка при том же
     // количестве) не подтягивались. Fingerprint по несекретным полям всех
     // профилей ловит любую содержательную правку.
-    const fpOf = p => (p && [p.name || '', p.model || '', p.base_url || '', p.provider || ''].join('|')) || '';
+    // Аудит round-2 #6: раньше читали .lp-base/.lp-provider (нет таких
+    // классов!) → snapFp с непустым base_url всегда != uiFp → бесконечный
+    // rebuild профилей на каждом snapshot. Реальные классы: .lp-name /
+    // .lp-model / .lp-url (не base) / .lp-enabled.
+    const fpOf = p => (p && [p.name || '', p.model || '', p.base_url || '', (p.enabled !== false ? '1' : '0')].join('|')) || '';
     const snapFp = snapProfiles.map(fpOf).join('||');
     const uiFp = Array.from(list.children).map(el => {
       const q = sel => (el.querySelector(sel)?.value || '');
-      return [q('.lp-name'), q('.lp-model'), q('.lp-base'), q('.lp-provider')].join('|');
+      const en = el.querySelector('.lp-enabled')?.checked !== false ? '1' : '0';
+      return [q('.lp-name'), q('.lp-model'), q('.lp-url'), en].join('|');
     }).join('||');
     if (snapFp !== uiFp) {
       list.innerHTML = '';

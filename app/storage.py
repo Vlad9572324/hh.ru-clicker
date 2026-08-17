@@ -177,77 +177,58 @@ _tests_dirty = False
 _interviews_dirty = False
 
 
-def _save_applied_async():
-    """Save applied vacancies до конвергенции dirty-flag'а (durable atomic write)."""
-    global _applied_dirty
-    lock = _save_applied_lock  # local ref на случай reload модуля
+def _drain_and_write(lock, dirty_name: str, get_cache, path):
+    """Общий loop: пока dirty — читаем snapshot под _cache_lock, пишем,
+    повторяем. В finally re-submit если dirty был выставлен между нашей
+    проверкой и release'ом (аудит round-2 #7: без re-submit другой поток
+    ловит blocking=False fail пока мы держим lock, и dirty остаётся True
+    без активного writer'а навсегда).
+    """
     if not lock.acquire(blocking=False):
-        return  # another save in progress — он подхватит dirty перед выходом
+        return
+    resubmit_fn = _RESUBMIT_MAP[dirty_name]
     try:
         while True:
             with _cache_lock:
-                if not _applied_dirty:
+                if not globals()[dirty_name]:
                     return
-                data = copy.deepcopy(_cache_applied) if _cache_applied else {}
-                _applied_dirty = False
+                data = copy.deepcopy(get_cache()) if get_cache() else ({} if isinstance(get_cache(), dict) or get_cache() is None else [])
+                globals()[dirty_name] = False
             try:
-                _atomic_write_json(APPLIED_FILE, data)
+                _atomic_write_json(path, data)
             except Exception as e:
-                log_debug(f"_save_applied_async error: {e}")
-                # Восстанавливаем dirty — писать снова при следующей возможности.
+                log_debug(f"_drain_and_write({dirty_name}) error: {e}")
                 with _cache_lock:
-                    _applied_dirty = True
+                    globals()[dirty_name] = True
                 return
     finally:
+        with _cache_lock:
+            need_resubmit = bool(globals()[dirty_name])
         lock.release()
+        if need_resubmit:
+            _schedule_save(resubmit_fn)
+
+
+def _save_applied_async():
+    _drain_and_write(_save_applied_lock, "_applied_dirty",
+                     lambda: _cache_applied, APPLIED_FILE)
 
 
 def _save_tests_async():
-    """Save tests до конвергенции dirty-flag'а (durable atomic write)."""
-    global _tests_dirty
-    lock = _save_tests_lock
-    if not lock.acquire(blocking=False):
-        return
-    try:
-        while True:
-            with _cache_lock:
-                if not _tests_dirty:
-                    return
-                data = copy.deepcopy(_cache_tests) if _cache_tests else {}
-                _tests_dirty = False
-            try:
-                _atomic_write_json(TESTS_FILE, data)
-            except Exception as e:
-                log_debug(f"_save_tests_async error: {e}")
-                with _cache_lock:
-                    _tests_dirty = True
-                return
-    finally:
-        lock.release()
+    _drain_and_write(_save_tests_lock, "_tests_dirty",
+                     lambda: _cache_tests, TESTS_FILE)
 
 
 def _save_interviews_async():
-    """Save interviews до конвергенции dirty-flag'а (durable atomic write)."""
-    global _interviews_dirty
-    lock = _save_interviews_lock
-    if not lock.acquire(blocking=False):
-        return
-    try:
-        while True:
-            with _cache_lock:
-                if not _interviews_dirty:
-                    return
-                data = copy.deepcopy(_cache_interviews) if _cache_interviews else {}
-                _interviews_dirty = False
-            try:
-                _atomic_write_json(INTERVIEWS_FILE, data)
-            except Exception as e:
-                log_debug(f"_save_interviews_async error: {e}")
-                with _cache_lock:
-                    _interviews_dirty = True
-                return
-    finally:
-        lock.release()
+    _drain_and_write(_save_interviews_lock, "_interviews_dirty",
+                     lambda: _cache_interviews, INTERVIEWS_FILE)
+
+
+# Map dirty-flag → resubmit target. Заполнен ниже, после определения функций.
+_RESUBMIT_MAP: dict = {}
+_RESUBMIT_MAP["_applied_dirty"] = _save_applied_async
+_RESUBMIT_MAP["_tests_dirty"] = _save_tests_async
+_RESUBMIT_MAP["_interviews_dirty"] = _save_interviews_async
 
 
 def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
@@ -438,41 +419,55 @@ def _strip_sensitive_session_fields(s: dict) -> dict:
 
 
 _sessions_pending_snapshot: list | None = None
+_sessions_pending_seq: int = 0        # монотонный счётчик самого свежего pending
+_sessions_written_seq: int = 0        # последний seq, который записан на диск
 _sessions_pending_lock = threading.Lock()
 
 
 def save_browser_sessions(sessions: list, *, wait: bool = False):
     """Сохранить браузерные сессии; ``wait`` нужен для transactional flows.
 
-    Аудит 2026-08-17 #3: раньше snapshot делался ДО submit, а executor мог
-    выполнить два submit в произвольном порядке — старый snapshot затирал
-    свежий (напр. delete-session после cookies-refresh мог откатить delete).
-    Теперь writer берёт ПОСЛЕДНИЙ snapshot из _sessions_pending_snapshot под
-    lock; новые вызовы всегда обновляют pending, поэтому worker записывает
-    свежее состояние независимо от порядка выполнения.
+    Аудит round-1 #3: два worker'а в executor могли писать snapshot'ы в
+    произвольном порядке — старый затирал свежий. Round-2 #8: deepcopy
+    делался ДО pending_lock; A могла закончить deepcopy ПОСЛЕ того как B
+    уже записала свой более свежий snapshot, и перезаписать pending старым.
+    Fix: монотонный seq в момент захвата pending_lock; writer сравнивает.
     """
-    global _sessions_pending_snapshot
+    global _sessions_pending_snapshot, _sessions_pending_seq
     snapshot = [_strip_sensitive_session_fields(copy.deepcopy(s)) for s in sessions]
     with _sessions_pending_lock:
+        # Каждый новый вызов получает свежий seq. deepcopy сделан выше
+        # (могли долго), но seq присваивается ЗДЕСЬ атомарно с обновлением
+        # pending — конкурентный save с меньшим seq перезаписать не сможет.
+        _sessions_pending_seq += 1
+        my_seq = _sessions_pending_seq
         _sessions_pending_snapshot = snapshot
     def _write():
-        global _sessions_pending_snapshot
+        global _sessions_pending_snapshot, _sessions_written_seq
         with _save_sessions_lock:
             while True:
                 with _sessions_pending_lock:
                     pending = _sessions_pending_snapshot
+                    seq = _sessions_pending_seq
+                    if pending is None or seq <= _sessions_written_seq:
+                        return
                     _sessions_pending_snapshot = None
-                if pending is None:
-                    return
+                    # Помечаем seq как «в процессе записи» СРАЗУ, чтобы
+                    # параллельный save с меньшим seq не мог его откатить.
+                    pending_seq = seq
                 try:
                     _atomic_write_json(SESSIONS_FILE, pending)
                     _restrict_perms(SESSIONS_FILE)
+                    with _sessions_pending_lock:
+                        if pending_seq > _sessions_written_seq:
+                            _sessions_written_seq = pending_seq
                 except Exception as e:
                     log_debug(f"save_browser_sessions error: {e}")
-                    # Восстанавливаем pending — новая попытка при следующем submit.
+                    # Восстанавливаем pending если никто не залил свежее.
                     with _sessions_pending_lock:
-                        if _sessions_pending_snapshot is None:
+                        if _sessions_pending_snapshot is None or _sessions_pending_seq < pending_seq:
                             _sessions_pending_snapshot = pending
+                            _sessions_pending_seq = pending_seq
                     if wait:
                         raise
                     return

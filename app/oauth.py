@@ -104,6 +104,31 @@ def _refresh_lock_key(cached: dict | None, resume_hash: str) -> str:
     return f"resume:{resume_hash}"
 
 
+def _is_403_auth_related(r) -> bool:
+    """Определить: HTTP 403 от HH это auth-fail или business-permission?
+
+    Round-2 #9/#10: business 403 (write forbidden, chat locked) не должен
+    инвалидировать токен — валидный ключ не спасёт. Но auth-related 403
+    (token_revoked/invalid_token/insufficient_scope) — обязательно, иначе
+    протухший токен возвращает 403 навсегда без попыток refresh.
+    """
+    try:
+        body = r.json()
+        errs = body.get("errors") or []
+        joined = " ".join(
+            str(e.get("type", "")) + " " + str(e.get("value", ""))
+            for e in errs
+        ).lower()
+        # WWW-Authenticate header — стандартный маркер auth-fail в OAuth
+        www_auth = r.headers.get("www-authenticate", "").lower() if hasattr(r, "headers") else ""
+        auth_markers = ("token_revoked", "invalid_token", "token_expired",
+                        "insufficient_scope", "invalid_grant", "unauthorized",
+                        "expired_token", "bad_token")
+        return any(m in joined or m in www_auth for m in auth_markers)
+    except Exception:
+        return False
+
+
 def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
     """Удалить кэшированный токен (на 401/403 от API). После вызова следующий
     `_obtain_oauth_token` сделает свежий refresh или authorize.
@@ -1191,11 +1216,11 @@ def send_negotiation_message_oauth(acc: dict, neg_id, text: str) -> bool:
         log_debug(f"OAuth /negotiations send neg={neg_id}: HTTP {r.status_code} | {r.text[:200]}")
         if r.status_code in (200, 201, 204):
             return True
-        if r.status_code == 401:
-            # 401 = auth failure → invalidate, следующий вызов сделает refresh.
-            # Аудит 2026-08-17 #25: раньше на 403 тоже invalidate, но 403 =
-            # permission denied (write forbidden/чат заблокирован) — валидный
-            # токен не спасёт, и wipe заставляет лишний refresh на каждый чат.
+        if r.status_code == 401 or (r.status_code == 403 and _is_403_auth_related(r)):
+            # 401 = auth failure → invalidate + lazy refresh.
+            # 403 бывает и auth-related (revoked token, expired scope), и
+            # business (chat locked, write forbidden). Round-2 #9: только на
+            # business-403 не трогаем токен; auth-403 инвалидируем как 401.
             rh = acc.get("resume_hash", "")
             if rh:
                 invalidate_oauth_token(rh, acc)
@@ -1248,11 +1273,11 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
             return True
         if r.status_code == 404:
             return "chat_not_found"
-        if r.status_code == 401:
-            # 401 = auth failure → invalidate + lazy refresh на следующем вызове.
-            # Аудит 2026-08-17 #25: 403 не инвалидируем — это permission denied
-            # (chat locked/write forbidden), валидный токен не спасёт, wipe
-            # только форсит лишний refresh на каждую заблокированную беседу.
+        if r.status_code == 401 or (r.status_code == 403 and _is_403_auth_related(r)):
+            # 401 = auth failure; 403 с auth-маркером = revoked/expired token.
+            # Round-2 #10: business-403 не инвалидируем (chat locked), но
+            # auth-403 должен привести к refresh — иначе валящийся токен
+            # накапливает fail'ы навсегда.
             resume_hash = acc.get("resume_hash", "")
             if resume_hash:
                 invalidate_oauth_token(resume_hash, acc)
