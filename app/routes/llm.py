@@ -233,11 +233,6 @@ async def api_llm_reset_replied():
     import asyncio
     all_states = list(bot.account_states) + list(bot.temp_states.values())
 
-    # Snapshot глобального set до старта — только их удалим в конце.
-    with bot._llm_sent_lock:
-        stale_globals = set(bot._llm_sent_global)
-    stale_global_count = len(stale_globals)
-
     def _do_reset_sync():
         cleared = []
         skipped_busy = []
@@ -245,8 +240,6 @@ async def api_llm_reset_replied():
             lock = getattr(state, "_llm_lock", None)
             got = True
             if lock is not None:
-                # Round-3 #3: timeout=5с. Если worker застрял на LLM API →
-                # skip state, не блокируем reset и event loop бесконечно.
                 got = lock.acquire(timeout=5)
                 if not got:
                     skipped_busy.append(state.short)
@@ -268,21 +261,23 @@ async def api_llm_reset_replied():
             finally:
                 if lock is not None and got:
                     lock.release()
-        # Round-3 #4: удаляем ТОЛЬКО stale-snapshot ключи. Новые резервации,
-        # добавленные worker'ами пока мы шли по states, останутся защищены.
-        with bot._llm_sent_lock:
-            bot._llm_sent_global.difference_update(stale_globals)
+        # Round-4 #2/#3: глобальный _llm_sent_global НЕ трогаем.
+        # - #2: удаление stale-snapshot могло снести резервацию busy-state,
+        #       которого мы skipped — открывало дубликат-окно.
+        # - #3: ABA — worker A закончил → C зарезервировал тот же key →
+        #       difference_update удалил валидную C-резервацию.
+        # Global set имеет self-eviction (10000→5000) в manager.py,
+        # per-state clear достаточно для «начать заново» — worker обнаружит
+        # что replied_msgs пустой и пойдёт по чатам с нуля, global dedup
+        # защищает от cross-account дубликатов и должен переживать reset.
         return cleared, skipped_busy
 
-    # Round-3 #3: sync locks + IO — вне event loop.
     cleared, skipped_busy = await asyncio.get_event_loop().run_in_executor(None, _do_reset_sync)
     bot._add_log("system", "green",
-                 f"\U0001f916 История LLM-ответов сброшена для {len(cleared)} аккаунтов + "
-                 f"{stale_global_count} глобальных записей" +
+                 f"\U0001f916 История LLM-ответов сброшена для {len(cleared)} аккаунтов" +
                  (f" (пропущено занятых: {', '.join(skipped_busy)})" if skipped_busy else ""),
                  "success")
-    return {"ok": True, "cleared": cleared, "global_cleared": stale_global_count,
-            "skipped_busy": skipped_busy}
+    return {"ok": True, "cleared": cleared, "skipped_busy": skipped_busy}
 
 
 _LLM_DETECT_ALLOWED_HOSTS = {

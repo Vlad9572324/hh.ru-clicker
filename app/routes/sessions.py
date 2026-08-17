@@ -9,11 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-# Round-3 #8: dedicated small pool для join'ов при DELETE — иначе 32
-# параллельных удаления могли заполнить default asyncio executor и
-# застопить весь HTTP API. Отдельный bounded pool: DELETE-flood не
-# трогает основной executor, свои DELETE-в-очередь ждут своей очереди.
-_DELETE_JOIN_EXECUTOR = ThreadPoolExecutor(max_workers=4,
+# Round-3 #8: dedicated pool для join'ов при DELETE — иначе параллельные
+# удаления могли заполнить default asyncio executor и застопить весь HTTP API.
+# Round-4 #8: max_workers=4 давал до 50с задержки при 20 сессиях (5 групп × ~10с
+# на group). Увеличиваем до 16 — держим клиентский timeout <30с и покрываем
+# LAN-инсталляции с большим числом browser-сессий.
+_DELETE_JOIN_EXECUTOR = ThreadPoolExecutor(max_workers=16,
                                             thread_name_prefix="session-delete-join")
 from fastapi import APIRouter, Request
 

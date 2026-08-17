@@ -826,7 +826,12 @@ function _llmUpdateKeyFingerprint(inp) {
   const fp = row.querySelector('.lp-key-fingerprint');
   if (!fp) return;
   if (inp.value) {
-    fp.textContent = '✓ ' + _llmKeyFingerprint(inp.value);
+    const raw = _llmKeyFingerprint(inp.value);
+    fp.textContent = '✓ ' + raw;
+    // Round-4 #5: fingerprint sync-check в syncLlmSettings сравнивает
+    // decorated text с raw snapshot → всегда несовпадение. Кладём raw в
+    // dataset, UI сравнивает по dataset.fp а не по textContent.
+    fp.dataset.fp = raw;
     fp.style.color = 'var(--green)';
     return;
   }
@@ -837,12 +842,15 @@ function _llmUpdateKeyFingerprint(inp) {
   const cfg = State?.lastSnapshot?.config || {};
   const snapProf = (cfg.llm_profiles || [])[idx];
   if (snapProf && snapProf.key_set) {
-    fp.textContent = `🔒 на сервере: ${snapProf.key_fingerprint || '✓ есть'}`;
+    const raw = snapProf.key_fingerprint || '';
+    fp.textContent = `🔒 на сервере: ${raw || '✓ есть'}`;
+    fp.dataset.fp = raw;
     fp.style.color = 'var(--cyan)';
     fp.title = 'Ключ хранится на сервере. Введи новый чтобы перезаписать, или оставь пустым.';
   } else {
     // Явный плейсхолдер вместо пустого span — юзеру видно "ключа нет" вместо "визуально пусто".
     fp.textContent = '⚠ ключ не задан';
+    fp.dataset.fp = '';
     fp.style.color = 'var(--red)';
     fp.title = 'Вставь API ключ в поле ниже и подожди 1.5с — автосохранение включится.';
   }
@@ -1215,8 +1223,12 @@ function syncLlmSettings(snap) {
     const uiFp = Array.from(list.children).map(el => {
       const q = sel => (el.querySelector(sel)?.value || '');
       const en = el.querySelector('.lp-enabled')?.checked !== false ? '1' : '0';
-      const fpText = el.querySelector('.lp-key-fingerprint')?.textContent || '';
-      return [q('.lp-name'), q('.lp-model'), q('.lp-url'), en, fpText].join('|');
+      // Round-4 #5: читаем dataset.fp (raw fingerprint), не textContent
+      // (decorated с эмодзи/префиксом). textContent никогда не совпадёт с
+      // snapshot.key_fingerprint → был бесконечный rebuild.
+      const fp = el.querySelector('.lp-key-fingerprint');
+      const fpRaw = (fp?.dataset?.fp || '');
+      return [q('.lp-name'), q('.lp-model'), q('.lp-url'), en, fpRaw].join('|');
     }).join('||');
     if (snapFp !== uiFp) {
       list.innerHTML = '';
@@ -1964,8 +1976,16 @@ async function llmResetReplied(btn) {
   try {
     const r = await fetch('/api/llm_reset_replied', {method:'POST'});
     const data = await r.json();
-    btn.textContent = '✅ Сброшено';
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 4000);
+    // Round-4 #6: honestly report skipped busy states — user thought полный
+    // сброс произошёл, но их per-state markers не очистились (worker LLM-lock
+    // держал дольше 5с timeout). Юзеру нужно повторить сброс для них.
+    const busy = Array.isArray(data.skipped_busy) ? data.skipped_busy : [];
+    if (busy.length) {
+      btn.textContent = `⚠ Пропущены занятые: ${busy.join(', ')} — повторите`;
+    } else {
+      btn.textContent = '✅ Сброшено';
+    }
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 6000);
   } catch(e) {
     btn.textContent = orig; btn.disabled = false;
   }

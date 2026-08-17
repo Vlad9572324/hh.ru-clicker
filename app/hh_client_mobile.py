@@ -138,21 +138,24 @@ class MobileHHClient(HHClient):
             recent_err = e
         if unread_err and recent_err:
             raise recent_err
-        # Round-1 #12: success recent + fail unread терял старый backlog,
-        # FallbackHHClient не переключался.
-        # Round-2 #11: полный re-raise выбрасывал уже собранные recent.
-        # Round-3 #5: симметричная проблема — recent-fail с fallback-статусом
-        # уничтожал успешно собранный unread. Fix: НИКОГДА не re-raise если
-        # хоть один пасс собрал непустые items — возвращаем частичное,
-        # логируем ошибку. Fallback на web произойдёт только если оба пасса
-        # реально пустые (unread_err и recent_err оба выпали, обработано выше).
+        # Эволюция: round-1 #12 → round-2 #11 → round-3 #5 → round-4 #4.
+        # Правило: fallback на web делает FallbackHHClient когда мы re-raise
+        # MobileAPIError с fallback-статусом. НЕ re-raise когда собрано хоть
+        # что-то полезное — иначе теряем already-fetched. Специальный случай:
+        # unread законно пустой + recent упал = данных НЕТ, надо re-raise
+        # чтобы web-fallback показал recent чаты (иначе UI думает «чатов нет»).
         if isinstance(recent_err, MobileAPIError) and is_fallback_status(recent_err.status_code):
+            if not unread_items:
+                # Нет ни свежих (fail), ни старых (пусто) — эквивалент полного fail
+                raise recent_err
             log_debug(
                 f"mobile fetch_chat_list: recent-пасс упал HTTP {recent_err.status_code}, "
                 f"возвращаем unread как есть ({len(unread_items)} шт.) — "
                 f"свежие могут быть stale до следующего цикла"
             )
         if isinstance(unread_err, MobileAPIError) and is_fallback_status(unread_err.status_code):
+            if not recent_items:
+                raise unread_err  # симметрично: recent пустой + unread fail
             log_debug(
                 f"mobile fetch_chat_list: unread-пасс упал HTTP {unread_err.status_code}, "
                 f"возвращаем только recent ({len(recent_items)} шт.) — часть старых "

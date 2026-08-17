@@ -182,23 +182,37 @@ _save_interviews_lock = threading.Lock()
 _applied_dirty = False
 _tests_dirty = False
 _interviews_dirty = False
+# Round-4 #1: монотонный mutation seq (инкрементим на КАЖДОЙ mutation под
+# _cache_lock). Writer captureит seq на snapshot; в finally сравнивает
+# — если latest > snapshot значит concurrent mutation была, resubmit нужен
+# даже после write_failed (иначе dirty застревает до следующей mutation).
+_applied_mut_seq = 0
+_tests_mut_seq = 0
+_interviews_mut_seq = 0
+_SEQ_MAP = {
+    "_applied_dirty": "_applied_mut_seq",
+    "_tests_dirty": "_tests_mut_seq",
+    "_interviews_dirty": "_interviews_mut_seq",
+}
 
 
 def _drain_and_write(lock, dirty_name: str, get_cache, path):
-    """Общий loop: пока dirty — читаем snapshot под _cache_lock, пишем,
-    повторяем. В finally re-submit если dirty был выставлен ДРУГИМ mutation
-    между нашей проверкой и release'ом (round-2 #7).
+    """Общий loop: пока dirty — snapshot → write → повтор.
 
-    Round-3 #1: раньше при постоянной ошибке записи (disk readonly) мы
-    восстанавливали dirty=True И re-submit в finally → бесконечный
-    hot-loop без задержки. Теперь: write-error отделён от live-dirty —
-    resubmit ТОЛЬКО когда dirty пришёл извне (concurrent mutation), а
-    не тот же, что мы сами восстановили после fail'а.
+    Round-2 #7: finally re-submit если внешняя mutation случилась.
+    Round-3 #1: разделили write-fail от live-dirty, чтобы не hot-loop
+    при постоянной disk-error.
+    Round-4 #1: mut_seq различает «наш failed write восстановил dirty»
+    от «concurrent add_applied выставил dirty». Без seq после fail'а мы
+    suppressили resubmit даже если пришла новая mutation — данные
+    застревали в памяти до следующей mutation или shutdown/crash.
     """
     if not lock.acquire(blocking=False):
         return
     resubmit_fn = _RESUBMIT_MAP[dirty_name]
-    write_failed = False  # локальный флаг: наш последний write упал
+    seq_name = _SEQ_MAP[dirty_name]
+    write_failed = False
+    seen_seq_when_failed = 0
     try:
         while True:
             with _cache_lock:
@@ -206,6 +220,7 @@ def _drain_and_write(lock, dirty_name: str, get_cache, path):
                     return
                 data = copy.deepcopy(get_cache()) if get_cache() else ({} if isinstance(get_cache(), dict) or get_cache() is None else [])
                 globals()[dirty_name] = False
+                snap_seq = globals()[seq_name]
             try:
                 _atomic_write_json(path, data)
             except Exception as e:
@@ -213,15 +228,19 @@ def _drain_and_write(lock, dirty_name: str, get_cache, path):
                 with _cache_lock:
                     globals()[dirty_name] = True
                 write_failed = True
+                seen_seq_when_failed = snap_seq
                 return
     finally:
         with _cache_lock:
             still_dirty = bool(globals()[dirty_name])
+            latest_seq = globals()[seq_name]
         lock.release()
-        # Re-submit только если dirty вызван извне. write_failed => dirty=True
-        # сами восстановили ошибкой; следующий mutation через _schedule_save
-        # инициирует retry, но мы сами hot-loop не запускаем.
-        if still_dirty and not write_failed:
+        # Resubmit если:
+        # - dirty без failure = concurrent mutation ждёт (round-2 #7)
+        # - dirty после failure но с ПОСЛЕДНЕЙ mutation seq вырос =
+        #   внешняя mutation была во время нашего fail — не забрасываем
+        #   её из-за суперкаутиона (round-4 #1).
+        if still_dirty and (not write_failed or latest_seq > seen_seq_when_failed):
             _schedule_save(resubmit_fn)
 
 
@@ -255,11 +274,12 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
                      replied_msg_id: str = None,
                      vacancy_id: str = ""):
     """Создать или обновить запись об интервью-переговоре."""
-    global _interviews_dirty
+    global _interviews_dirty, _interviews_mut_seq
     _load_cache()
     now = datetime.now().isoformat(timespec="seconds")
     with _cache_lock:
         _interviews_dirty = True
+        _interviews_mut_seq += 1
         existing = _cache_interviews.get(neg_id, {})
         record = dict(existing)
         record["neg_id"] = neg_id
@@ -503,10 +523,11 @@ def _restrict_perms(path):
 
 
 def add_applied(account_name: str, vacancy_id: str, info: dict = None):
-    global _applied_dirty
+    global _applied_dirty, _applied_mut_seq
     _load_cache()
     with _cache_lock:
         _applied_dirty = True
+        _applied_mut_seq += 1  # round-4 #1: seq для отличия concurrent от fail-restored
         if account_name not in _cache_applied:
             _cache_applied[account_name] = {}
         existing = _cache_applied[account_name].get(vacancy_id, {})
@@ -538,11 +559,12 @@ def add_applied(account_name: str, vacancy_id: str, info: dict = None):
 
 def add_test_vacancy(vacancy_id: str, title: str = "", company: str = "",
                      account_name: str = "", resume_hash: str = ""):
-    global _tests_dirty
+    global _tests_dirty, _tests_mut_seq
     _load_cache()
     with _cache_lock:
         if vacancy_id not in _cache_tests:
             _tests_dirty = True
+            _tests_mut_seq += 1
             _cache_tests[vacancy_id] = {
                 "url": f"{hh_base()}/vacancy/{vacancy_id}",
                 "title": title,
