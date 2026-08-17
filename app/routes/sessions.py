@@ -5,8 +5,16 @@ Browser session routes (temporary accounts added via cookie paste).
 import asyncio
 import hashlib
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
+
+# Round-3 #8: dedicated small pool для join'ов при DELETE — иначе 32
+# параллельных удаления могли заполнить default asyncio executor и
+# застопить весь HTTP API. Отдельный bounded pool: DELETE-flood не
+# трогает основной executor, свои DELETE-в-очередь ждут своей очереди.
+_DELETE_JOIN_EXECUTOR = ThreadPoolExecutor(max_workers=4,
+                                            thread_name_prefix="session-delete-join")
 from fastapi import APIRouter, Request
 
 from app.config import accounts_data, hh_base
@@ -433,7 +441,6 @@ async def api_session_delete(idx: int):
     # Аудит round-2 #2: раньше sync join(timeout=5) блокировал uvicorn event
     # loop на 10s (два worker'а × 5с). Уводим join в thread чтобы loop дышал.
     if removed_state is not None:
-        import asyncio as _aio
         threads = list(getattr(removed_state, "_workers", []))
         def _join_all():
             for t in threads:
@@ -441,7 +448,9 @@ async def api_session_delete(idx: int):
                     t.join(timeout=5)
                 except Exception:
                     pass
-        await _aio.get_event_loop().run_in_executor(None, _join_all)
+        # Dedicated pool (round-3 #8) — 32 параллельных DELETE не забивают
+        # default asyncio executor, который используется другими API.
+        await asyncio.get_event_loop().run_in_executor(_DELETE_JOIN_EXECUTOR, _join_all)
     save_browser_sessions(bot.temp_sessions)
     return {"status": "ok", "message": f"Сессия удалена: {removed.get('name')}"}
 

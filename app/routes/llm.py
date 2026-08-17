@@ -219,42 +219,70 @@ async def api_llm_run_now():
 
 @router.post("/api/llm_reset_replied")
 async def api_llm_reset_replied():
-    """Сбросить историю отправленных LLM-ответов для всех аккаунтов."""
+    """Сбросить историю отправленных LLM-ответов для всех аккаунтов.
+
+    Round-1 #11: держим per-state + global locks чтобы clear не сносил
+    резервацию сообщения in-flight.
+    Round-2 #1: lock-order per-state → global (worker в этом же порядке).
+    Round-3 #3: acquire с timeout в to_thread — иначе застрявший worker
+    блокирует event loop (весь UI/WS зависает).
+    Round-3 #4: snapshot глобального set в НАЧАЛЕ; в конце удаляем
+    только эти записи, не сносим новые резервации, добавленные worker'ами
+    других аккаунтов пока reset проходил свой цикл.
+    """
+    import asyncio
     all_states = list(bot.account_states) + list(bot.temp_states.values())
-    cleared = []
-    # Аудит round-2 #1: раньше держали _llm_sent_lock и внутри пытались взять
-    # per-state _llm_lock → deadlock с worker'ом, который держит _llm_lock и
-    # берёт _llm_sent_lock внутри (LM manager.py:2445→2492). Fix: тот же
-    # lock-order, что worker (per-state ПЕРВЫМ, потом global).
-    # Round-1 #11: держим оба lock'а всё же нужно — иначе clear между worker's
-    # send и post-check создаст дубликат. Просто в правильном порядке.
-    for state in all_states:
-        lock = getattr(state, "_llm_lock", None)
-        if lock is not None:
-            lock.acquire()
-        try:
-            with bot._llm_sent_lock:
-                n_replied = len(state.llm_replied_msgs)
-                n_skip = len(state._llm_temp_skip)
-                n_no_chat = len(state._llm_no_chat)
-                n_drafts = len(getattr(state, "_llm_drafts", {}) or {})
-                state.llm_replied_msgs.clear()
-                state._llm_temp_skip.clear()
-                state._llm_no_chat.clear()
-                if hasattr(state, "_llm_drafts"):
-                    state._llm_drafts.clear()
-                cleared.append({"acc": state.short, "replied_cleared": n_replied,
-                                "skip_cleared": n_skip, "no_chat_cleared": n_no_chat,
-                                "drafts_cleared": n_drafts})
-        finally:
-            if lock is not None:
-                lock.release()
-    # Глобальный dedup чистим последним — все per-state циклы уже разошлись.
+
+    # Snapshot глобального set до старта — только их удалим в конце.
     with bot._llm_sent_lock:
-        n_global = len(bot._llm_sent_global)
-        bot._llm_sent_global.clear()
-    bot._add_log("system", "green", f"\U0001f916 История LLM-ответов сброшена для {len(cleared)} аккаунтов + {n_global} глобальных записей", "success")
-    return {"ok": True, "cleared": cleared, "global_cleared": n_global}
+        stale_globals = set(bot._llm_sent_global)
+    stale_global_count = len(stale_globals)
+
+    def _do_reset_sync():
+        cleared = []
+        skipped_busy = []
+        for state in all_states:
+            lock = getattr(state, "_llm_lock", None)
+            got = True
+            if lock is not None:
+                # Round-3 #3: timeout=5с. Если worker застрял на LLM API →
+                # skip state, не блокируем reset и event loop бесконечно.
+                got = lock.acquire(timeout=5)
+                if not got:
+                    skipped_busy.append(state.short)
+                    continue
+            try:
+                with bot._llm_sent_lock:
+                    n_replied = len(state.llm_replied_msgs)
+                    n_skip = len(state._llm_temp_skip)
+                    n_no_chat = len(state._llm_no_chat)
+                    n_drafts = len(getattr(state, "_llm_drafts", {}) or {})
+                    state.llm_replied_msgs.clear()
+                    state._llm_temp_skip.clear()
+                    state._llm_no_chat.clear()
+                    if hasattr(state, "_llm_drafts"):
+                        state._llm_drafts.clear()
+                    cleared.append({"acc": state.short, "replied_cleared": n_replied,
+                                    "skip_cleared": n_skip, "no_chat_cleared": n_no_chat,
+                                    "drafts_cleared": n_drafts})
+            finally:
+                if lock is not None and got:
+                    lock.release()
+        # Round-3 #4: удаляем ТОЛЬКО stale-snapshot ключи. Новые резервации,
+        # добавленные worker'ами пока мы шли по states, останутся защищены.
+        with bot._llm_sent_lock:
+            bot._llm_sent_global.difference_update(stale_globals)
+        return cleared, skipped_busy
+
+    # Round-3 #3: sync locks + IO — вне event loop.
+    cleared, skipped_busy = await asyncio.get_event_loop().run_in_executor(None, _do_reset_sync)
+    bot._add_log("system", "green",
+                 f"\U0001f916 История LLM-ответов сброшена для {len(cleared)} аккаунтов + "
+                 f"{stale_global_count} глобальных записей" +
+                 (f" (пропущено занятых: {', '.join(skipped_busy)})" if skipped_busy else ""),
+                 "success")
+    return {"ok": True, "cleared": cleared, "global_cleared": stale_global_count,
+            "skipped_busy": skipped_busy}
 
 
 _LLM_DETECT_ALLOWED_HOSTS = {

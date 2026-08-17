@@ -325,14 +325,16 @@ class BotManager:
         t1.start()
         t2.start()
         # Store handles + attach на state — stop()/deactivate join'ит их (round-1 #6/#19).
-        # Round-2 #4: раньше _temp_workers extend без cleanup → каждый цикл
-        # activate/deactivate добавлял 2 dead Thread-объекта навсегда. Чистим
-        # завершённые перед extend.
+        # Round-2 #4: чистим is_alive() перед extend, чтобы список dead thread'ов
+        # не рос навсегда.
+        # Round-3 #7: read-modify-write под _activate_lock — иначе два
+        # параллельных activate могли перезаписать список друг друга.
         state._workers = [t1, t2]
-        if not hasattr(self, "_temp_workers"):
-            self._temp_workers = []
-        self._temp_workers[:] = [t for t in self._temp_workers if t.is_alive()]
-        self._temp_workers.extend([t1, t2])
+        with self._activate_lock:
+            if not hasattr(self, "_temp_workers"):
+                self._temp_workers = []
+            self._temp_workers[:] = [t for t in self._temp_workers if t.is_alive()]
+            self._temp_workers.extend([t1, t2])
         try:
             self._start_ws_push(state)
         except Exception as e:

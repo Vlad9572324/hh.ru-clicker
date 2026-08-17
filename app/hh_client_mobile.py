@@ -138,16 +138,20 @@ class MobileHHClient(HHClient):
             recent_err = e
         if unread_err and recent_err:
             raise recent_err
-        # Round-1 #12: раньше success recent + fail unread молча возвращал
-        # только recent → терял 300+ старых непрочитанных, FallbackHHClient
-        # не переключался.
-        # Round-2 #11 correction: полный re-raise выбрасывает уже собранные
-        # recent → если web-fallback тоже упадёт, теряем оба источника.
-        # Компромисс: если fallback-статус пришёл в recent-пассе (основной
-        # backlog) — re-raise. Если только в unread-пассе — логируем и
-        # возвращаем recent как есть (backlog хотя бы частично живёт).
+        # Round-1 #12: success recent + fail unread терял старый backlog,
+        # FallbackHHClient не переключался.
+        # Round-2 #11: полный re-raise выбрасывал уже собранные recent.
+        # Round-3 #5: симметричная проблема — recent-fail с fallback-статусом
+        # уничтожал успешно собранный unread. Fix: НИКОГДА не re-raise если
+        # хоть один пасс собрал непустые items — возвращаем частичное,
+        # логируем ошибку. Fallback на web произойдёт только если оба пасса
+        # реально пустые (unread_err и recent_err оба выпали, обработано выше).
         if isinstance(recent_err, MobileAPIError) and is_fallback_status(recent_err.status_code):
-            raise recent_err
+            log_debug(
+                f"mobile fetch_chat_list: recent-пасс упал HTTP {recent_err.status_code}, "
+                f"возвращаем unread как есть ({len(unread_items)} шт.) — "
+                f"свежие могут быть stale до следующего цикла"
+            )
         if isinstance(unread_err, MobileAPIError) and is_fallback_status(unread_err.status_code):
             log_debug(
                 f"mobile fetch_chat_list: unread-пасс упал HTTP {unread_err.status_code}, "

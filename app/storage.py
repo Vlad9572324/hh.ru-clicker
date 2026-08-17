@@ -79,12 +79,19 @@ EVENTS_FILE = DATA_DIR / "events.jsonl"
 def _schedule_save(fn):
     """Async-save: submit на shared pool вместо нового Thread каждый раз.
     Per-save lock с blocking=False уже защищает от concurrent дублей.
+
+    Round-3 #2: если executor уже shutdown (bot.stop() пошёл, а поздний
+    worker всё ещё пытается писать через add_applied) — раньше молча
+    дропали запись. Теперь вызываем sync inline как последний шанс:
+    данные попадут на диск ДО exit'а процесса.
     """
     try:
         _save_executor.submit(fn)
     except RuntimeError:
-        # pool shutdown — игнорируем (происходит при stop()).
-        pass
+        try:
+            fn()  # sync fallback — writer уже atomic, безопасно
+        except Exception as e:
+            log_debug(f"_schedule_save sync fallback error: {e}")
 
 
 # ============================================================
@@ -179,14 +186,19 @@ _interviews_dirty = False
 
 def _drain_and_write(lock, dirty_name: str, get_cache, path):
     """Общий loop: пока dirty — читаем snapshot под _cache_lock, пишем,
-    повторяем. В finally re-submit если dirty был выставлен между нашей
-    проверкой и release'ом (аудит round-2 #7: без re-submit другой поток
-    ловит blocking=False fail пока мы держим lock, и dirty остаётся True
-    без активного writer'а навсегда).
+    повторяем. В finally re-submit если dirty был выставлен ДРУГИМ mutation
+    между нашей проверкой и release'ом (round-2 #7).
+
+    Round-3 #1: раньше при постоянной ошибке записи (disk readonly) мы
+    восстанавливали dirty=True И re-submit в finally → бесконечный
+    hot-loop без задержки. Теперь: write-error отделён от live-dirty —
+    resubmit ТОЛЬКО когда dirty пришёл извне (concurrent mutation), а
+    не тот же, что мы сами восстановили после fail'а.
     """
     if not lock.acquire(blocking=False):
         return
     resubmit_fn = _RESUBMIT_MAP[dirty_name]
+    write_failed = False  # локальный флаг: наш последний write упал
     try:
         while True:
             with _cache_lock:
@@ -200,12 +212,16 @@ def _drain_and_write(lock, dirty_name: str, get_cache, path):
                 log_debug(f"_drain_and_write({dirty_name}) error: {e}")
                 with _cache_lock:
                     globals()[dirty_name] = True
+                write_failed = True
                 return
     finally:
         with _cache_lock:
-            need_resubmit = bool(globals()[dirty_name])
+            still_dirty = bool(globals()[dirty_name])
         lock.release()
-        if need_resubmit:
+        # Re-submit только если dirty вызван извне. write_failed => dirty=True
+        # сами восстановили ошибкой; следующий mutation через _schedule_save
+        # инициирует retry, но мы сами hot-loop не запускаем.
+        if still_dirty and not write_failed:
             _schedule_save(resubmit_fn)
 
 
