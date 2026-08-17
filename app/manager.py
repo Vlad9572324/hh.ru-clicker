@@ -708,6 +708,14 @@ class BotManager:
         with state._deque_lock:
             state.action_history.append(entry)
 
+    def _push_llm_log(self, entry: dict) -> None:
+        """Thread-safe appendleft в self.llm_log под _deque_lock.
+        Аудит 2026-08-17 #23: раньше writers жали bare appendleft, snapshot
+        builder читал list(llm_log) — та же гонка, что закрыта в _push_action.
+        """
+        with self._deque_lock:
+            self.llm_log.appendleft(entry)
+
     @staticmethod
     def _snap_deque(dq, lock):
         """Snapshot deque под lock — снапшот-ридер не должен ронять весь
@@ -1099,8 +1107,11 @@ class BotManager:
             "paused": self.paused,
             "accounts": accounts,
             "recent_responses": self._snap_deque(self.recent_responses, self._deque_lock),
-            "log": list(self.activity_log),
-            "llm_log": list(self.llm_log),
+            # Аудит 2026-08-17 #23: list(deque) без lock даёт RuntimeError или
+            # неполный/повреждённый snapshot если writer в этот момент делает
+            # append/appendleft. Оборачиваем в _snap_deque как recent_responses.
+            "log": self._snap_deque(self.activity_log, self._deque_lock),
+            "llm_log": self._snap_deque(self.llm_log, self._deque_lock),
             "config": {
                 "pages_per_url": CONFIG.pages_per_url,
                 "response_delay": CONFIG.response_delay,
@@ -2766,7 +2777,7 @@ class BotManager:
                         upsert_interview(neg_id, acc=state.short, employer=employer_short,
                                          llm_sent=True, replied_msg_id=str(last_msg_id))
                         ts = datetime.now().strftime("%H:%M")
-                        self.llm_log.appendleft({
+                        self._push_llm_log({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer_short, "vacancy_title": vacancy_title,
                             "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg[:50],
@@ -2953,7 +2964,7 @@ class BotManager:
                                          replied_msg_id=last_msg_id)
                         self._add_log(state.short, state.color,
                             f"\U0001f916 Авто-ответ → {employer}: {reply_text[:60]}…", "success", neg_id=neg_id)
-                        self.llm_log.appendleft({
+                        self._push_llm_log({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer, "vacancy_title": vacancy_title,
                             "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
@@ -2978,7 +2989,7 @@ class BotManager:
                                          llm_reply=reply_text, llm_sent=False)
                         self._add_log(state.short, state.color,
                             f"\U0001f916 Черновик (ошибка отправки, повтор ~30м) → {employer}: {reply_text[:60]}…", "warning", neg_id=neg_id)
-                        self.llm_log.appendleft({
+                        self._push_llm_log({
                             "time": ts, "acc": state.short, "color": state.color,
                             "employer": employer, "vacancy_title": vacancy_title,
                             "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,
@@ -3007,7 +3018,7 @@ class BotManager:
                                      llm_reply=reply_text, llm_sent=False)
                     self._add_log(state.short, state.color,
                         f"\U0001f916 Черновик [{employer}] (вкл «Автоотправку» → отправлю): {reply_text[:60]}…", "info", neg_id=neg_id)
-                    self.llm_log.appendleft({
+                    self._push_llm_log({
                         "time": ts, "acc": state.short, "color": state.color,
                         "employer": employer, "vacancy_title": vacancy_title,
                         "neg_id": neg_id, "vacancy_id": vacancy_id, "employer_msg": employer_msg,

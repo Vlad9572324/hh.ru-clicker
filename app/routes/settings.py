@@ -363,12 +363,25 @@ async def api_backup_wipe():
             errors[fname] = str(e)
     # Сброс in-memory state.
     try:
-        from app.config import load_config as _load_config, load_accounts as _load_accounts
+        from app.config import CONFIG as _CONFIG, Config as _ConfigCls, save_config as _save_config
         from app.instances import bot as _bot
         accounts_data.clear()
         _bot.temp_sessions.clear()
-        # Не вызываем _load_*  — файлов уже нет; CONFIG останется в текущем виде
-        # но без диска (а save_config создаст новый чистый файл на следующем save).
+        # Аудит 2026-08-17 #32: раньше файл удаляли, но CONFIG в памяти жил
+        # → первый же save_config() возвращал llm_api_key/llm_profiles на диск.
+        # Заменяем sensitive-поля CONFIG на дефолтные (из свежего Config()) и
+        # атомарно сохраняем очищенное состояние, чтобы утечка была невозможна.
+        _defaults = _ConfigCls()
+        _SENSITIVE = (
+            "llm_api_key", "llm_base_url", "llm_model", "llm_profiles",
+            "llm_system_prompt", "hh_proxy_url",
+        )
+        for _f in _SENSITIVE:
+            if hasattr(_defaults, _f):
+                setattr(_CONFIG, _f, getattr(_defaults, _f))
+        _CONFIG.llm_enabled = False
+        _CONFIG.llm_auto_send = False
+        _save_config()  # запишем чистый файл
     except Exception as e:
         log_debug(f"backup wipe: in-memory clear error: {e}")
     return {

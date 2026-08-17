@@ -388,13 +388,17 @@ async def api_update_cookies(idx: int, body: dict):
     if 0 <= idx < len(bot.account_states):
         state = bot.account_states[idx]
         auth_cookies = {k: v for k, v in cookies.items() if k in _AUTH_COOKIE_KEYS}
-        state.acc["cookies"] = auth_cookies
-        state.acc["_raw_cookie_line"] = raw_line
-        state.cookies_expired = False
-        # Сбрасываем degraded одновременно — иначе UI ещё цикл (~2 мин)
-        # показывает «⚠️ Degraded» с только что обновлёнными куками, и apply
-        # без нужды жмётся к OAuth-only пути.
-        state.degraded_mode = False
+        # Аудит 2026-08-17 #33: раньше replace без _cookies_lock — если
+        # фоновый chat/auth worker в этот момент делал compound cookie refresh
+        # (get+merge+set), одна из сторон затирала обновление другой.
+        with state._cookies_lock:
+            state.acc["cookies"] = auth_cookies
+            state.acc["_raw_cookie_line"] = raw_line
+            state.cookies_expired = False
+            # Сбрасываем degraded одновременно — иначе UI ещё цикл (~2 мин)
+            # показывает «⚠️ Degraded» с только что обновлёнными куками, и apply
+            # без нужды жмётся к OAuth-only пути.
+            state.degraded_mode = False
         if 0 <= idx < len(accounts_data):
             accounts_data[idx]["cookies"] = auth_cookies
             save_accounts()
@@ -407,8 +411,10 @@ async def api_update_cookies(idx: int, body: dict):
         bot.temp_sessions[temp_idx]["cookies"] = auth_cookies
         bot.temp_sessions[temp_idx]["_raw_cookie_line"] = raw_line
         if temp_idx in bot.temp_states:
-            bot.temp_states[temp_idx].acc["cookies"] = auth_cookies
-            bot.temp_states[temp_idx].cookies_expired = False
+            tstate = bot.temp_states[temp_idx]
+            with tstate._cookies_lock:
+                tstate.acc["cookies"] = auth_cookies
+                tstate.cookies_expired = False
         save_browser_sessions(bot.temp_sessions)
         name = bot.temp_sessions[temp_idx].get("name", f"Браузер #{temp_idx+1}")
         log_debug(f"update_cookies [temp {temp_idx}] {name}: обновлены куки ({len(auth_cookies)} ключей)")

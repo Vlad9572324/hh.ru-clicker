@@ -457,7 +457,11 @@ def load_accounts():
     try:
         with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list) and data:
+        if isinstance(data, list):
+            # Аудит 2026-08-17 #20: раньше `and data` игнорировало валидный
+            # пустой список [] → удалённые из UI аккаунты «воскресали» из
+            # прежней in-memory копии после reload. Пустой список — легальное
+            # состояние, атомарно заменяем содержимое в любом случае.
             accounts_data.clear()
             accounts_data.extend(data)
     except Exception as e:
