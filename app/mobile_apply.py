@@ -17,12 +17,14 @@ x-force-app-access). Fallback-политика: статусы 0 (сеть) / 40
 
 import json
 
+from app.config import CONFIG
 from app.hh_mobile_transport import (
     MobileAPIError,
     is_fallback_status,
     mobile_request,
 )
 from app.logging_utils import log_debug
+from app.mobile_related import get_suitable_resumes
 
 # Известные бизнес-коды отказа POST /negotiations (APK VR/f.java,
 # NegotiationApiErrorConverter: test_required, limit_exceeded, ...;
@@ -60,6 +62,51 @@ _ERROR_DESCRIPTIONS = {
     "vacancy_archived": "вакансия в архиве",
     "permission_denied": "нет прав на отклик",
 }
+
+
+def _mismatch_count(resume: dict) -> int:
+    mismatches = resume.get("mismatches")
+    if isinstance(mismatches, (list, dict, tuple, set)):
+        return len(mismatches)
+    if isinstance(mismatches, (int, float)) and not isinstance(mismatches, bool):
+        return int(mismatches)
+    return 0 if not mismatches else 1
+
+
+def _is_published(resume: dict) -> bool:
+    published = resume.get("published")
+    if isinstance(published, bool):
+        return published
+    if isinstance(published, str):
+        return published.lower() in ("true", "published")
+    status = resume.get("status")
+    if isinstance(status, dict):
+        status = status.get("id")
+    return str(status or "").lower() == "published"
+
+
+def pick_suitable_resume(acc: dict, vacancy_id: str,
+                         default_resume_id: str = "") -> str | None:
+    """Выбрать опубликованное suitable-резюме с минимумом mismatches.
+
+    ``None`` означает, что HH не вернул ни одного подходящего опубликованного
+    резюме. Для одного резюме или выключенного флага сетевой вызов не нужен.
+    """
+    default_resume_id = str(default_resume_id or acc.get("resume_hash") or "")
+    all_resumes = acc.get("all_resumes") or []
+    if not CONFIG.auto_pick_resume or len(all_resumes) <= 1:
+        return default_resume_id
+    data = get_suitable_resumes(acc, str(vacancy_id))
+    suitable = data.get("suitable") if isinstance(data, dict) else None
+    if not isinstance(suitable, list):
+        suitable = []
+    candidates = [item for item in suitable
+                  if isinstance(item, dict) and item.get("id") and _is_published(item)]
+    if not candidates:
+        log_debug(f"no suitable resume, skip vacancy_id={vacancy_id}")
+        return None
+    selected = min(candidates, key=_mismatch_count)
+    return str(selected["id"])
 
 
 def _extract_error_code(payload) -> str:
@@ -111,6 +158,13 @@ def submit_response(acc: dict, vacancy_id: str, resume_id: str,
     - fallback-статусы (0 сеть / 401 / 403 / 5xx): MobileAPIError
       перекидывается наверх без обработки — для повтора через web-flow.
     """
+    resume_id = pick_suitable_resume(acc, vacancy_id, resume_id)
+    if resume_id is None:
+        return {
+            "ok": False,
+            "error_type": "no_suitable_resume",
+            "error": "no suitable resume",
+        }
     form = {
         "vacancy_id": vacancy_id,
         "resume_id": resume_id,

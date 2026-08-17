@@ -73,6 +73,13 @@ def _collect_offer_vacancy_ids(data, seed_vid: str) -> list:
     return out
 
 
+def get_suitable_resumes(acc: dict, vacancy_id: str) -> dict:
+    """Вернуть ответ GET suitable_resumes для повторного использования."""
+    data = mobile_request(
+        acc, "GET", f"/vacancies/{vacancy_id}/suitable_resumes")
+    return data if isinstance(data, dict) else {}
+
+
 def _diagnose_suitable_resumes(acc: dict, seed_vid: str) -> None:
     """Best-effort диагностика по GET /vacancies/{seed_vid}/suitable_resumes.
 
@@ -88,8 +95,7 @@ def _diagnose_suitable_resumes(acc: dict, seed_vid: str) -> None:
     который по диагностике ничего полезного не вернёт).
     """
     try:
-        data = mobile_request(acc, "GET",
-                              f"/vacancies/{seed_vid}/suitable_resumes")
+        data = get_suitable_resumes(acc, seed_vid)
     except MobileAPIError as e:
         log_debug(f"mobile fetch_related_vacancies: suitable_resumes "
                   f"seed={seed_vid} HTTP {e.status_code} | {e.payload}")

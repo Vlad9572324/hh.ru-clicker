@@ -23,6 +23,7 @@ from app.hh_mobile_transport import (
     mobile_request,
 )
 from app.logging_utils import log_debug
+from app.mobile_apply import pick_suitable_resume
 
 HARD_MISSING = {"WORK_FORMAT", "ADDRESS_COORDINATES", "PREFERRED_WORK_AREAS"}
 
@@ -71,8 +72,9 @@ def check_vacancy_before_apply(acc: dict, vacancy_id, resume_id: str = "",
     лимит). На fallback-статусах (0 сеть / 401 / 403 / 5xx) перекидывает
     MobileAPIError наверх — для повтора через web-flow.
     """
-    if not resume_id:
-        resume_id = acc.get("resume_hash", "")
+    resume_id = pick_suitable_resume(acc, vacancy_id, resume_id)
+    if resume_id is None:
+        return {"ok": False, "missing": [], "reason": "no_suitable_resume"}
     params = {
         "vacancy_id": vacancy_id,
         "resume_id": resume_id,

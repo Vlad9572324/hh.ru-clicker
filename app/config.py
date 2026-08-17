@@ -86,6 +86,7 @@ class Config:
     auto_pause_errors = 5  # Авто-пауза после N ошибок подряд (0 = выключено)
     auto_apply_tests: bool = False  # Автоматически проходить опросники при откликах
     use_oauth_apply: bool = False  # Использовать OAuth API для откликов (вместо web cookies)
+    auto_pick_resume: bool = True  # Выбирать наиболее подходящее резюме для mobile-отклика
     # Режим HH-клиента по умолчанию для аккаунтов без поля "mode" ("web" | "mobile" | "auto").
     # Phase 0: mobile-skeleton не готов, поэтому дефолт "web", а "auto" резолвится
     # в web до Phase 2; mobile выбирается только явным mode аккаунта.
@@ -260,7 +261,7 @@ _CONFIG_KEYS = [
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
-    "skip_inconsistent", "use_oauth_apply", "default_client_mode", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
+    "skip_inconsistent", "use_oauth_apply", "auto_pick_resume", "default_client_mode", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",
     "filter_agencies", "filter_low_competition", "search_period_days",
     "min_employer_rating", "min_employer_reviews", "min_recommendations_percent",
     "skip_auto_response_vacancies", "prefer_quick_responses", "accredited_it_only",
