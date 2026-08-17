@@ -102,6 +102,11 @@ class MobileHHClient(HHClient):
         (один чат = один топик), сохранён в сигнатуре ради контракта."""
         return mobile_send_message.send_message(self.acc, neg_id, text)
 
+    def send_workflow_event(self, neg_id: str, event_type: str,
+                            event_params: dict | None = None) -> bool:
+        """Нажатие workflow-кнопки: POST api.hh.ru/chats/{id}/event."""
+        return mobile_chat_actions.send_event(self.acc, neg_id, event_type, event_params)
+
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
         """Список чатов: GET api.hh.ru/chats (page/per_page<=20). Возврат
         совместим с web hh_chat._fetch_chat_list:

@@ -33,6 +33,11 @@ class WebHHClient(HHClient):
         # фактически bool | "chat_not_found" (см. hh_chat.send_negotiation_message)
         return hh_chat.send_negotiation_message(self.acc, neg_id, text, topic_id)
 
+    def send_workflow_event(self, neg_id: str, event_type: str,
+                            event_params: dict | None = None) -> bool:
+        """Web/chatik fallback пока не поддерживает mobile workflow events."""
+        return False
+
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
         return hh_chat._fetch_chat_list(self.acc, max_pages)
 

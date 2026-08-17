@@ -91,6 +91,12 @@ class HHClientBase(ABC):
         ...
 
     @abstractmethod
+    def send_workflow_event(self, neg_id: str, event_type: str,
+                            event_params: dict | None = None) -> bool:
+        """Отправить workflow-transition кнопки robot-chat."""
+        ...
+
+    @abstractmethod
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
         """Список чатов из chatik.hh.ru; web: hh_chat._fetch_chat_list."""
         ...

@@ -38,6 +38,7 @@ GROUP_A_NEGOTIATIONS_CHAT = {
     "fetch_negotiations",
     "fetch_thread",
     "send_message",
+    "send_workflow_event",
     "fetch_chat_list",
     "fetch_chat_history",
     "fetch_quick_replies",
@@ -98,7 +99,7 @@ EXPECTED_FULL = EXPECTED_BASE | WEB_ONLY | MOBILE_ONLY
 ACC = {"name": "a1", "cookies": {}, "resume_hash": "rh1"}
 
 
-def test_groups_are_disjoint_and_total_38():
+def test_groups_are_disjoint_and_total_39():
     groups = [
         GROUP_A_NEGOTIATIONS_CHAT,
         GROUP_B_APPLY_COMMON,
@@ -109,7 +110,7 @@ def test_groups_are_disjoint_and_total_38():
         GROUP_F_SEARCH,
     ]
     flat = [name for g in groups for name in g]
-    assert len(flat) == len(set(flat)) == 38
+    assert len(flat) == len(set(flat)) == 39
 
 
 def test_base_layer_has_exactly_common_methods():

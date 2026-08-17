@@ -115,3 +115,30 @@ def send_participant_action(acc: dict, chat_id: str, action_type: str = "TYPING"
         log_debug(f"mobile send_participant_action chat={chat_id} action={normalized}: HTTP {e.status_code}")
         return False
     return True
+
+
+def send_event(acc: dict, chat_id: str, event_type: str, event_params: dict | None = None) -> bool:
+    """Отправить workflow-событие кнопки робота-рекрутера.
+
+    APK-контракт: ``POST /chats/{chat_id}/event`` с JSON-телом
+    ``{event_type, event_params}``.  Авторизация и mobile-заголовки
+    добавляются общим transport-слоем.
+    """
+    normalized_type = str(event_type or "").strip()
+    if not normalized_type:
+        return False
+    params = event_params if isinstance(event_params, dict) else {}
+    url = f"{MOBILE_BASE}/chats/{chat_id}/event"
+    try:
+        mobile_request(
+            acc,
+            "POST",
+            url,
+            json_body={"event_type": normalized_type, "event_params": params},
+        )
+    except MobileAPIError as e:
+        if is_fallback_status(e.status_code):
+            raise
+        log_debug(f"mobile send_event chat={chat_id} event={normalized_type}: HTTP {e.status_code}")
+        return False
+    return True

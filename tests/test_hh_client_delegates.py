@@ -171,8 +171,9 @@ def test_table_covers_all_web_client_methods():
     covered = (
         {row[0] for row in SYNC_DELEGATES}
         | {row[0] for row in ASYNC_DELEGATES}
-        # fetch_counters — не делегат (кидает NotImplementedError), покрыт отдельно
-        | {"fetch_counters"}
+        # Эти методы — не делегаты: fetch_counters кидает NotImplementedError,
+        # workflow-event имеет безопасную web-заглушку.
+        | {"fetch_counters", "send_workflow_event"}
     )
     assert covered == defined
 

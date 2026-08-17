@@ -45,6 +45,7 @@ _METHODS = (
     "fetch_negotiations",
     "fetch_thread",
     "send_message",
+    "send_workflow_event",
     "fetch_chat_list",
     "fetch_chat_history",
     "fetch_quick_replies",

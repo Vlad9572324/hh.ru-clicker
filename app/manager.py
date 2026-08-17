@@ -2811,7 +2811,40 @@ class BotManager:
                             continue
                         self._llm_sent_global.add(global_key)
                     try:
-                        ok = get_client(state.acc).send_message(neg_id, btn_text)
+                        _selected_btn = (
+                            _text_buttons[_btn_idx]
+                            if isinstance(_btn_idx, int) and 0 <= _btn_idx < len(_text_buttons)
+                            else _text_buttons[0]
+                        )
+                        _event = (
+                            _selected_btn.get("event")
+                            or _selected_btn.get("event_type")
+                            or _selected_btn.get("eventType")
+                        )
+                        _event_params = _selected_btn.get(
+                            "event_params", _selected_btn.get("eventParams", {})
+                        )
+                        if isinstance(_event, dict):
+                            _event_params = (
+                                _event_params
+                                or _event.get("event_params")
+                                or _event.get("eventParams")
+                                or _event.get("params")
+                                or {}
+                            )
+                            _event = (
+                                _event.get("event_type")
+                                or _event.get("eventType")
+                                or _event.get("type")
+                            )
+                        _client = get_client(state.acc)
+                        if _event:
+                            ok = _client.send_workflow_event(
+                                neg_id, str(_event),
+                                _event_params if isinstance(_event_params, dict) else {},
+                            )
+                        else:
+                            ok = _client.send_message(neg_id, btn_text)
                     except Exception:
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
