@@ -216,6 +216,17 @@ class AccountState:
         """Clear vacancy_meta before each collection cycle to prevent unbounded growth."""
         self.vacancy_meta = {}
 
+    @property
+    def device_identity(self) -> dict:
+        """Expose (and lazily migrate) the persisted account device identity."""
+        from app.user_agent import ensure_device_identity
+
+        return ensure_device_identity(self.acc)
+
+    @device_identity.setter
+    def device_identity(self, value: dict) -> None:
+        self.acc["device_identity"] = value
+
     def cleanup_old_failures(self, max_size=500):
         """Trim _llm_neg_failures to max_size by removing oldest entries."""
         excess = len(self._llm_neg_failures) - max_size

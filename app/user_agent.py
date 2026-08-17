@@ -1,6 +1,9 @@
-"""Shared APK-compatible User-Agent for every HH request."""
+"""Stable, per-account Android identities for HH mobile requests."""
 
 from functools import lru_cache
+import random
+import threading
+import uuid
 
 from app.logging_utils import log_debug
 
@@ -14,15 +17,60 @@ DEFAULT_WEBVIEW_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+DEVICE_MODELS = ["Pixel 8", "Pixel 9", "Pixel 10", "Samsung Galaxy S24", "Xiaomi 14"]
+ANDROID_RELEASES = ["13", "14", "15"]
+APP_VERSION_NAME = "26.28.1"
+_identity_lock = threading.Lock()
+
+
+def generate_device_identity() -> dict[str, str]:
+    """Create one Android fingerprint to persist with an account."""
+    return {
+        "device_uuid": str(uuid.uuid4()),
+        "model": random.choice(DEVICE_MODELS),
+        "android_release": random.choice(ANDROID_RELEASES),
+        "app_version_name": APP_VERSION_NAME,
+    }
+
+
+def ensure_device_identity(acc: dict | None) -> dict | None:
+    """Return an account identity, lazily adding one for legacy accounts."""
+    if not isinstance(acc, dict):
+        return None
+    identity = acc.get("device_identity")
+    if isinstance(identity, dict) and identity.get("device_uuid"):
+        return identity
+    # One account can be hit by several workers on startup.  Only one identity
+    # may win, otherwise concurrent first requests could expose two UUIDs.
+    with _identity_lock:
+        identity = acc.get("device_identity")
+        if not isinstance(identity, dict) or not identity.get("device_uuid"):
+            identity = generate_device_identity()
+            acc["device_identity"] = identity
+    return identity
+
 
 def _ascii(value: str) -> str:
     """Match APK Regex("[^\\x00-\\x7F]").replace(value, "")."""
     return value.encode("ascii", errors="ignore").decode("ascii")
 
 
+def mobile_user_agent(acc: dict | None = None) -> str:
+    """Build an Android UA from the stable account identity, or the default."""
+    identity = ensure_device_identity(acc) if acc is not None else None
+    if identity:
+        return _ascii(
+            f"ru.hh.android/{identity.get('app_version_name', APP_VERSION_NAME)}, "
+            f"Device: {identity.get('model', 'Pixel 10')}, "
+            f"Android OS: {identity.get('android_release', '15')} "
+            f"(UUID: {identity['device_uuid']})"
+        )
+    return _default_mobile_user_agent()
+
+
 @lru_cache(maxsize=1)
-def mobile_user_agent() -> str:
-    """Build the current Android UA from editable mobile-auth settings."""
+def _default_mobile_user_agent() -> str:
+    """Build the global fallback UA from editable mobile-auth settings."""
     try:
         from app.mobile_auth import effective_config
 
@@ -34,7 +82,7 @@ def mobile_user_agent() -> str:
 
 
 def invalidate_mobile_user_agent_cache() -> None:
-    mobile_user_agent.cache_clear()
+    _default_mobile_user_agent.cache_clear()
 
 
 def webview_user_agent(base_user_agent: str = DEFAULT_WEBVIEW_USER_AGENT) -> str:

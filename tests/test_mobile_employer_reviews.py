@@ -72,7 +72,7 @@ def _assert_bearer(req):
     assert req.headers["Authorization"] == "Bearer t"
     # мобильные заголовки транспорта (контракт APK)
     assert req.headers["x-force-app-access"] == "true"
-    assert req.headers["User-Agent"] == (mobile_user_agent() or MOBILE_UA)
+    assert req.headers["User-Agent"] == (mobile_user_agent(ACC) or MOBILE_UA)
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import requests
 from app import oauth
 from app.hh_http import egress_proxies
 from app.logging_utils import log_debug
-from app.user_agent import mobile_user_agent
+from app.user_agent import ensure_device_identity, mobile_user_agent
 
 MOBILE_BASE = "https://api.hh.ru"
 MOBILE_UA = "ru.hh.android/26.29.11476"
@@ -53,11 +53,20 @@ def is_fallback_status(status_code: int) -> bool:
     return status_code in (0, 401, 403) or 500 <= status_code <= 599
 
 
-def mobile_headers(token: str) -> dict:
+def mobile_headers(acc, token: str | None = None) -> dict:
+    """Build mobile headers using a stable per-account device fingerprint.
+
+    ``mobile_headers(token)`` remains supported for callers that intentionally
+    need the global fallback identity.
+    """
+    if isinstance(acc, str) and token is None:
+        token, acc = acc, None
+    identity = ensure_device_identity(acc) if isinstance(acc, dict) else None
     return {
         "Authorization": f"Bearer {token}",
-        # Полный формат Android 26.29: package/versionCode + device/UUID.
-        "User-Agent": mobile_user_agent() or MOBILE_UA,
+        # APK-compatible package/version + device/UUID identity.
+        "User-Agent": mobile_user_agent(acc) or MOBILE_UA,
+        **({"X-Device-Uuid": str(identity["device_uuid"])} if identity else {}),
         "x-force-app-access": "true",
         "x-hh-app-active": "true",
         "Accept": "application/json",
@@ -84,7 +93,7 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
         r = requests.request(
             method, url,
             params=params, json=json_body, data=form,
-            headers=mobile_headers(token),
+            headers=mobile_headers(acc, token),
             # split-egress: api.hh.ru тоже обязан идти через HH_PROXY.
             proxies=egress_proxies(),
             timeout=timeout,

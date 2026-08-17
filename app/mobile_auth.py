@@ -584,6 +584,9 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
     sessions = load_browser_sessions()
     if not isinstance(sessions, list):
         sessions = []
+    # OTP success creates the identity once.  A re-login must retain the
+    # existing account fingerprint instead of rotating it.
+    from app.user_agent import generate_device_identity
     first_name = str(me.get("first_name") or "HH").strip()
     last_name = str(me.get("last_name") or "").strip()
     display_name = (first_name + " " + last_name).strip()
@@ -604,6 +607,8 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
                 known[str(old.get("hash"))] = old
         existing.update({"user_id": user_id, "cookies": dict(cookies), "all_resumes": list(known.values()),
                          "use_oauth": True, "mode": "mobile"})
+        if not isinstance(existing.get("device_identity"), dict):
+            existing["device_identity"] = generate_device_identity()
         if not active:
             existing["resume_hash"] = all_resumes[0]["hash"] if all_resumes else ""
     else:
@@ -623,6 +628,7 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
                 "mode": "mobile",  # mobile OTP flow → mobile-clients (Hedi, hh_recommendations и т.д.)
                 "urls": [],
                 "url_pages": {},
+                "device_identity": generate_device_identity(),
             })
     save_browser_sessions(sessions)
     try:
