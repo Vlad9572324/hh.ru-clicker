@@ -261,15 +261,18 @@ async def api_llm_reset_replied():
             finally:
                 if lock is not None and got:
                     lock.release()
-        # Round-4 #2/#3: глобальный _llm_sent_global НЕ трогаем.
-        # - #2: удаление stale-snapshot могло снести резервацию busy-state,
-        #       которого мы skipped — открывало дубликат-окно.
-        # - #3: ABA — worker A закончил → C зарезервировал тот же key →
-        #       difference_update удалил валидную C-резервацию.
-        # Global set имеет self-eviction (10000→5000) в manager.py,
-        # per-state clear достаточно для «начать заново» — worker обнаружит
-        # что replied_msgs пустой и пойдёт по чатам с нуля, global dedup
-        # защищает от cross-account дубликатов и должен переживать reset.
+        # Round-4 #2/#3: глобальный _llm_sent_global НЕ удаляем (открывало
+        # дубликаты busy-state и ABA-гонки).
+        # Round-5 #1: НО — если set застрял на >=5000 при ровно 10000, self-
+        # eviction `> 10000` в manager.py никогда не triggers'ится (все
+        # кандидаты уже в set, новых add нет, size не растёт). Reset обещает
+        # UI «повторно обработает все чаты» — тримим set до 5000 если он на
+        # пороге, чтобы освободить место для повторной резервации.
+        with bot._llm_sent_lock:
+            if len(bot._llm_sent_global) >= 10000:
+                bot._llm_sent_global = set(
+                    list(bot._llm_sent_global)[-5000:]
+                )
         return cleared, skipped_busy
 
     cleared, skipped_busy = await asyncio.get_event_loop().run_in_executor(None, _do_reset_sync)

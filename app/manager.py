@@ -2493,7 +2493,10 @@ class BotManager:
             recent = list(state.llm_replied_msgs)[-2000:]
             state.llm_replied_msgs = dict.fromkeys(recent)
         with self._llm_sent_lock:
-            if len(self._llm_sent_global) > 10000:
+            if len(self._llm_sent_global) >= 10000:
+                # Round-5 #1: раньше `> 10000` создавало boundary trap: ровно
+                # на 10000 eviction не запускался, set застревал навсегда если
+                # все текущие кандидаты уже в нём (новых add не будет).
                 self._llm_sent_global = set(list(self._llm_sent_global)[-5000:])
                 # перестраиваем индекс после массовой обрезки
                 self._llm_sent_by_neg_id = {}

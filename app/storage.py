@@ -231,15 +231,22 @@ def _drain_and_write(lock, dirty_name: str, get_cache, path):
                 seen_seq_when_failed = snap_seq
                 return
     finally:
+        # Round-5 #2: раньше проверяли dirty/seq ДО release — TOCTOU-окно
+        # между read и release позволяло mutation'у попасть в него: она
+        # инкрементит seq и вызывает _schedule_save, worker падает на
+        # blocking=False acquire (наш lock ещё занят), мы принимаем решение
+        # по устаревшему latest_seq → resubmit не делаем → mutation навсегда.
+        # Fix: сначала release, ЗАТЕМ читаем актуальный seq. Mutation в
+        # новом окне между release и read инициирует свой _schedule_save,
+        # который теперь спокойно возьмёт lock. Никакой mutation не теряется.
+        lock.release()
         with _cache_lock:
             still_dirty = bool(globals()[dirty_name])
             latest_seq = globals()[seq_name]
-        lock.release()
         # Resubmit если:
         # - dirty без failure = concurrent mutation ждёт (round-2 #7)
-        # - dirty после failure но с ПОСЛЕДНЕЙ mutation seq вырос =
-        #   внешняя mutation была во время нашего fail — не забрасываем
-        #   её из-за суперкаутиона (round-4 #1).
+        # - dirty после failure но latest_seq > snap = внешняя mutation
+        #   была во время нашего fail'а (round-4 #1).
         if still_dirty and (not write_failed or latest_seq > seen_seq_when_failed):
             _schedule_save(resubmit_fn)
 
