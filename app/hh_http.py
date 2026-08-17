@@ -185,14 +185,14 @@ class HHClient:
             self._sessions.move_to_end(cookie_jar_key)
             while len(self._sessions) > self._MAX_SESSIONS:
                 _evicted_key, evicted = self._sessions.popitem(last=False)
-                # Закрываем вытесненные сессии чтобы их keep-alive/cookies
-                # не переиспользовались и не висели в памяти.
-                for s in (evicted["cffi"], evicted["req"]):
-                    if s is not None:
-                        try:
-                            s.close()
-                        except Exception:
-                            pass
+                # Аудит 2026-08-17 #17: раньше явный close() мог закрыть
+                # session, которую держит на руках другой поток внутри
+                # request() — SSL abort / broken pipe в live-запросе.
+                # Полагаемся на GC: как только последняя ссылка (в т.ч.
+                # локальная в request()) уйдёт из области видимости,
+                # keep-alive транспорт закроется в __del__. Реестр больше
+                # не удерживает ссылку, поэтому memory не течёт.
+                del evicted
             return entry["cffi"], entry["req"]
 
     def request(self, method: str, url: str, **kwargs) -> Any:

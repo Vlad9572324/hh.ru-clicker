@@ -324,6 +324,11 @@ class BotManager:
         t2 = threading.Thread(target=self._fetch_hh_stats_worker, args=(900 + temp_idx, state), daemon=True, name=f"stats-{temp_idx}")
         t1.start()
         t2.start()
+        # Store handles + attach на state — stop()/deactivate join'ит их (аудит #6/#19).
+        state._workers = [t1, t2]
+        if not hasattr(self, "_temp_workers"):
+            self._temp_workers = []
+        self._temp_workers.extend([t1, t2])
         try:
             self._start_ws_push(state)
         except Exception as e:
@@ -349,6 +354,17 @@ class BotManager:
                 state.paused = True
             ts["bot_active"] = False
             ts["paused"] = True
+        # Аудит 2026-08-17 #19: раньше deactivate возвращался мгновенно, а
+        # rapid activate → deactivate → activate успевало создать вторую
+        # (перекрывающуюся) пару worker'ов для того же HH-аккаунта. Join'им
+        # старых, чтобы reactivate шёл на чистом slot'е. Join вне _activate_lock
+        # т.к. worker сам берёт lock через save_browser_sessions/etc.
+        if state is not None:
+            for t in getattr(state, "_workers", []):
+                try:
+                    t.join(timeout=5)
+                except Exception:
+                    pass
         save_browser_sessions(self.temp_sessions)
         log_debug(f"deactivate_session({temp_idx}): bot_active=False")
         if state is not None:
@@ -458,6 +474,10 @@ class BotManager:
             log_debug(f"on_realtime_event error: {e}")
 
     def start(self):
+        # Регистр всех worker-threads чтобы stop() мог их join'нуть — иначе
+        # in-flight работа после SIGTERM продолжается, save_executor уже закрыт,
+        # add_applied молча теряет запись (аудит 2026-08-17 #6 critical).
+        self._workers: list = []
         _load_cache()
         load_config()
         # После load_config: если env HH_PROXY не задан, но в CONFIG.hh_proxy_url
@@ -504,6 +524,7 @@ class BotManager:
             )
             t1.start()
             t2.start()
+            self._workers.extend([t1, t2])
             try:
                 self._start_ws_push(state)
             except Exception as e:
@@ -519,17 +540,21 @@ class BotManager:
         # Proactive OAuth refresh — раз в 6 часов обновляет токены,
         # у которых TTL < 48ч, чтобы refresh_token не успел истечь когда
         # аккаунт долго на паузе (лимит HH, ручная пауза).
-        threading.Thread(
+        _oauth_t = threading.Thread(
             target=self._oauth_refresh_worker, daemon=True,
             name="oauth_refresh",
-        ).start()
+        )
+        _oauth_t.start()
+        self._workers.append(_oauth_t)
         # Real HH-limit tracker — каждые 30 мин синхронизирует daily_sent с
         # фактическим числом откликов из HH и снимает hard_stopped если лимит
         # реально не достигнут (например HH сам сбросил счётчик).
-        threading.Thread(
+        _limit_t = threading.Thread(
             target=self._hh_limit_tracker_worker, daemon=True,
             name="hh_limit_tracker",
-        ).start()
+        )
+        _limit_t.start()
+        self._workers.append(_limit_t)
 
         # Авто-активация браузерных сессий, которые были запущены до перезапуска
         log_debug(f"start(): {len(self.temp_sessions)} temp sessions to check")
@@ -560,6 +585,23 @@ class BotManager:
             ws_manager.stop_all()
         except Exception:
             pass
+        # Аудит 2026-08-17 #6: join всех worker'ов с общим timeout, чтобы
+        # in-flight цикл добежал до `if _stop_event: return` ДО того как
+        # save_executor выключится. Иначе поставленные в очередь save-задачи
+        # ловят RuntimeError и applied-запись теряется.
+        workers = list(getattr(self, "_workers", []))
+        for t in workers:
+            try:
+                t.join(timeout=15)
+            except Exception:
+                pass
+        # Аналогично для temp-session воркеров, стартующих в activate_session.
+        temp_workers = list(getattr(self, "_temp_workers", []))
+        for t in temp_workers:
+            try:
+                t.join(timeout=5)
+            except Exception:
+                pass
 
     def toggle_pause(self):
         self.paused = not self.paused

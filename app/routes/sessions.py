@@ -410,21 +410,34 @@ async def api_session_refresh(idx: int):
 
 @router.delete("/api/session/{idx}")
 async def api_session_delete(idx: int):
-    temp_idx = idx - len(bot.account_states)
-    if 0 <= temp_idx < len(bot.temp_sessions):
+    # Аудит 2026-08-17 #18: раньше delete мутировал temp_sessions/temp_states
+    # без _activate_lock, пока activate_session мог параллельно создавать state
+    # для того же temp_idx → индексы разъезжались. Держим тот же lock, что и
+    # activate/deactivate. Плюс join удалённого worker'а, чтобы он не продолжал
+    # писать в state после re-index'а (аудит #19).
+    with bot._activate_lock:
+        temp_idx = idx - len(bot.account_states)
+        if not (0 <= temp_idx < len(bot.temp_sessions)):
+            return {"status": "error", "message": "Не найдено"}
         removed = bot.temp_sessions.pop(temp_idx)
-        if temp_idx in bot.temp_states:
-            bot.temp_states[temp_idx]._deleted = True
+        removed_state = bot.temp_states.pop(temp_idx, None)
+        if removed_state is not None:
+            removed_state._deleted = True
+            removed_state.paused = True
         new_temp_states = {}
         for old_i, state in bot.temp_states.items():
-            if old_i == temp_idx:
-                continue
             new_i = old_i - 1 if old_i > temp_idx else old_i
             new_temp_states[new_i] = state
         bot.temp_states = new_temp_states
-        save_browser_sessions(bot.temp_sessions)
-        return {"status": "ok", "message": f"Сессия удалена: {removed.get('name')}"}
-    return {"status": "error", "message": "Не найдено"}
+    # Join за пределами lock — сам worker может пытаться взять lock изнутри.
+    if removed_state is not None:
+        for t in getattr(removed_state, "_workers", []):
+            try:
+                t.join(timeout=5)
+            except Exception:
+                pass
+    save_browser_sessions(bot.temp_sessions)
+    return {"status": "ok", "message": f"Сессия удалена: {removed.get('name')}"}
 
 
 @router.post("/api/session/{idx}/profile")

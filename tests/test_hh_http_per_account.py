@@ -146,7 +146,10 @@ def test_lru_evicts_oldest_at_limit_and_recreates_on_reaccess(fake_transport):
     assert len(client._sessions) == limit
     assert "k100" in client._sessions
     assert "k000" not in client._sessions
-    assert original["k000"].closed  # вытеснённая сессия закрыта
+    # Аудит 2026-08-17 #17: раньше вытесненная сессия сразу .close() — если
+    # другой поток держал её в live-request(), запрос падал SSL abort/broken
+    # pipe. Теперь не закрываем явно, полагаемся на GC когда последняя
+    # ссылка уйдёт. Тест проверяет только удаление из реестра.
 
     # Повторное обращение к вытесненному ключу создаёт НОВУЮ сессию
     _, recreated = client._get_session("k000")
@@ -154,7 +157,6 @@ def test_lru_evicts_oldest_at_limit_and_recreates_on_reaccess(fake_transport):
     assert len(client._sessions) == limit
     # при этом вытеснена теперь следующая по давности (k001)
     assert "k001" not in client._sessions
-    assert original["k001"].closed
 
 
 def test_lru_recency_touch_protects_from_eviction(fake_transport):

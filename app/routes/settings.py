@@ -319,11 +319,14 @@ async def api_backup_restore(request: Request, force: int = 0):
             )
             preserved_all.extend(preserved_keys)
         try:
+            # Аудит 2026-08-17 #9: раньше restore писал через фиксированный
+            # `<name>.tmp` — тот же путь, что и обычные save_* writers → гонка
+            # unlink/replace могла удалить чужой tmp или откатить только что
+            # сохранённые изменения. Используем _atomic_write_json (fsync +
+            # tmp.replace) для durability и не пересекаемся с writers по имени.
+            from app.storage import _atomic_write_json as _atomic_write
             p = Path(DATA_DIR) / fname
-            tmp = p.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            tmp.replace(p)
+            _atomic_write(p, payload)
             restored.append(fname)
         except Exception as e:
             errors[fname] = str(e)

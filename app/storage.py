@@ -5,10 +5,51 @@ In-memory cache with async disk persistence.
 
 import json
 import copy
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+
+def _atomic_write_json(path: Path, data) -> None:
+    """Durable atomic write: tmp → fsync file → replace → fsync dir.
+
+    Аудит 2026-08-17 #2: раньше writers делали open+dump+replace без flush/
+    fsync — Python буфер уходил в page cache, потеря питания хоста давала
+    старую версию файла или пустой tmp. fsync-цепочка гарантирует, что после
+    возврата данные ФИЗИЧЕСКИ на диске.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp") if path.suffix else path.with_name(path.name + ".tmp")
+    dir_fd = None
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass  # некоторые FS (tmpfs, WSL) не поддерживают fsync
+        os.replace(tmp, path)
+        # fsync родительского каталога — иначе rename может быть потерян
+        # даже если файл сфсинкан.
+        try:
+            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
+            os.fsync(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
+        # Cleanup осиротевшего tmp если replace не выполнился (raise до него)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 from app.logging_utils import log_debug
 from app.config import hh_base
@@ -123,80 +164,88 @@ def _load_cache():
                 _cache_interviews = {}
 
 
+# Аудит 2026-08-17 #7 #8: раньше save с blocking=False просто дропался, если
+# другой save уже шёл — но снапшот того save был сделан ДО mutation, поэтому
+# новая запись безвозвратно теряла свой шанс на диск. Ввели dirty-флаги + loop:
+# после успешного write ещё раз проверяем dirty под lock; если mutation
+# случилась во время write — сохраняем повторно, до конвергенции.
 _save_applied_lock = threading.Lock()
+_save_tests_lock = threading.Lock()
+_save_interviews_lock = threading.Lock()
+_applied_dirty = False
+_tests_dirty = False
+_interviews_dirty = False
+
 
 def _save_applied_async():
-    """Сохранить applied в фоне (atomic write)"""
+    """Save applied vacancies до конвергенции dirty-flag'а (durable atomic write)."""
+    global _applied_dirty
     lock = _save_applied_lock  # local ref на случай reload модуля
     if not lock.acquire(blocking=False):
-        return  # another save in progress
-    tmp = None
+        return  # another save in progress — он подхватит dirty перед выходом
     try:
-        with _cache_lock:
-            data = copy.deepcopy(_cache_applied) if _cache_applied else {}
-        tmp = APPLIED_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
-        tmp.replace(APPLIED_FILE)
-    except Exception as e:
-        log_debug(f"_save_applied_async error: {e}")
-        if tmp is not None:
+        while True:
+            with _cache_lock:
+                if not _applied_dirty:
+                    return
+                data = copy.deepcopy(_cache_applied) if _cache_applied else {}
+                _applied_dirty = False
             try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+                _atomic_write_json(APPLIED_FILE, data)
+            except Exception as e:
+                log_debug(f"_save_applied_async error: {e}")
+                # Восстанавливаем dirty — писать снова при следующей возможности.
+                with _cache_lock:
+                    _applied_dirty = True
+                return
     finally:
         lock.release()
 
 
-_save_tests_lock = threading.Lock()
-
 def _save_tests_async():
-    """Сохранить tests в фоне (atomic write)"""
+    """Save tests до конвергенции dirty-flag'а (durable atomic write)."""
+    global _tests_dirty
     lock = _save_tests_lock
     if not lock.acquire(blocking=False):
         return
-    tmp = None
     try:
-        with _cache_lock:
-            data = copy.deepcopy(_cache_tests) if _cache_tests else {}
-        tmp = TESTS_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
-        tmp.replace(TESTS_FILE)
-    except Exception as e:
-        log_debug(f"_save_tests_async error: {e}")
-        if tmp is not None:
+        while True:
+            with _cache_lock:
+                if not _tests_dirty:
+                    return
+                data = copy.deepcopy(_cache_tests) if _cache_tests else {}
+                _tests_dirty = False
             try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+                _atomic_write_json(TESTS_FILE, data)
+            except Exception as e:
+                log_debug(f"_save_tests_async error: {e}")
+                with _cache_lock:
+                    _tests_dirty = True
+                return
     finally:
         lock.release()
 
 
-_save_interviews_lock = threading.Lock()
-
 def _save_interviews_async():
-    """Сохранить interviews в фоне (атомарная запись, с защитой от параллельных записей)"""
+    """Save interviews до конвергенции dirty-flag'а (durable atomic write)."""
+    global _interviews_dirty
     lock = _save_interviews_lock
     if not lock.acquire(blocking=False):
-        return  # другой поток уже сохраняет — пропускаем
-    tmp = None
+        return
     try:
-        with _cache_lock:
-            data = copy.deepcopy(_cache_interviews) if _cache_interviews else {}
-        tmp = INTERVIEWS_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
-        tmp.replace(INTERVIEWS_FILE)
-    except Exception as e:
-        log_debug(f"_save_interviews_async error: {e}")
-        if tmp is not None:
+        while True:
+            with _cache_lock:
+                if not _interviews_dirty:
+                    return
+                data = copy.deepcopy(_cache_interviews) if _cache_interviews else {}
+                _interviews_dirty = False
             try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+                _atomic_write_json(INTERVIEWS_FILE, data)
+            except Exception as e:
+                log_debug(f"_save_interviews_async error: {e}")
+                with _cache_lock:
+                    _interviews_dirty = True
+                return
     finally:
         lock.release()
 
@@ -209,9 +258,11 @@ def upsert_interview(neg_id: str, acc: str, acc_color: str = "",
                      replied_msg_id: str = None,
                      vacancy_id: str = ""):
     """Создать или обновить запись об интервью-переговоре."""
+    global _interviews_dirty
     _load_cache()
     now = datetime.now().isoformat(timespec="seconds")
     with _cache_lock:
+        _interviews_dirty = True
         existing = _cache_interviews.get(neg_id, {})
         record = dict(existing)
         record["neg_id"] = neg_id
@@ -386,22 +437,45 @@ def _strip_sensitive_session_fields(s: dict) -> dict:
     return out
 
 
+_sessions_pending_snapshot: list | None = None
+_sessions_pending_lock = threading.Lock()
+
+
 def save_browser_sessions(sessions: list, *, wait: bool = False):
-    """Сохранить браузерные сессии; ``wait`` нужен для transactional flows."""
+    """Сохранить браузерные сессии; ``wait`` нужен для transactional flows.
+
+    Аудит 2026-08-17 #3: раньше snapshot делался ДО submit, а executor мог
+    выполнить два submit в произвольном порядке — старый snapshot затирал
+    свежий (напр. delete-session после cookies-refresh мог откатить delete).
+    Теперь writer берёт ПОСЛЕДНИЙ snapshot из _sessions_pending_snapshot под
+    lock; новые вызовы всегда обновляют pending, поэтому worker записывает
+    свежее состояние независимо от порядка выполнения.
+    """
+    global _sessions_pending_snapshot
     snapshot = [_strip_sensitive_session_fields(copy.deepcopy(s)) for s in sessions]
+    with _sessions_pending_lock:
+        _sessions_pending_snapshot = snapshot
     def _write():
+        global _sessions_pending_snapshot
         with _save_sessions_lock:
-            tmp = SESSIONS_FILE.with_suffix(".tmp")
-            try:
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(snapshot, f, ensure_ascii=False, indent=2, default=str)
-                tmp.replace(SESSIONS_FILE)
-                _restrict_perms(SESSIONS_FILE)
-            except Exception as e:
-                log_debug(f"save_browser_sessions error: {e}")
-                tmp.unlink(missing_ok=True)
-                if wait:
-                    raise
+            while True:
+                with _sessions_pending_lock:
+                    pending = _sessions_pending_snapshot
+                    _sessions_pending_snapshot = None
+                if pending is None:
+                    return
+                try:
+                    _atomic_write_json(SESSIONS_FILE, pending)
+                    _restrict_perms(SESSIONS_FILE)
+                except Exception as e:
+                    log_debug(f"save_browser_sessions error: {e}")
+                    # Восстанавливаем pending — новая попытка при следующем submit.
+                    with _sessions_pending_lock:
+                        if _sessions_pending_snapshot is None:
+                            _sessions_pending_snapshot = pending
+                    if wait:
+                        raise
+                    return
     if wait:
         _write()
     else:
@@ -418,8 +492,10 @@ def _restrict_perms(path):
 
 
 def add_applied(account_name: str, vacancy_id: str, info: dict = None):
+    global _applied_dirty
     _load_cache()
     with _cache_lock:
+        _applied_dirty = True
         if account_name not in _cache_applied:
             _cache_applied[account_name] = {}
         existing = _cache_applied[account_name].get(vacancy_id, {})
@@ -451,9 +527,11 @@ def add_applied(account_name: str, vacancy_id: str, info: dict = None):
 
 def add_test_vacancy(vacancy_id: str, title: str = "", company: str = "",
                      account_name: str = "", resume_hash: str = ""):
+    global _tests_dirty
     _load_cache()
     with _cache_lock:
         if vacancy_id not in _cache_tests:
+            _tests_dirty = True
             _cache_tests[vacancy_id] = {
                 "url": f"{hh_base()}/vacancy/{vacancy_id}",
                 "title": title,
