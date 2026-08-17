@@ -12,12 +12,13 @@ services:
     depends_on:
       - singbox
     ports:
-      # Граница безопасности — host-side bind: published-порт доступен только
-      # с loopback хоста, дашборд не торчит в LAN. Для доступа извне loopback
-      # убери префикс 127.0.0.1 И задай HH_BOT_API_KEY + HH_BOT_UNSAFE_EXPOSE=1
-      # (см. env ниже).
-      - "127.0.0.1:8000:8000"
+      # LAN-доступ: bind на 0.0.0.0 — публикуем в сеть, защищено HH_BOT_API_KEY
+      # + HH_BOT_UNSAFE_EXPOSE=1 (см. env ниже).
+      - "8000:8000"
+    env_file:
+      - .env
     environment:
+      HH_BOT_UNSAFE_EXPOSE: "1"
       # Внутри контейнера слушаем 0.0.0.0: Docker DNAT направляет published-
       # трафик на container IP, а НЕ на container loopback — bind 127.0.0.1
       # внутри контейнера сделал бы дашборд недоступным даже с хоста.

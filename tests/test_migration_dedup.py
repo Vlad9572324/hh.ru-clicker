@@ -5,7 +5,7 @@ from scripts.migrate_sessions_dedup_by_user import migrate
 
 def test_four_duplicates_become_one_and_backup(tmp_path):
     path = tmp_path / "data" / "browser_sessions.json"
-    path.parent.mkdir()
+    path.parent.mkdir(exist_ok=True)  # conftest autouse fixture могла уже создать
     rows = []
     all_resumes = [{"hash": f"r{i}", "title": f"Title {i}"} for i in range(4)]
     for i in range(4):
