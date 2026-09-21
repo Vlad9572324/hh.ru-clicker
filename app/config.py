@@ -99,6 +99,10 @@ class Config:
     # Возможные значения: "fullDay", "remote", "flexible", "shift", "flyInFlyOut"
     allowed_schedules: list = []
     remote_it_only: bool = False
+    local_country_only: bool = False
+    local_country_id: str = ""
+    relocation_country_only: bool = False
+    relocation_country_ids: list = []
     # Фильтр по заголовку вакансии. Пустой include = все заголовки разрешены.
     # Сравнение регистронезависимое, по вхождению подстроки.
     title_include_keywords: list = []
@@ -262,7 +266,7 @@ def _url_pages_map() -> dict:
 
 
 _CONFIG_KEYS = [
-    "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
+    "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only", "local_country_only", "local_country_id", "relocation_country_only", "relocation_country_ids",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",
     "skip_inconsistent", "use_oauth_apply", "auto_pick_resume", "default_client_mode", "daily_apply_limit", "stop_on_hh_limit", "llm_check_interval",

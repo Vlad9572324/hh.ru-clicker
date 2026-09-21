@@ -11,10 +11,22 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from app.logging_utils import log_debug
 from app.config import CONFIG, _CONFIG_KEYS, save_config, _url_entry
+from app.hh_areas import area_directory
 from app.instances import bot, manager
 
 
 router = APIRouter()
+
+
+@router.get("/api/areas/countries")
+async def api_area_countries():
+    """Expose HH's country directory for location-scope controls."""
+    try:
+        countries, _ = await asyncio.to_thread(area_directory)
+        return {"ok": True, "countries": countries}
+    except Exception as exc:
+        log_debug(f"HH area directory error: {type(exc).__name__}: {exc}")
+        return {"ok": False, "countries": []}
 
 
 # ============================================================

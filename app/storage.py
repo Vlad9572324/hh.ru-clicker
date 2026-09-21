@@ -41,12 +41,14 @@ def _atomic_write_json(path: Path, data) -> None:
         os.replace(tmp, path)
         # fsync родительского каталога — иначе rename может быть потерян
         # даже если файл сфсинкан.
-        try:
-            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
-            os.fsync(dir_fd)
-        except OSError as exc:
-            if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):
-                raise
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if directory_flag is not None:
+            try:
+                dir_fd = os.open(str(path.parent), directory_flag)
+                os.fsync(dir_fd)
+            except OSError as exc:
+                if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):
+                    raise
     finally:
         if dir_fd is not None:
             try:

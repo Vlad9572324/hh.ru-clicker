@@ -3606,7 +3606,9 @@ function renderHeader(snap) {
   if (filterEl && snap.config) {
     const badges = [];
     if (snap.config.filter_agencies) badges.push('🏢 Без агентств');
-    if (snap.config.remote_it_only) badges.push('ИТ · только удалёнка');
+    if (snap.config.remote_it_only) badges.push('🌐 Full remote IT');
+    if (snap.config.local_country_only) badges.push('📍 Локальная страна');
+    if (snap.config.relocation_country_only) badges.push('✈️ Релокация: выбранные страны');
     if (snap.config.filter_low_competition) badges.push('🎯 <10 откликов');
     if (snap.config.search_period_days > 0) badges.push(`📅 ${snap.config.search_period_days}д`);
     const protectedCount = (snap.accounts || []).filter(a => a.safety_enabled).length;
@@ -3703,7 +3705,7 @@ function renderAccounts(snap) {
     if (!card) {
       card = document.createElement('div');
       card.id = 'card-' + acc.idx;
-      card.className = 'acc-card color-' + (acc.color || 'yellow');
+      card.className = 'acc-card card color-' + (acc.color || 'yellow');
       card.dataset.accountIdentity = identity;
       card.innerHTML = buildCardHTML(acc);
       grid.appendChild(card);
@@ -3711,10 +3713,36 @@ function renderAccounts(snap) {
       // подряд + 700KB SSR HTML каждый. Отложим на 2с после первого рендера.
       setTimeout(() => _accDiagAutoLoad(acc.idx), 2000 + acc.idx * 500);
     } else {
-      card.className = 'acc-card color-' + (acc.color || 'yellow');
+      card.className = 'acc-card card color-' + (acc.color || 'yellow');
       updateCard(card, acc);
     }
   });
+}
+
+let _scopeCountriesPromise = null;
+function scopeCountries() {
+  if (!_scopeCountriesPromise) {
+    _scopeCountriesPromise = fetch('/api/areas/countries').then(r => r.json()).then(data => data.ok ? data.countries : []);
+  }
+  return _scopeCountriesPromise;
+}
+function initScopeCountryControls(card, cfg) {
+  scopeCountries().then(countries => {
+    if (!countries.length) return;
+    card.querySelectorAll('.scope-country-select, .scope-country-multi').forEach(select => {
+      if (!select.dataset.loaded) {
+        select.innerHTML = (select.multiple ? '' : '<option value="">Не выбрана</option>') + countries.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+        select.dataset.loaded = '1';
+      }
+      const key = select.dataset.key;
+      const selected = cfg[key];
+      [...select.options].forEach(option => { option.selected = Array.isArray(selected) ? selected.includes(option.value) : option.value === String(selected || ''); });
+      if (!select._bound) {
+        select._bound = true;
+        select.onchange = () => sendCmd({type: 'set_config', key, value: select.multiple ? [...select.selectedOptions].map(o => o.value) : select.value});
+      }
+    });
+  }).catch(() => {});
 }
 
 function buildCardHTML(acc) {
@@ -4001,7 +4029,13 @@ function buildCardHTML(acc) {
             <input type="checkbox" class="smart-filter-cb" data-key="filter_agencies" style="accent-color:var(--yellow)"> 🏢 ${t('smart_filter_no_agency')}
           </label>
           <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
-            <input type="checkbox" class="smart-filter-cb" data-key="remote_it_only" style="accent-color:var(--cyan)"> Только ИТ + удалёнка (все поиски)
+            <input type="checkbox" class="smart-filter-cb" data-key="remote_it_only" style="accent-color:var(--cyan)"> 🌐 Full remote IT
+          </label>
+          <label style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Любой формат вакансии, но только в заданной стране">
+            <input type="checkbox" class="smart-filter-cb" data-key="local_country_only" style="accent-color:var(--cyan)"> 📍 Локально в стране
+          </label>
+          <label style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Локальные вакансии в Европе или США; remote сюда не входит">
+            <input type="checkbox" class="smart-filter-cb" data-key="relocation_country_only" style="accent-color:var(--cyan)"> ✈️ Релокация в выбранные страны
           </label>
           <label id="acc-safety-label-${acc.idx}" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Настройка только этого аккаунта: HH выбирает подходящее резюме; обязательные несовпадения, предупреждения о недостоверности и redirect-дубликаты пропускаются">
             <input type="checkbox" id="acc-safety-cb-${acc.idx}" ${acc.safety_enabled ? 'checked' : ''}
@@ -4026,6 +4060,12 @@ function buildCardHTML(acc) {
             <input type="checkbox" class="smart-filter-cb" data-key="prefer_hh_signals" style="accent-color:var(--cyan)"> 📡 Приоритет по сигналам HH
           </label>
         </div>
+        <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px">Локальная страна
+          <select class="scope-country-select apply-input" data-key="local_country_id" style="font-size:11px;padding:2px 5px;min-width:150px"><option value="">Загрузка стран…</option></select>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:6px;margin-bottom:8px">Страны релокации
+          <select class="scope-country-multi apply-input" data-key="relocation_country_ids" multiple size="4" style="font-size:11px;padding:2px 5px;min-width:150px"><option value="">Загрузка стран…</option></select>
+        </label>
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:8px">
           <label style="display:flex;align-items:center;gap:4px">📅 ${t('smart_filter_freshness')}
             <select class="smart-filter-sel" data-key="search_period_days" style="font-size:10px;padding:1px 4px">
@@ -5037,7 +5077,7 @@ function updateCard(card, acc) {
   }
   card.querySelectorAll('.smart-filter-cb').forEach(cb => {
     const key = cb.dataset.key;
-    if (key === 'prefer_hh_signals' || key === 'remote_it_only') {
+    if (key === 'prefer_hh_signals' || key === 'remote_it_only' || key === 'local_country_only' || key === 'relocation_country_only') {
       cb.disabled = typeof cfg[key] !== 'boolean';
       cb.title = cb.disabled ? 'Нужен перезапуск бэкенда для новой настройки' : '';
       if (cb.disabled) cb.checked = false;
@@ -5048,6 +5088,7 @@ function updateCard(card, acc) {
       cb.onchange = () => sendCmd({type: 'set_config', key, value: cb.checked});
     }
   });
+  initScopeCountryControls(card, cfg);
   card.querySelectorAll('.smart-filter-sel').forEach(sel => {
     const key = sel.dataset.key;
     if (cfg[key] !== undefined) sel.value = cfg[key];

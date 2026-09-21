@@ -90,6 +90,8 @@ def pipeline(monkeypatch):
         "min_recommendations_percent": 0, "allowed_schedules": [], "min_salary": 0,
         "fresh_vacancies_mode": False, "prefer_hh_signals": False,
         "use_oauth_apply": False, "stop_on_hh_limit": True,
+        "remote_it_only": False, "local_country_only": False,
+        "local_country_id": "", "relocation_country_only": False, "relocation_country_ids": [],
     }.items():
         monkeypatch.setattr(module.CONFIG, key, value)
     begin_cycle(state)
@@ -160,6 +162,19 @@ def test_actual_filter_deduplicates_cross_search_and_repeated_observations(pipel
     assert (report["found_raw"], report["found_unique"]) == (3, 1)
     assert (report["processed"], report["already"], report["skipped"]) == (1, 1, 1)
     assert state.already_applied == 2  # Legacy events do not inflate the cycle report.
+
+
+def test_location_scope_skips_vacancies_outside_all_enabled_modes(pipeline, monkeypatch):
+    _, state = pipeline
+    monkeypatch.setattr(module.CONFIG, "local_country_only", True)
+    monkeypatch.setattr(module.CONFIG, "local_country_id", "155")
+    found_cycle(state, ["v"], 1)
+
+    result = filter_candidates(pipeline, {"v": {"title": "Synthetic role", "country_id": "999"}})
+
+    assert result["filtered"] == []
+    report = snapshot(state)
+    assert report["skip_reasons"][0]["key"] == "vacancy_outside_scope"
 
 
 def completed_results(pipeline, results, *, batch=None):
@@ -237,6 +252,13 @@ def test_attempt_guard_rechecks_remote_it_scope_after_setting_changes(pipeline, 
     assert guard()
     state.vacancy_meta['v']['work_format'] = [{'id':'HYBRID'}]
     assert not guard()
+    monkeypatch.setattr(module.CONFIG, 'remote_it_only', False)
+    monkeypatch.setattr(module.CONFIG, 'local_country_only', True)
+    monkeypatch.setattr(module.CONFIG, 'local_country_id', '155')
+    state.vacancy_meta['v'] = {'title': 'Synthetic role', 'country_id': '999'}
+    assert not guard()
+    state.vacancy_meta['v']['country_id'] = '155'
+    assert guard()
     module.add_applied.assert_not_called()
 
 

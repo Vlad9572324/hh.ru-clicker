@@ -213,6 +213,8 @@ class AccountState:
         self.llm_last_check_at: str = ""     # ISO-timestamp конца последнего цикла (для «X сек назад»)
         self.llm_next_check_at: str = ""     # ISO-timestamp когда стартует следующий цикл
         self._llm_lock = threading.Lock()    # prevents concurrent _process_llm_replies for this account
+        # Polling and WebSocket events may ask to scan chats at the same time.
+        self._telegram_notify_lock = threading.Lock()
         self._msg_consecutive: dict = {}     # {neg_id: count} consecutive applicant messages without HR reply
         self._test_failures: dict = {}       # {vid: fail_count} questionnaire fill failures
 

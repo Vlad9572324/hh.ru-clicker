@@ -1,6 +1,6 @@
 import pytest
 from urllib.parse import parse_qs, urlsplit
-from app.search_scope import IT_ROLES, remote_it_filters, remote_it_url, remote_it_rejection
+from app.search_scope import IT_ROLES, remote_it_filters, remote_it_url, remote_it_rejection, vacancy_scope_rejection
 
 
 def test_filters_replace_non_remote_conditions_but_keep_query():
@@ -59,3 +59,12 @@ def test_worldwide_search_omits_area_in_actual_mobile_request(monkeypatch):
     monkeypatch.setattr('app.mobile_search.mobile_request',request)
     search_vacancies({},text,area_id=area,filters=filters)
     assert len(calls)==1
+
+
+def test_enabled_location_modes_are_an_or_union():
+    assert vacancy_scope_rejection(
+        {'country_id': '155'}, local_country_only=True, local_country_id='155',
+    ) is None
+    assert vacancy_scope_rejection(
+        {'country_id': '1001'}, relocation_country_only=True, relocation_country_ids=['1001'],
+    ) is None

@@ -95,4 +95,5 @@ pytest -q
 - [Защита данных](docs/SECURITY.md)
 - [API reference](docs/API_REFERENCE.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Дизайн-система интерфейса](docs/DESIGN_SYSTEM.md)
 - [Changelog](CHANGELOG.md)

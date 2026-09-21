@@ -138,7 +138,12 @@ def parse_search_page(html: str) -> dict:
             if cm:
                 company_id = cm.group(1)
         if title:
-            meta[vid] = {"title": title, "company": company, "employer_id": company_id}
+            address_el = item.find(attrs={"data-qa": re.compile(r"vacancy-serp__vacancy-address")})
+            meta[vid] = {
+                "title": title, "company": company, "employer_id": company_id,
+                "location": address_el.get_text(" ", strip=True) if address_el else "",
+                "card_text": item.get_text(" ", strip=True),
+            }
 
     if not meta:
         for link in soup.find_all("a", href=re.compile(r"/vacancy/\d+")):
@@ -263,7 +268,7 @@ def parse_work_schedules(html: str, ids: set) -> dict:
     Возвращает {vacancy_id: set_of_schedule_ids} (e.g. {"remote", "flexible"}).
     """
     result = {vid: set() for vid in ids}
-    if not ids or not CONFIG.allowed_schedules:
+    if not ids or not (CONFIG.allowed_schedules or CONFIG.remote_it_only):
         return result
     all_schedules = parse_search_page(html)["schedules"]
     for vid in ids:
@@ -318,12 +323,14 @@ def parse_apply_strategy_meta(html: str) -> dict:
             vid = str(vid)
             ar = (v.get("autoResponse") or {})
             em = (v.get("employerManager") or {})
+            area = v.get("area") or {}
             out[vid] = {
                 "accept_auto_response": bool(ar.get("acceptAutoResponse")) if "acceptAutoResponse" in ar else None,
                 "chat_write_possibility": v.get("chatWritePossibility", ""),
                 "response_letter_required": v.get("@responseLetterRequired"),
                 "hr_online": em.get("latestActivity", ""),
                 "hh_labels": _lab_for(vid),
+                "area_id": str(area.get("id") or "") if isinstance(area, dict) else "",
             }
         # Также для вакансий с labels, но без полной meta (не в vacancies[]) —
         # хотя бы labels сохраним: DISCARD-фильтр пригодится по всем известным id.

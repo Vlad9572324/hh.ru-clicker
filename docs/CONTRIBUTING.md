@@ -40,14 +40,16 @@
 
 ### Фронтенд (vanilla JS, БЕЗ build-step)
 
-- Весь фронт: `static/index.html` + `static/js/app.js` (~6k строк) +
-  `static/css/style.css`, `static/css/theme-autoclicker.css`.
+- Весь фронт: `static/index.html` + `static/js/app.js` (~6k строк) + Tabler
+  1.5.1 (`static/vendor/tabler/`) и `static/css/tabler-adapter.css`.
 - Подключение напрямую: `<script src="/static/js/app.js?v=5">` и `<link>` в
   `index.html`. **Никаких npm/webpack/vite/bundler'ов в проекте нет и не нужно.**
   Правка фронта = просто правка файла; кэш бьётся автоматически — роут `/`
   подставляет `?v=<mtime>` в ссылки на ассеты (`_bust()` в `app/routes/core.py`).
 - **Никаких новых фреймворков/сборок (React/Vue/TypeScript-компиляция и т.п.)
   без предварительного обсуждения с владельцем проекта.**
+- Правила компонентов, темизации и очистки legacy-разметки обязательны в
+  [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md).
 - Фичи, добавленные на бэкенде и видимые в UI, обычно требуют правки
   `static/js/app.js` + `static/index.html` в том же PR.
 

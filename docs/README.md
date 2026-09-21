@@ -19,6 +19,7 @@
 | [API_REFERENCE.md](API_REFERENCE.md) | Reference по `HHClient`: сигнатура + вызов + форма ответа для всех 37 методов; таблица web/mobile-поддержки с кандидат-эндпоинтами api.hh.ru для фаз 2–4; конвенция ошибок |
 | [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) | Все 56 полей `Config` (`app/config.py`): default, смысл, где используется; env-переменные (настоящий override — `HH_PROXY`); детально про `default_client_mode` и поле `mode` аккаунтов/temp-сессий |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Как контрибутить: coding style (FastAPI + vanilla JS без build-step), ветвление (main / refactor/mobile-api / pr-N), формат коммитов, тестирование (pytest + Playwright e2e в `tests/e2e/`), запрет Co-Authored-By трейлеров |
+| [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | Обязательная дизайн-система: Tabler 1.5.1, компоненты по назначению, light/dark theme, правила dynamic DOM и план удаления legacy-стилей |
 
 ## Реверс-инжиниринг hh.ru
 

@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HH Bot Dashboard</title>
-<link rel="stylesheet" href="/static/css/style.css?v=state-readable-4">
-<link rel="stylesheet" href="/static/css/theme-autoclicker.css">
 <!-- UI integrations (feat1..feat8) -->
 <link rel="stylesheet" href="/static/css/features/feat1_hr_badge.css">
 <link rel="stylesheet" href="/static/css/features/feat2_preflight.css">
@@ -15,13 +13,15 @@
 <link rel="stylesheet" href="/static/css/features/feat6_autologin.css">
 <link rel="stylesheet" href="/static/css/features/feat7_mode.css">
 <link rel="stylesheet" href="/static/css/features/feat8_ws_toggle.css">
+<link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css?v=1.5.1">
+<link rel="stylesheet" href="/static/css/tabler-adapter.css?v=1">
 </head>
-<body>
+<body class="layout-fluid">
 
 <!-- Header -->
-<div id="header">
+<header id="header" class="navbar navbar-expand-md border-bottom sticky-top">
   <div id="conn-dot" title="WebSocket connection"></div>
-  <h1>🤖 HH Bot Dashboard</h1>
+  <h1 class="navbar-brand mb-0">HH Bot Dashboard</h1>
   <div style="color:var(--dim);font-size:11px">
     🔍 <span id="global-found">0</span> <span data-i18n="hdr_found">найдено</span> &nbsp;
     ✅ <span id="global-sent">0</span> <span data-i18n="hdr_replies">откликов</span>
@@ -37,26 +37,27 @@
   </div>
   <div id="uptime">⏱ 00:00</div>
   <div id="dbg-err" style="display:none;color:#f85149;font-size:11px;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
-  <button id="lang-btn" onclick="toggleLang()" style="padding:4px 10px;border:1px solid var(--border);background:var(--bg-card2);color:var(--dim);cursor:pointer;border-radius:4px;font-family:inherit;font-size:11px" title="Switch language">RU</button>
-  <button id="pause-btn" onclick="sendCmd({type:'pause_toggle'})">⏸ Пауза</button>
+  <button id="lang-btn" class="btn btn-sm btn-outline-secondary" onclick="toggleLang()" title="Switch language">RU</button>
+  <button id="theme-btn" class="btn btn-sm btn-outline-secondary" type="button" title="Переключить тему"></button>
+  <button id="pause-btn" class="btn btn-sm btn-outline-warning" onclick="sendCmd({type:'pause_toggle'})">⏸ Пауза</button>
   <span id="apply-mode-badge" style="padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer" onclick="sendCmd({type:'set_config',key:'use_oauth_apply',value:!State.lastSnapshot?.config?.use_oauth_apply})" title="Клик — переключить метод откликов"></span>
   <span id="reviews-to-rate-badge" style="display:none;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;background:rgba(255,180,0,0.12);border:1px solid var(--yellow);color:var(--yellow)" title="Работодатели, которых можно оценить (mobile /employer_reviews/employers_to_rate)"></span>
-</div>
+</header>
 
 <!-- Tabs -->
-<div id="tabs">
-  <div class="tab active" data-tab="main" data-i18n="tab_main">📊 Главная</div>
-  <div class="tab" data-tab="log" data-i18n="tab_log">📜 Лог</div>
-  <div class="tab" data-tab="applied" data-i18n="tab_applied">✅ Отклики</div>
-  <div class="tab" data-tab="tests" data-i18n="tab_tests">🧪 Тесты</div>
-  <div class="tab" data-tab="db" data-i18n="tab_db">📂 База</div>
-  <div class="tab" data-tab="hh" data-i18n="tab_hh">🎯 HH Статус</div>
-  <div class="tab" data-tab="views" data-i18n="tab_views">👁️ Просмотры</div>
-  <div class="tab" data-tab="apply" data-i18n="tab_apply">🚀 Отклик</div>
-  <div class="tab" data-tab="llm" data-i18n="tab_llm">🤖 LLM Ответы</div>
-  <div class="tab" data-tab="hedi">🤖 HH Хэдди</div>
-  <div class="tab" data-tab="settings" data-i18n="tab_settings">⚙️ Настройки</div>
-</div>
+<nav id="tabs" class="nav nav-tabs px-3" aria-label="Разделы панели">
+  <div class="tab nav-link active" data-tab="main" data-i18n="tab_main">📊 Главная</div>
+  <div class="tab nav-link" data-tab="log" data-i18n="tab_log">📜 Лог</div>
+  <div class="tab nav-link" data-tab="applied" data-i18n="tab_applied">✅ Отклики</div>
+  <div class="tab nav-link" data-tab="tests" data-i18n="tab_tests">🧪 Тесты</div>
+  <div class="tab nav-link" data-tab="db" data-i18n="tab_db">📂 База</div>
+  <div class="tab nav-link" data-tab="hh" data-i18n="tab_hh">🎯 HH Статус</div>
+  <div class="tab nav-link" data-tab="views" data-i18n="tab_views">👁️ Просмотры</div>
+  <div class="tab nav-link" data-tab="apply" data-i18n="tab_apply">🚀 Отклик</div>
+  <div class="tab nav-link" data-tab="llm" data-i18n="tab_llm">🤖 LLM Ответы</div>
+  <div class="tab nav-link" data-tab="hedi">🤖 HH Хэдди</div>
+  <div class="tab nav-link" data-tab="settings" data-i18n="tab_settings">⚙️ Настройки</div>
+</nav>
 
 <!-- Main Tab -->
 <div id="panel-main" class="panel active">
@@ -1119,6 +1120,7 @@
 </div>
 
 <script src="/static/js/app.js?v=message-safety-9"></script>
+<script src="/static/vendor/tabler/tabler.min.js?v=1.5.1"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
 <script src="/static/js/features/job_status.js?v=1"></script>
 <script src="/static/js/features/skills.js?v=1"></script>
@@ -1266,5 +1268,6 @@ document.addEventListener('DOMContentLoaded', () => {
 <script src="/static/js/features/feat6_autologin.js?v=1"></script>
 <script src="/static/js/features/feat7_mode.js?v=2"></script>
 <script src="/static/js/features/feat8_ws_toggle.js?v=1"></script>
+<script src="/static/js/tabler-upgrade.js?v=1"></script>
 </body>
 </html>
