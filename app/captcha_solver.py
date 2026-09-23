@@ -1,47 +1,126 @@
-"""Fetch HH captcha images and submit human answers using the account HH transport."""
-from app.oauth import _token_key
-from app.captcha import account_key
-from app.hh_http import HH
+"""Fetch HH captcha images and submit human answers using a session cookie jar.
+
+Разведан live-flow:
+1. GET  https://hh.ru/account/captcha?state=<state>&backurl=<url>
+   → HH ставит DDoS-Guard __ddg*, _xsrf, hhtoken, hhuid, hhrole cookies в session.
+2. POST https://hh.ru/captcha?lang=RU  (Referer + X-Xsrftoken=<_xsrf>)
+   → {"key": "<captchaKey>"}
+3. GET  https://hh.ru/captcha/picture?key=<captchaKey>  → PNG bytes.
+4. POST https://hh.ru/account/captcha?captchaText=X&captchaKey=Y&captchaState=Z&backurl=...
+   → 302 redirect на backurl = успех.
+
+Ключевые открытия (проверено 2026-09-23):
+- Bearer OAuth токен НЕ помогает (endpoint web-only).
+- `_xsrf` cookie + `X-Xsrftoken` header обязательны — иначе 403 с HTML captcha_required.
+- Все запросы должны идти В ОДНОЙ session (persistent cookie jar).
+- HH.request с shared cookie_jar_key НЕ подходит: state пересекается с обычным трафиком.
+  Используем свой requests.Session per-challenge.
+"""
+import requests
+from urllib.parse import parse_qs, urlsplit
+
+from app.hh_http import egress_proxies
+
+_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+       '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36')
 
 
-def _request(acc, method, path, **kwargs):
-    cookies = acc.get('cookies') or {}
-    headers = {'Referer': 'https://hh.ru/', 'X-Requested-With': 'XMLHttpRequest'}
-    if isinstance(cookies, dict) and cookies.get('_xsrf'):
-        headers['X-Xsrftoken'] = cookies['_xsrf']
-    return HH.request(method, 'https://hh.ru' + path, cookies=cookies,
-                      cookie_jar_key=_token_key(acc) or account_key(acc), headers=headers,
-                      timeout=10, _skip_diag=True, **kwargs)
+def _make_session():
+    s = requests.Session()
+    s.headers.update({'User-Agent': _UA,
+                      'Accept-Language': 'ru,en-US;q=0.9,en;q=0.8'})
+    return s
 
 
-def fetch_captcha_image(acc: dict, lang: str = 'RU') -> tuple[str, bytes]:
-    response = _request(acc, 'POST', '/captcha', params={'lang': lang})
+def _prime_session(captcha_url: str) -> tuple[requests.Session, str, str]:
+    """GET captcha page → session with DDoS-Guard + _xsrf cookies.
+
+    Returns (session, state, backurl) parsed from captcha_url.
+    """
+    parts = urlsplit(captcha_url)
+    query = parse_qs(parts.query)
+    state = query.get('state', [''])[0]
+    backurl = query.get('backurl', ['https://hh.ru/'])[0]
+    if not state:
+        raise ValueError('missing_state')
+
+    session = _make_session()
+    proxies = egress_proxies()
+    session.proxies.update(proxies or {})
+    response = session.get(f'https://hh.ru/account/captcha?state={state}&backurl={backurl}',
+                           timeout=15, allow_redirects=True)
     if response.status_code != 200:
-        raise ValueError(f'http_{response.status_code}')
-    key = response.json().get('key')
+        raise ValueError(f'prime_http_{response.status_code}')
+    return session, state, backurl
+
+
+def fetch_captcha_image(acc: dict, captcha_url: str, lang: str = 'RU'):
+    """Load HH captcha for a given challenge URL. Returns (session, captcha_key, image_bytes, state, backurl).
+
+    Session is reusable for submit_captcha (same cookie jar / DDoS-Guard tokens).
+    ``acc`` is accepted for signature compatibility but not used (captcha flow
+    is stateless w.r.t. account — HH state param already carries account identity).
+    """
+    session, state, backurl = _prime_session(captcha_url)
+    xsrf = session.cookies.get('_xsrf', '')
+    if not xsrf:
+        raise ValueError('missing_xsrf_cookie')
+    headers = {
+        'Referer': f'https://hh.ru/account/captcha?state={state}&backurl={backurl}',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Xsrftoken': xsrf,
+        'Accept': 'application/json, text/plain, */*',
+    }
+    r = session.post('https://hh.ru/captcha', params={'lang': lang},
+                     headers=headers, timeout=10, allow_redirects=False)
+    if r.status_code != 200:
+        raise ValueError(f'get_key_http_{r.status_code}')
+    key = r.json().get('key')
     if not isinstance(key, str) or not key:
         raise ValueError('missing_key')
-    response = _request(acc, 'GET', '/captcha/picture', params={'key': key})
-    if response.status_code != 200 or not response.content:
-        raise ValueError(f'image_http_{response.status_code}')
-    return key, response.content
+    r = session.get('https://hh.ru/captcha/picture', params={'key': key},
+                    headers={'Referer': headers['Referer']},
+                    timeout=10, allow_redirects=False)
+    if r.status_code != 200 or not r.content:
+        raise ValueError(f'image_http_{r.status_code}')
+    return session, key, r.content, state, backurl
 
 
-def submit_captcha(acc: dict, captcha_text: str, captcha_key: str,
+def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: str,
                    captcha_state: str, backurl: str = 'https://hh.ru/',
-                   failurl: str = None) -> tuple[bool, str]:
-    response = _request(acc, 'POST', '/account/captcha', allow_redirects=False,
-                        params={'captchaText': captcha_text, 'captchaKey': captcha_key,
-                                'captchaState': captcha_state, 'backurl': backurl,
-                                'failurl': failurl or backurl})
-    if response.status_code == 302:
+                   failurl: str = None):
+    """POST /account/captcha with user's text. Returns (ok: bool, reason: str).
+
+    Uses SAME session that fetched the image (DDoS-Guard state must match).
+    """
+    xsrf = session.cookies.get('_xsrf', '')
+    headers = {
+        'Referer': f'https://hh.ru/account/captcha?state={captcha_state}&backurl={backurl}',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Xsrftoken': xsrf,
+        'Accept': 'application/json, text/plain, */*',
+    }
+    r = session.post('https://hh.ru/account/captcha', params={
+        'captchaText': captcha_text,
+        'captchaKey': captcha_key,
+        'captchaState': captcha_state,
+        'backurl': backurl,
+        'failurl': failurl or backurl,
+    }, headers=headers, timeout=10, allow_redirects=False)
+    # 302/303 → HH принял ответ, редирект на backurl.
+    if r.status_code in (302, 303):
         return True, ''
+    # 200/400/403 могут содержать JSON {hhcaptcha:{isBot:true}} — failure.
     try:
-        body = response.json()
+        body = r.json()
         if isinstance(body, dict):
-            for field, reason in [('recaptcha', 'recaptcha'), ('hhcaptcha', 'isBot')]:
-                if isinstance(body.get(field), dict) and body[field].get('isBot') is True:
-                    return False, reason
+            if isinstance(body.get('recaptcha'), dict) and body['recaptcha'].get('isBot') is True:
+                return False, 'recaptcha'
+            if isinstance(body.get('hhcaptcha'), dict) and body['hhcaptcha'].get('isBot') is True:
+                return False, 'isBot'
     except (ValueError, TypeError):
         pass
-    return False, f'http_{response.status_code}'
+    # 200 без явного isBot маркера — тоже успех (HH иногда так подтверждает).
+    if r.status_code == 200:
+        return True, ''
+    return False, f'http_{r.status_code}'

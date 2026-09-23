@@ -54,22 +54,32 @@ class CaptchaCoordinator:
                     continue
                 item = dict(acc_key=key, captcha_state=query['state'][0],
                             backurl='https://hh.ru/', failurl=query.get('failurl', ['https://hh.ru/'])[0],
-                            url=captcha.browser_url(record), fails=0, captcha_key=None)
+                            url=captcha.browser_url(record), fails=0,
+                            captcha_key=None, session=None,
+                            challenge_url=record.get('captcha_url', ''))
                 try:
                     await self.photo(cid, item, acc)
                 except Exception:
-                    logger.warning('HH captcha delivery failed; will retry')
+                    logger.exception('HH captcha delivery failed; will retry')
                     continue
                 self.pending[cid] = item
                 self._seen.add(cid)
 
     async def photo(self, cid, item, acc):
         item['captcha_key'] = None
-        key, image = await asyncio.to_thread(fetch_captcha_image, acc)
+        item['session'] = None
+        # Возвращает свежую session с DDoS-Guard cookies и captchaKey.
+        session, key, image, state, backurl = await asyncio.to_thread(
+            fetch_captcha_image, acc, item['challenge_url'])
+        # state/backurl могут отличаться от того что было в challenge URL
+        # (HH может отредиректнуть) — обновляем чтобы submit шёл в правильную session.
+        item['captcha_state'] = state or item['captcha_state']
+        item['backurl'] = backurl or item['backurl']
         result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)
         if not result:
             raise RuntimeError('TG bot disabled')
         item['captcha_key'] = key
+        item['session'] = session
 
     async def resolve(self, cid, text):
         async with self._lock:
@@ -84,8 +94,12 @@ class CaptchaCoordinator:
             if not item['captcha_key']:
                 await self.photo(cid, item, acc)
                 return
+            if item.get('session') is None:
+                # session потерялась (например worker перезапустился) — грузим свежую.
+                await self.photo(cid, item, acc)
+                return
             ok, reason = await asyncio.to_thread(
-                submit_captcha, acc, text, item['captcha_key'], item['captcha_state'],
+                submit_captcha, item['session'], text, item['captcha_key'], item['captcha_state'],
                 item['backurl'], item['failurl'])
             if ok:
                 # clear() compares IDs under the same lock as hold(), with atomic rename.

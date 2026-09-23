@@ -18,7 +18,8 @@ def test_flow(monkeypatch, outcomes):
     cid = captcha.current(acc)['id']
     manager = SimpleNamespace(account_states=[SimpleNamespace(acc=acc)], temp_states={},
                               resume_challenge_account=Mock())
-    fetch = Mock(return_value=('test-key', b'png'))
+    session = SimpleNamespace()
+    fetch = Mock(return_value=(session, 'test-key', b'png', 'test-state', 'https://hh.ru/'))
     submit = Mock(side_effect=outcomes)
     monkeypatch.setattr(worker, 'fetch_captcha_image', fetch)
     monkeypatch.setattr(worker, 'submit_captcha', submit)
@@ -32,7 +33,7 @@ def test_flow(monkeypatch, outcomes):
         assert coordinator.pending[cid]['captcha_state'] == 'test-state'
         for _ in outcomes:
             await bot.on_message('answer', -123, 7)
-        assert submit.call_args.args == (acc, 'answer', 'test-key', 'test-state', 'https://hh.ru/', 'https://hh.ru/')
+        assert submit.call_args.args == (session, 'answer', 'test-key', 'test-state', 'https://hh.ru/', 'https://hh.ru/')
         if outcomes[-1][0]:
             assert not captcha.current(acc)
             manager.resume_challenge_account.assert_called_once_with('test-account')
@@ -50,7 +51,7 @@ def test_stale_answer(monkeypatch):
     old_id = captcha.current(acc)['id']
     manager = SimpleNamespace(account_states=[SimpleNamespace(acc=acc)], temp_states={},
                               resume_challenge_account=Mock())
-    monkeypatch.setattr(worker, 'fetch_captcha_image', Mock(return_value=('key', b'png')))
+    monkeypatch.setattr(worker, 'fetch_captcha_image', Mock(return_value=(SimpleNamespace(), 'key', b'png', 'test-state', 'https://hh.ru/')))
     submit = Mock()
     monkeypatch.setattr(worker, 'submit_captcha', submit)
     async def run():
@@ -118,7 +119,7 @@ def test_failed_delivery_retries(monkeypatch):
     acc = {'user_id': 'test-account'}
     captcha.hold(acc, {'captcha_url': 'https://hh.ru/account/captcha?state=test-state'})
     manager = SimpleNamespace(account_states=[SimpleNamespace(acc=acc)], temp_states={})
-    monkeypatch.setattr(worker, 'fetch_captcha_image', Mock(return_value=('key', b'png')))
+    monkeypatch.setattr(worker, 'fetch_captcha_image', Mock(return_value=(SimpleNamespace(), 'key', b'png', 'test-state', 'https://hh.ru/')))
     async def run():
         bot = Mock(push_challenge=AsyncMock(side_effect=[RuntimeError('offline'), {'message_id': 7}]))
         coordinator = worker.CaptchaCoordinator(manager, bot)
