@@ -1771,6 +1771,57 @@ function _renderEmpRatingSlots(vid, data) {
   });
 }
 
+async function loadAccountCaptcha(idx) {
+  const box = document.getElementById('acc-captcha-result-' + idx);
+  if (!box) return;
+  box.textContent = 'Загружаю ссылку…';
+  try {
+    const response = await fetch(`/api/account/${idx}/captcha`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Ошибка загрузки');
+    if (!box.isConnected || document.getElementById('acc-captcha-' + idx)?.hidden) return;
+    if (!data.has_direct_link || !data.url) {
+      box.textContent = 'Ссылка из ответа API не сохранилась. Вход на главную HH не снимает эту проверку. Отправки остаются на паузе. ';
+      const probe = document.createElement('button');
+      probe.className = 'btn-sm'; probe.textContent = 'Проверить API без отклика';
+      probe.onclick = async () => {
+        probe.disabled = true;
+        try {
+          const r = await fetch(`/api/account/${idx}/captcha/refresh`, {method:'POST'});
+          const result = await r.json();
+          if (!r.ok || !result.ok) throw new Error(result.error || 'Ошибка проверки');
+          await loadAccountCaptcha(idx);
+          const note = document.createElement('div'); note.textContent = result.message; box.appendChild(note);
+        } catch(e) { box.textContent = e.message; }
+      };
+      box.appendChild(probe);
+      return;
+    }
+    const url = new URL(data.url);
+    if (url.protocol !== 'https:' || !(url.hostname === 'hh.ru' || url.hostname.endsWith('.hh.ru')) || url.username || url.password) throw new Error('Небезопасная ссылка');
+    box.textContent = '';
+    const link = document.createElement('a');
+    link.href = data.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    link.textContent = 'Пройти капчу на HH ↗';
+    link.className = 'btn-sm';
+    link.style.cssText = 'display:inline-block;padding:10px 14px;margin:6px 8px 6px 0;border:1px solid var(--yellow);border-radius:6px;color:var(--yellow);font-weight:700';
+    box.appendChild(link);
+    const button = document.createElement('button');
+    button.className = 'btn-sm'; button.textContent = 'Я прошёл проверку — продолжить';
+    button.onclick = async () => {
+      if (!confirm('Подтверждаете, что вручную прошли проверку в HH именно для этого аккаунта? Это разрешит новые отправки.')) return;
+      button.disabled = true;
+      try {
+        const r = await fetch(`/api/account/${idx}/captcha/continue`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:data.id, confirmed:true})});
+        const result = await r.json();
+        if (!r.ok || !result.ok) throw new Error(result.error || 'Не удалось продолжить');
+        box.textContent = result.message;
+      } catch(e) { alert(e.message); button.disabled = false; }
+    };
+    box.appendChild(button);
+  } catch(e) { box.textContent = e.message || 'Не удалось загрузить проверку'; }
+}
+
 async function llmInterviewsLoad() {
   llmQuarantineLoad();
   if (_llmLoading) return;   // уже идёт запрос — не запускаем параллельный
@@ -3558,6 +3609,12 @@ function checkNotifications(snap) {
       sendBotNotification(`${t('notif_cookies')}${acc.short}`, t('notif_cookies_body'));
     }
     State.prevCookiesExpired[acc.idx] = acc.cookies_expired;
+    State.prevCaptchaState ??= {};
+    const needsCaptcha = acc.paused && acc.paused_reason === 'challenge';
+    if (!isFirstSnapshot && needsCaptcha && !State.prevCaptchaState[acc.idx]) {
+      sendBotNotification('HH: нужна капча', 'Отправки остановлены. Откройте карточку аккаунта и нажмите «Пройти капчу на HH».');
+    }
+    State.prevCaptchaState[acc.idx] = needsCaptcha;
   });
   State.notificationsInited = true;
 }
@@ -3806,6 +3863,12 @@ function buildCardHTML(acc) {
     <div class="acc-auth-check" id="acc-auth-check-${acc.idx}" hidden>
       <button class="btn-sm" id="acc-auth-check-btn-${acc.idx}" onclick="recheckAccountAuth(${acc.idx})">Проверить вход и продолжить</button>
       <div id="acc-auth-check-result-${acc.idx}" role="status"></div>
+    </div>
+    <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
+      <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — пройдите капчу HH</div>
+      <div>Авторизация остаётся через API приложения. Капча открывается отдельно по ссылке HH; обычный вход на сайт её не заменяет.</div>
+      <button class="btn-sm" onclick="loadAccountCaptcha(${acc.idx})">Получить ссылку HH</button>
+      <div id="acc-captcha-result-${acc.idx}" role="status"></div>
     </div>
     <div class="acc-meta" id="acc-meta-${acc.idx}"></div>
     <div class="acc-hh-stats" id="acc-hh-${acc.idx}">${t('card_hh_loading')}</div>
@@ -4922,6 +4985,17 @@ function updateCard(card, acc) {
   }
 
   // Pause button — учитываем глобальную паузу
+  const captchaPanel = document.getElementById('acc-captcha-' + acc.idx);
+  if (captchaPanel) {
+    const needsCaptcha = acc.paused && acc.paused_reason === 'challenge';
+    const newlyShown = captchaPanel.hidden && needsCaptcha;
+    captchaPanel.hidden = !needsCaptcha;
+    if (newlyShown) loadAccountCaptcha(acc.idx);
+    if (!needsCaptcha) {
+      const result = document.getElementById('acc-captcha-result-' + acc.idx);
+      if (result) result.replaceChildren();
+    }
+  }
   const pauseBtn = document.getElementById('acc-pause-btn-' + acc.idx);
   if (pauseBtn) {
     const globalPaused = State.lastSnapshot?.paused;
@@ -4930,6 +5004,10 @@ function updateCard(card, acc) {
       pauseBtn.classList.add('paused');
       pauseBtn.disabled = true;
       pauseBtn.title = 'Обычное продолжение заблокировано: сначала проверьте неизвестный исход отклика в HH.';
+    } else if (acc.paused && acc.paused_reason === 'challenge') {
+      pauseBtn.textContent = acc.telegram_captcha_pending ? '📱 Ждёт TG-ответа' : 'Нужно пройти проверку HH';
+      pauseBtn.disabled = true;
+      pauseBtn.title = 'Используйте панель ручного прохождения проверки.';
     } else if (acc.paused && acc.paused_reason === 'auth') {
       pauseBtn.textContent = acc.mode === 'oauth' ? 'Нужна проверка входа' : 'Нужен вход в HH';
       pauseBtn.classList.add('paused');
@@ -8207,3 +8285,50 @@ if ('Notification' in window && Notification.permission === 'default') {
   if (ta) ta.addEventListener('input', () => { ta.dataset.dirty = '1'; });
   if (el.open) triggerLoad();
 })();
+
+
+async function saveTelegramSettings() {
+  const result = document.getElementById('tg-result');
+  try {
+    const values = {telegram_captcha_enabled: document.getElementById('tg-enabled').checked};
+    const token = document.getElementById('tg-token').value.trim();
+    const chat = document.getElementById('tg-chat').value.trim();
+    if (token) values.telegram_bot_token = token;
+    if (chat) values.telegram_chat_id = chat;
+    for (const [key, value] of Object.entries(values)) {
+      const response = await telegramPost('/api/settings', {key, value});
+      if (response?.ok === false) throw new Error(response.error);
+    }
+    document.getElementById('tg-token').value = '';
+    document.getElementById('tg-chat').value = '';
+    result.textContent = 'Сохранено';
+    return true;
+  } catch (e) { result.textContent = 'Не удалось сохранить настройки'; return false; }
+}
+
+async function testTelegramPhoto() {
+  if (!await saveTelegramSettings()) return;
+  const result = document.getElementById('tg-result');
+  try {
+    const response = await telegramPost('/api/telegram/test', {});
+    result.textContent = response.ok ? 'Фото отправлено' : response.error;
+  } catch (e) { result.textContent = 'Ошибка отправки'; }
+}
+
+setInterval(() => {
+  const cfg = State.lastSnapshot?.config;
+  const status = document.getElementById('tg-status');
+  if (!cfg || !status) return;
+  status.textContent = !cfg.telegram_bot_token_set ? '⚠ токен не задан' : cfg.telegram_connected ? '🟢 подключён' : '🔴 offline';
+  const enabled = document.getElementById('tg-enabled');
+  if (!enabled.dataset.initialized) {
+    enabled.checked = cfg.telegram_captcha_enabled !== false;
+    enabled.dataset.initialized = '1';
+  }
+}, 1000);
+
+async function telegramPost(url, body) {
+  const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!response.ok) throw new Error('Request failed');
+  return response.json();
+}

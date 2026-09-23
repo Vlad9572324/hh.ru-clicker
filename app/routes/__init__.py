@@ -28,12 +28,15 @@ async def _lifespan(_app: FastAPI):
     """
     # ── startup ──
     broadcast_task = None
+    captcha_task = None
     try:
         from app.storage import _cleanup_stale_tmp
         _cleanup_stale_tmp()  # подметаем config.tmp/accounts.tmp от прошлых crash'ей
         from app.config import load_accounts
         load_accounts()
         bot.start()
+        from app.captcha_worker import captcha_orchestrator
+        captcha_task = asyncio.create_task(captcha_orchestrator(bot), name="captcha_orchestrator")
         from app.routes.core import broadcast_loop
         # Сохраняем handle: иначе task может быть garbage-collected до завершения
         # (Python docs warn) и shutdown не может его отменить (kimi-r14-1 #1).
@@ -46,6 +49,10 @@ async def _lifespan(_app: FastAPI):
     yield
 
     # ── shutdown ──
+    if captcha_task is not None:
+        captcha_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+            await asyncio.wait_for(captcha_task, timeout=5)
     if broadcast_task is not None:
         broadcast_task.cancel()
         try:
@@ -215,3 +222,24 @@ app.include_router(mobile_auth_router)
 app.include_router(auto_response_router)
 app.include_router(career_visibility_router)
 app.include_router(discovery_router)
+
+
+@app.post('/api/telegram/test')
+async def telegram_test():
+    """Send a test photo without exposing saved credentials."""
+    import base64
+    import aiohttp
+    from app.telegram_bot import TelegramCaptchaBot
+    from app.config import CONFIG
+    if not CONFIG.telegram_bot_token or not CONFIG.telegram_chat_id:
+        return {'ok': False, 'error': 'Задайте TG token и chat ID'}
+    test_bot = TelegramCaptchaBot()
+    try:
+        test_bot._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        image = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwJfJTEY0oCH8OITBAtxmnf11wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBOXKhLZzLTGoAAAAASUVORK5CYII=')
+        await test_bot._call('sendPhoto', {'chat_id': test_bot.chat_id, 'caption': '✅ TG captcha подключён'}, image)
+        return {'ok': True}
+    except Exception:
+        return {'ok': False, 'error': 'Не удалось отправить фото в TG'}
+    finally:
+        await test_bot.stop()

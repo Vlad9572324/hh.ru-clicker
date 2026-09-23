@@ -29,6 +29,8 @@ def tmp_data_dir(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir(exist_ok=True)  # тесты могут пересоздать сами — не падаем
     from app import message_quarantine, apply_quarantine
+    from app import captcha
+    monkeypatch.setattr(captcha, 'PATH', data_dir / 'hh_challenges.json')
     monkeypatch.setattr(message_quarantine, 'PATH', data_dir / 'message_quarantine.json')
     monkeypatch.setattr(apply_quarantine, 'PATH', data_dir / 'apply_quarantine.json')
     # НЕ chdir: сломало бы тесты, читающие исходники по относительным путям

@@ -1081,6 +1081,14 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
                      "Content-Type": "application/x-www-form-urlencoded"},
             data=data, cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
+        from app.captcha import capture
+        if r.status_code in (400, 403):
+            try:
+                challenge_payload = r.json()
+            except ValueError:
+                challenge_payload = None
+            if capture(acc, r.status_code, challenge_payload) is not None:
+                return 'challenge', {'error_type': 'captcha_required'}
         if r.status_code in (200, 201, 204):
             # Success — try to get vacancy info
             info = {}

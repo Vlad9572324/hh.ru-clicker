@@ -124,6 +124,9 @@ class Config:
     # Формат: `socks5h://host:port` / `http://user:pass@host:port`. Пусто = напрямую.
     # При старте `hh_http._PROXY` берётся сначала из env `HH_PROXY`, иначе из этого поля.
     hh_proxy_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_captcha_enabled: bool = True
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
@@ -262,6 +265,7 @@ def _url_pages_map() -> dict:
 
 
 _CONFIG_KEYS = [
+    "telegram_bot_token", "telegram_chat_id", "telegram_captcha_enabled",
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",

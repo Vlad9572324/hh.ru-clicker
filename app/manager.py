@@ -344,17 +344,28 @@ class BotManager:
         self._llm_log_write_lock = threading.Lock()
 
     def _can_mutate(self, state, *, llm=False):
+        from app.captcha import active as captcha_active
         stop = getattr(self, "_stop_event", None)
         return not (
             (stop is not None and stop.is_set()) or getattr(self, "paused", False)
             or state.paused or state._deleted or getattr(state, "hard_stopped", False)
             or getattr(state, "pending_apply", None)
             or getattr(state, "_auth_recovery_pending", False)
+            or captcha_active(getattr(state, 'acc', {}))
             or (llm and (not state.llm_enabled or not CONFIG.llm_enabled or not CONFIG.llm_auto_send))
         )
 
     def _bind_mutation_guard(self, state):
         state.acc["_mutation_guard"] = lambda: self._can_mutate(state)
+        state.acc['_on_challenge'] = lambda: self._hold_captcha(state)
+
+    def _hold_captcha(self, state):
+        with state._state_lock:
+            state.paused = True
+            if not state.pending_apply and state.paused_reason not in ('auth', 'limit', 'message_outcome_unknown'):
+                state.paused_reason = 'challenge'
+            state.status_detail = 'HH требует капчу. Пройдите проверку вручную; отправки остановлены.'
+        self._persist_pauses(wait=True)
 
     @staticmethod
     def _activity_vacancy(state, vacancy_id=None):
@@ -411,7 +422,7 @@ class BotManager:
             "manual": "Пауза пользователем",
             "auth": "Пауза: требуется восстановить авторизацию HH",
             "hh_rate_limit": "HH ограничил запросы к анкете. Автоматические попытки остановлены",
-            "challenge": "HH ограничил доступ к веб-анкете. Требуется ручная проверка",
+            "challenge": "HH запросил проверку доступа. Это не означает, что вход истёк",
             "auto_errors": "Защитная пауза: несколько ошибок подряд; нужна проверка подключения",
             "network_error": "Сетевая пауза: веб-анкеты не отправлены. Проверка соединения без повторной отправки",
             "message_outcome_unknown": "Результат сообщения неизвестен. Проверьте чат HH перед продолжением",
@@ -457,12 +468,14 @@ class BotManager:
     def _quarantine_exhausted_apply(self, state):
         """Release only an exhausted unknown pause, after durable exclusion."""
         from app.apply_quarantine import retain
+        from app.captcha import active as captcha_active
         with state._state_lock:
             pending = state.pending_apply
             if (self.paused or self._stop_event.is_set() or state._deleted
                     or not state.paused or state.paused_reason != 'outcome_unknown'
                     or not pending or state.receipt_check_started_at
                     or state.hard_stopped or state.limit_exceeded or state.cookies_expired
+                    or captcha_active(state.acc)
                     or (CONFIG.auto_pause_errors > 0 and state.consecutive_errors >= CONFIG.auto_pause_errors)
                     or getattr(state, '_reconcile_persistence_failed', False)
                     or pending.get('reconcile_attempts') != 3
@@ -713,8 +726,11 @@ class BotManager:
             resolve_cycle_unknown(state, vacancy_id, receipt_created_at, locked=True)
             state.pending_apply = state.pending_applies[0] if state.pending_applies else None
             if not state.pending_apply and state.paused_reason == "outcome_unknown":
+                from app.captcha import active as captcha_active
                 if state.hard_stopped or state.limit_exceeded:
                     state.paused_reason = "limit"
+                elif captcha_active(state.acc):
+                    state.paused_reason = 'challenge'
                 elif state.cookies_expired:
                     state.paused_reason = "auth"
                 elif CONFIG.auto_pause_errors > 0 and state.consecutive_errors >= CONFIG.auto_pause_errors:
@@ -1727,6 +1743,34 @@ class BotManager:
         with self._deque_lock:
             self.recent_responses.appendleft(entry)
 
+    def _telegram_captcha_pending(self, acc):
+        coordinator = getattr(self, 'telegram_captcha_coordinator', None)
+        if coordinator is None:
+            return False
+        keys = (str(acc.get('user_id', '')), str(acc.get('resume_hash', '')))
+        return any(item['acc_key'] in keys and item['captcha_key']
+                   for item in list(coordinator.pending.values()))
+
+    def resume_challenge_account(self, user_id: str):
+        """Resume resolved challenges while preserving other protective pauses."""
+        from app import captcha
+        for state in list(self.account_states) + list(self.temp_states.values()):
+            if str(user_id) not in (str(state.acc.get('user_id', '')), str(state.acc.get('resume_hash', ''))):
+                continue
+            with state._state_lock:
+                if (state._deleted or state.paused_reason != 'challenge'
+                        or captcha.active(state.acc) or state.pending_apply or state.pending_applies
+                        or state.hard_stopped or state.limit_exceeded or state.cookies_expired
+                        or getattr(state, '_auth_recovery_pending', False)):
+                    continue
+                state.paused = False
+                state.paused_reason = None
+                state.consecutive_errors = 0
+                event = getattr(state, '_captcha_wake', None)
+                if event is not None:
+                    event.set()
+        self._persist_pauses(wait=True)
+
     def get_state_snapshot(self) -> dict:
         """Full JSON snapshot for WS broadcast"""
         now = datetime.now()
@@ -1777,6 +1821,7 @@ class BotManager:
                 "name": s.name,
                 "short": s.short,
                 "resume_hash": s.acc.get("resume_hash", ""),
+                "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
                 "all_resumes": s.acc.get("all_resumes", []),
                 "color": s.color,
                 "status": _status,
@@ -1911,6 +1956,7 @@ class BotManager:
                     "temp": True,
                     "bot_active": True,
                     "resume_hash": s.acc.get("resume_hash", ""),
+                    "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
                     "all_resumes": ts.get("all_resumes", []),
                     "letter": s.acc.get("letter", ""),
                     "urls": s.acc.get("urls", []),
@@ -2089,6 +2135,9 @@ class BotManager:
             "log": self._snap_deque(self.activity_log, self._deque_lock),
             "llm_log": self._snap_deque(self.llm_log, self._deque_lock),
             "config": {
+                "telegram_captcha_enabled": CONFIG.telegram_captcha_enabled,
+                "telegram_bot_token_set": bool(CONFIG.telegram_bot_token),
+                "telegram_connected": bool(getattr(getattr(self, "telegram_captcha_bot", None), "connected", False)),
                 "pages_per_url": CONFIG.pages_per_url,
                 "response_delay": CONFIG.response_delay,
                 "pause_between_cycles": CONFIG.pause_between_cycles,
@@ -2248,7 +2297,10 @@ class BotManager:
                     state.status_detail = (self._pause_detail(state) if state.paused else
                         "Сохраняет результат проверки авторизации" if getattr(state, "_auth_recovery_pending", False)
                         else "Общая пауза")
-                time.sleep(1)
+                if not hasattr(state, '_captcha_wake'):
+                    state._captcha_wake = threading.Event()
+                state._captcha_wake.wait(1)
+                state._captcha_wake.clear()
 
             if self._stop_event.is_set():
                 break
@@ -3016,6 +3068,9 @@ class BotManager:
                                 progress=(min(i + batch.index(vid), len(filtered)), len(filtered)), operation=(i, vid))
                             result = _oauth_apply(attempt_accounts[vid], vid, acc.get("letter", ""))
                             results.append(result)
+                            if isinstance(result, tuple) and result[0] == 'challenge':
+                                self._hold_captcha(state)
+                                break
                             if isinstance(result, tuple) and result[0] == "unknown":
                                 self.hold_pending_apply(state, vid,
                                     attempt_accounts[vid].get("_pinned_resume_id") or attempt_accounts[vid].get("resume_hash", ""),
@@ -3111,6 +3166,11 @@ class BotManager:
                         continue
 
                     result, info = result_data
+
+                    if result == 'challenge':
+                        self._hold_captcha(state)
+                        cycle_outcome(state, vid, 'skipped', 'challenge')
+                        continue
 
                     if result == "cancelled":
                         continue

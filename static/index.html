@@ -475,6 +475,16 @@
 <!-- Settings Tab -->
 <div id="panel-settings" class="panel">
   <div id="settings-panel">
+    <section class="q-section">
+      <h3>Telegram — капча HH</h3>
+      <label>TG bot token <input id="tg-token" type="password" autocomplete="new-password" placeholder="Оставьте пустым, чтобы сохранить"></label>
+      <label>TG chat ID <input id="tg-chat" type="text" placeholder="Например, -100123456789"></label>
+      <label><input id="tg-enabled" type="checkbox" checked> Включено</label>
+      <button onclick="saveTelegramSettings()">Сохранить TG</button>
+      <button onclick="testTelegramPhoto()">Тест: отправить тестовое фото в TG</button>
+      <span id="tg-status">⚠ токен не задан</span>
+      <span id="tg-result" role="status"></span>
+    </section>
 
     <!-- ═══════ ГРУППА 0: Карьера (UI full coverage) ═══════ -->
     <div class="settings-group-header">🧭 Карьера</div>
@@ -1118,7 +1128,7 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=message-safety-9"></script>
+<script src="/static/js/app.js?v=manual-captcha-12"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
 <script src="/static/js/features/job_status.js?v=1"></script>
 <script src="/static/js/features/skills.js?v=1"></script>

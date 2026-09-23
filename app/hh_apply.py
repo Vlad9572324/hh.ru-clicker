@@ -79,6 +79,13 @@ def classify_apply_response(status_code: int, txt: str) -> tuple:
     """
     if status_code >= 500:
         return "unknown", {"http_status": status_code}
+    from app.captcha import parse
+    try:
+        challenge = parse(status_code, json.loads(txt))
+    except (ValueError, TypeError):
+        challenge = None
+    if challenge is not None:
+        return 'challenge', challenge
     if status_code in (401, 403):
         return "auth_error", {}
 
@@ -293,6 +300,13 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
                 txt = await r.text()
                 status_code = r.status
 
+        from app.captcha import capture
+        try:
+            challenge_payload = json.loads(txt)
+        except ValueError:
+            challenge_payload = None
+        if capture(acc, status_code, challenge_payload) is not None:
+            return 'challenge', {'error_type': 'captcha_required'}
         log_debug(f"   Ответ HTTP: {status_code} | Размер: {len(txt)}")
         if status_code >= 400:
             log_debug(f"   Тело ответа: {txt[:300]}")

@@ -114,6 +114,8 @@ def _make_sync_delegate(name: str):
             # web. NotImplementedError из web (метода нет и там) перекинется.
             return getattr(self.web, name)(*args, **kwargs)
         except MobileAPIError as e:
+            if getattr(e, 'challenge_required', False):
+                raise
             if not is_fallback_status(e.status_code):
                 raise
             if name in _MUTATING_METHODS and (e.status_code == 0 or e.status_code >= 500):
@@ -136,6 +138,8 @@ def _make_async_delegate(name: str):
         except NotImplementedError:
             return await getattr(self.web, name)(*args, **kwargs)
         except MobileAPIError as e:
+            if getattr(e, 'challenge_required', False):
+                raise
             if not is_fallback_status(e.status_code):
                 raise
             if name in _MUTATING_METHODS and (e.status_code == 0 or e.status_code >= 500):

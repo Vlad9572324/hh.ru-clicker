@@ -139,6 +139,101 @@ def _parse_cookies_str(raw: str) -> tuple:
 # ACCOUNT TOGGLES
 # ============================================================
 
+
+@router.get('/api/account/{idx}/captcha')
+async def api_account_captcha(idx: int):
+    from app import captcha
+    state = bot._get_apply_state(idx)
+    if state is None:
+        return {'ok': False, 'error': 'Аккаунт не найден'}
+    try:
+        record = captcha.current(state.acc)
+    except (ValueError, OSError):
+        return {'ok': False, 'error': 'Не удалось прочитать данные проверки'}
+    if not record:
+        return {'ok': False, 'error': 'Ссылка проверки не сохранена. Не снимайте паузу вслепую.'}
+    return {'ok': True, 'id': record['id'], 'url': captcha.browser_url(record),
+            'has_direct_link': bool(record.get('captcha_url') or record.get('fallback_url'))}
+
+
+@router.post('/api/account/{idx}/captcha/refresh')
+async def api_account_captcha_refresh(idx: int):
+    """One read-only API probe; never resumes or sends an application."""
+    from app import captcha
+    from app.oauth import _oauth_headers, _token_key
+    state = bot._get_apply_state(idx)
+    if state is None:
+        return {'ok': False, 'error': 'Аккаунт не найден'}
+    with state._state_lock:
+        if state._deleted or not state.paused or state.paused_reason != 'challenge':
+            return {'ok': False, 'error': 'Состояние аккаунта изменилось'}
+        now = time.monotonic()
+        if now < getattr(state, '_captcha_probe_after', 0):
+            return {'ok': False, 'error': 'Повторная проверка доступна через минуту'}
+        state._captcha_probe_after = now + 60
+    def probe():
+        headers = _oauth_headers(state.acc)
+        if not headers:
+            return {'ok': False, 'error': 'API-токен недоступен. Пауза сохранена.'}
+        response = HH.get('https://api.hh.ru/me', headers=headers,
+                          cookie_jar_key=_token_key(state.acc) or None, timeout=15)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        captcha.capture(state.acc, response.status_code, payload)
+        return {'ok': True, 'message': 'Проверка API выполнена без отклика. Пауза сохранена; успешный ответ не подтверждает снятие капчи.'}
+    try:
+        return await asyncio.to_thread(probe)
+    except Exception:
+        return {'ok': False, 'error': 'Не удалось проверить API. Пауза сохранена.'}
+
+
+@router.post('/api/account/{idx}/captcha/continue')
+async def api_account_captcha_continue(idx: int, request: Request):
+    """Explicit HUMAN confirmation, not server-side proof that CAPTCHA passed."""
+    from app import captcha
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return {'ok': False, 'error': 'Некорректный JSON'}
+    if not isinstance(body, dict) or body.get('confirmed') is not True:
+        return {'ok': False, 'error': 'Подтвердите ручное прохождение проверки HH'}
+    state = bot._get_apply_state(idx)
+    if state is None:
+        return {'ok': False, 'error': 'Аккаунт не найден'}
+    with state._state_lock:
+        if (state._deleted or not state.paused or state.paused_reason != 'challenge'
+                or state.pending_apply or state.pending_applies or state.hard_stopped
+                or state.limit_exceeded or state.cookies_expired
+                or getattr(state, '_auth_recovery_pending', False)):
+            return {'ok': False, 'error': 'Есть другая защитная пауза или состояние изменилось'}
+        try:
+            record = captcha.current(state.acc)
+            if not record or record.get('id') != body.get('id'):
+                return {'ok': False, 'error': 'Проверка изменилась. Откройте актуальную ссылку.'}
+            if not captcha.browser_url(record):
+                return {'ok': False, 'error': 'Нет персональной ссылки: прохождение проверки не подтверждено. Пауза сохранена.'}
+            state._auth_recovery_pending = True
+            captcha.clear(state.acc, record['id'])
+            state.paused = False
+            state.paused_reason = ''
+            state.consecutive_errors = 0
+        except (ValueError, OSError):
+            state._auth_recovery_pending = False
+            return {'ok': False, 'error': 'Не удалось сохранить подтверждение'}
+    try:
+        bot._persist_pauses(wait=True)
+    except Exception:
+        with state._state_lock:
+            state.paused = True
+            state.paused_reason = 'challenge'
+        captcha.hold(state.acc, record)
+        return {'ok': False, 'error': 'Ошибка сохранения. Отправки остаются остановленными.'}
+    finally:
+        state._auth_recovery_pending = False
+    return {'ok': True, 'message': 'Продолжение разрешено вами. Если HH снова потребует капчу, отправки остановятся.'}
+
 @router.post("/api/account/{idx}/pause")
 async def api_account_pause(idx: int):
     bot.toggle_account_pause(idx)

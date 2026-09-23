@@ -177,8 +177,8 @@ def activity_view(state, *, global_paused=False, stopped=False, global_started_a
         return overlay("hh_rate_limit", "HH ограничил запросы к анкете; автоматические попытки остановлены",
                        "Дождитесь снятия ограничения HH. Это не суточный лимит откликов; потребуется ручная проверка")
     if paused and reason == "challenge":
-        return overlay("challenge", "HH ограничил доступ к веб-анкете",
-                       "Откройте HH и проверьте запрос подтверждения доступа; автоматические попытки остановлены")
+        return overlay("challenge", "HH требует ручную проверку доступа",
+                       "Откройте проверку HH в карточке аккаунта. Автоматические отправки остановлены")
     if hard_limit or limit or (paused and reason == "limit"):
         if global_paused:
             return overlay("limit", "Действует лимит откликов и общая пауза",

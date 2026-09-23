@@ -40,11 +40,12 @@ class MobileAPIError(Exception):
     (или обрезанный текст ответа), для сетевых — текст исключения.
     """
 
-    def __init__(self, status_code: int, payload=None, url: str = "", *, outcome_unknown=False):
+    def __init__(self, status_code: int, payload=None, url: str = "", *, outcome_unknown=False, challenge_required=False):
         self.status_code = status_code
         self.payload = payload
         self.url = url
         self.outcome_unknown = outcome_unknown
+        self.challenge_required = challenge_required
         super().__init__(f"mobile API {url} -> HTTP {status_code}")
 
 
@@ -112,8 +113,13 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
             payload = r.json()
         except ValueError:
             payload = r.text[:500]
+        from app.captcha import capture
+        challenge = capture(acc, r.status_code, payload)
+        if challenge is not None:
+            payload = {'errors': [{'type': 'captcha_required', 'value': 'captcha_required'}]}
         raise MobileAPIError(r.status_code, payload=payload, url=url,
-                             outcome_unknown=mutating and r.status_code >= 500)
+                             outcome_unknown=mutating and r.status_code >= 500,
+                             challenge_required=challenge is not None)
     if not r.content:
         if mutating and url.rstrip("/").endswith("/negotiations") and r.status_code not in (201, 204):
             raise MobileAPIError(r.status_code, payload="empty_mutation_response", url=url,

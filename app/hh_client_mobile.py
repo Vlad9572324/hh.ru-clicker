@@ -248,7 +248,7 @@ class MobileHHClient(HHClient):
             return "sent", {"negotiation_id": result.get("negotiation_id", "")}
         info = {"error_type": result.get("error_type", ""),
                 "http_status": result.get("http_status")}
-        return {"limit_exceeded": "limit", "test_required": "test",
+        return {"captcha_required": "challenge", "limit_exceeded": "limit", "test_required": "test",
                 "already_applied": "already"}.get(info["error_type"], "error"), info
 
     async def fill_questionnaire(self, vid: str, vacancy_title: str = "", company: str = "") -> tuple:

@@ -1,0 +1,134 @@
+"""Watch persisted HH challenges, deliver images to Telegram, and resume after human success."""
+import asyncio
+import logging
+from urllib.parse import parse_qs, urlsplit
+
+from app import captcha
+from app.config import CONFIG
+from app.captcha_solver import fetch_captcha_image, submit_captcha
+from app.telegram_bot import TelegramCaptchaBot
+
+logger = logging.getLogger(__name__)
+
+
+class CaptchaCoordinator:
+    def __init__(self, bot_manager, bot):
+        self.manager = bot_manager
+        self.bot = bot
+        self.pending = {}
+        bot_manager.telegram_captcha_coordinator = self
+        self._seen = set()
+        self._lock = asyncio.Lock()
+        bot.resolver = self.resolve
+
+    def account(self, key):
+        for state in list(self.manager.account_states) + list(self.manager.temp_states.values()):
+            if key in (str(state.acc.get('user_id', '')), str(state.acc.get('resume_hash', ''))):
+                return state.acc
+        return None
+
+    async def scan(self):
+        async with self._lock:
+            with captcha.LOCK:
+                records = captcha._read()
+            active = {record.get('id') for record in records.values()}
+            self._seen.intersection_update(active)
+            for cid in list(self.pending):
+                if cid not in active:
+                    self.pending.pop(cid, None)
+                    self.bot.forget(cid)
+            for key, record in records.items():
+                cid = record.get('id')
+                acc = self.account(key)
+                if cid in self.pending and acc is not None and not self.pending[cid]['captcha_key']:
+                    try:
+                        await self.photo(cid, self.pending[cid], acc)
+                    except Exception:
+                        logger.warning('HH captcha refresh failed; will retry')
+                if not cid or cid in self._seen or acc is None:
+                    continue
+                query = parse_qs(urlsplit(captcha.browser_url(record)).query)
+                if not query.get('state'):
+                    await self.bot.send_message('Капчу HH нужно решить вручную: ' + captcha.browser_url(record))
+                    self._seen.add(cid)
+                    continue
+                item = dict(acc_key=key, captcha_state=query['state'][0],
+                            backurl='https://hh.ru/', failurl=query.get('failurl', ['https://hh.ru/'])[0],
+                            url=captcha.browser_url(record), fails=0, captcha_key=None)
+                try:
+                    await self.photo(cid, item, acc)
+                except Exception:
+                    logger.warning('HH captcha delivery failed; will retry')
+                    continue
+                self.pending[cid] = item
+                self._seen.add(cid)
+
+    async def photo(self, cid, item, acc):
+        item['captcha_key'] = None
+        key, image = await asyncio.to_thread(fetch_captcha_image, acc)
+        result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)
+        if not result:
+            raise RuntimeError('TG bot disabled')
+        item['captcha_key'] = key
+
+    async def resolve(self, cid, text):
+        async with self._lock:
+            item = self.pending.get(cid)
+            if item is None:
+                return
+            acc = self.account(item['acc_key'])
+            if acc is None or captcha.current(acc).get('id') != cid:
+                self.pending.pop(cid, None)
+                self.bot.forget(cid)
+                return
+            if not item['captcha_key']:
+                await self.photo(cid, item, acc)
+                return
+            ok, reason = await asyncio.to_thread(
+                submit_captcha, acc, text, item['captcha_key'], item['captcha_state'],
+                item['backurl'], item['failurl'])
+            if ok:
+                # clear() compares IDs under the same lock as hold(), with atomic rename.
+                captcha.clear(acc, cid)
+                await asyncio.to_thread(self.manager.resume_challenge_account, item['acc_key'])
+                self.pending.pop(cid, None)
+                self.bot.forget(cid)
+                await self.bot.send_message('✅ Капча HH решена')
+                return
+            item['fails'] += 1
+            if reason == 'recaptcha' or item['fails'] >= 3:
+                logger.warning('HH captcha requires manual resolution')
+                self.pending.pop(cid, None)
+                self.bot.forget(cid)
+                await self.bot.send_message('капча HH усложнилась (возможно reCAPTCHA), решите вручную по ссылке: ' + item['url'])
+                return
+            await self.photo(cid, item, acc)
+
+
+async def captcha_orchestrator(bot_manager):
+    """Reconfigure polling on settings changes; cancel and close HTTP on shutdown."""
+    bot = None
+    signature = None
+    try:
+        while True:
+            current = (CONFIG.telegram_bot_token, CONFIG.telegram_chat_id, CONFIG.telegram_captcha_enabled)
+            if current != signature:
+                if bot:
+                    await bot.stop()
+                bot = TelegramCaptchaBot()
+                bot_manager.telegram_captcha_bot = bot
+                coordinator = CaptchaCoordinator(bot_manager, bot)
+                signature = current
+                if current[2]:
+                    await bot.start()
+            if current[2] and bot._task:
+                try:
+                    await coordinator.scan()
+                except Exception:
+                    logger.warning('HH captcha scan failed; will retry')
+            await asyncio.sleep(3)
+    finally:
+        if bot:
+            await bot.stop()
+        bot_manager.telegram_captcha_bot = None
+        bot_manager.telegram_captcha_coordinator = None

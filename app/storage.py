@@ -474,7 +474,7 @@ def _strip_sensitive_session_fields(s: dict) -> dict:
     """Удалить raw cookie line из сохранённого snapshot — иначе он лежит в
     browser_sessions.json в открытом виде (kimi-search-3 #8)."""
     out = {k: v for k, v in s.items() if k not in (
-        "_raw_cookie_line", "raw_cookie_line", "_mutation_guard", "_pinned_resume_id")}
+        "_raw_cookie_line", "raw_cookie_line", "_mutation_guard", "_pinned_resume_id", "_on_challenge")}
     return out
 
 
