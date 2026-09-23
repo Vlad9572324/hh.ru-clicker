@@ -1771,6 +1771,59 @@ function _renderEmpRatingSlots(vid, data) {
   });
 }
 
+async function loadCaptchaImg(idx) {
+  const img = document.getElementById('acc-captcha-img-' + idx);
+  const box = document.getElementById('acc-captcha-result-' + idx);
+  if (!img) return;
+  img.style.display = 'none';
+  if (box) box.textContent = 'Загружаю картинку…';
+  try {
+    // cache-buster чтобы браузер каждый раз тянул свежую
+    const url = `/api/account/${idx}/captcha/image?_=${Date.now()}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    img.src = URL.createObjectURL(blob);
+    img.style.display = 'block';
+    if (box) box.textContent = '';
+    document.getElementById('acc-captcha-input-' + idx)?.focus();
+  } catch (e) {
+    if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+  }
+}
+
+async function solveCaptcha(idx) {
+  const input = document.getElementById('acc-captcha-input-' + idx);
+  const box = document.getElementById('acc-captcha-result-' + idx);
+  if (!input || !input.value.trim()) return;
+  const text = input.value.trim();
+  if (box) { box.textContent = '⏳ Отправляю…'; box.style.color = ''; }
+  try {
+    const r = await fetch(`/api/account/${idx}/captcha/solve`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({text})
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      if (box) { box.textContent = d.message || '✅ Решено'; box.style.color = 'var(--green)'; }
+      input.value = '';
+      // Скрыть панель через 2 сек — captcha panel обновится через syncAccountCard
+      setTimeout(() => {
+        const panel = document.getElementById('acc-captcha-' + idx);
+        if (panel) panel.hidden = true;
+      }, 2000);
+    } else {
+      if (box) { box.textContent = '❌ ' + (d.error || 'HH не принял ответ'); box.style.color = 'var(--red)'; }
+      if (d.refresh_needed) setTimeout(() => loadCaptchaImg(idx), 500);
+    }
+  } catch (e) {
+    if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+  }
+}
+
 async function loadAccountCaptcha(idx) {
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!box) return;
@@ -3865,10 +3918,16 @@ function buildCardHTML(acc) {
       <div id="acc-auth-check-result-${acc.idx}" role="status"></div>
     </div>
     <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
-      <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — пройдите капчу HH</div>
-      <div>Авторизация остаётся через API приложения. Капча открывается отдельно по ссылке HH; обычный вход на сайт её не заменяет.</div>
-      <button class="btn-sm" onclick="loadAccountCaptcha(${acc.idx})">Получить ссылку HH</button>
-      <div id="acc-captcha-result-${acc.idx}" role="status"></div>
+      <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — введите капчу HH</div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+        <img id="acc-captcha-img-${acc.idx}" alt="captcha" style="max-width:280px;border:1px solid var(--dim);border-radius:4px;background:#fff;display:none;cursor:pointer" onclick="loadCaptchaImg(${acc.idx})" title="Клик — обновить">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <input id="acc-captcha-input-${acc.idx}" type="text" placeholder="Текст с картинки" style="padding:4px 8px;font-size:13px" onkeydown="if(event.key==='Enter'){solveCaptcha(${acc.idx})}">
+          <button class="btn-sm" onclick="solveCaptcha(${acc.idx})">✓ Отправить</button>
+          <button class="btn-sm" onclick="loadCaptchaImg(${acc.idx})">🔄 Другая</button>
+        </div>
+      </div>
+      <div id="acc-captcha-result-${acc.idx}" role="status" style="margin-top:6px;font-size:12px"></div>
     </div>
     <div class="acc-meta" id="acc-meta-${acc.idx}"></div>
     <div class="acc-hh-stats" id="acc-hh-${acc.idx}">${t('card_hh_loading')}</div>
@@ -4990,7 +5049,7 @@ function updateCard(card, acc) {
     const needsCaptcha = acc.paused && acc.paused_reason === 'challenge';
     const newlyShown = captchaPanel.hidden && needsCaptcha;
     captchaPanel.hidden = !needsCaptcha;
-    if (newlyShown) loadAccountCaptcha(acc.idx);
+    if (newlyShown) { loadCaptchaImg(acc.idx); }
     if (!needsCaptcha) {
       const result = document.getElementById('acc-captcha-result-' + acc.idx);
       if (result) result.replaceChildren();

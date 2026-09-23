@@ -156,6 +156,98 @@ async def api_account_captcha(idx: int):
             'has_direct_link': bool(record.get('captcha_url') or record.get('fallback_url'))}
 
 
+@router.get('/api/account/{idx}/captcha/image')
+async def api_account_captcha_image(idx: int):
+    """Return current captcha image bytes (PNG) for in-UI solving."""
+    from app import captcha
+    from app.captcha_solver import fetch_captcha_image
+    from fastapi.responses import Response as _Resp
+    state = bot._get_apply_state(idx)
+    if state is None:
+        return {'ok': False, 'error': 'Аккаунт не найден'}
+    record = captcha.current(state.acc)
+    if not record:
+        return {'ok': False, 'error': 'Нет активной капчи'}
+    coord = getattr(bot, 'telegram_captcha_coordinator', None)
+    cid = record['id']
+    # Пере-используем session/key если он уже загружен coordinator'ом (тот же
+    # что был отправлен в TG). Иначе fetch свежий — новый captchaKey.
+    if coord and cid in coord.pending and coord.pending[cid].get('session') is not None:
+        item = coord.pending[cid]
+        session = item['session']
+        # session уже держит cookies; повторно грузим только image по существующему key
+        r = await asyncio.to_thread(session.get, 'https://hh.ru/captcha/picture',
+                                    params={'key': item['captcha_key']}, timeout=10)
+        if r.status_code == 200 and r.content:
+            return _Resp(content=r.content, media_type='image/png',
+                         headers={'Cache-Control': 'no-store', 'X-Captcha-Id': cid})
+    try:
+        session, key, image, state_val, backurl = await asyncio.to_thread(
+            fetch_captcha_image, state.acc, record['captcha_url'])
+    except Exception as e:
+        return {'ok': False, 'error': f'Не удалось загрузить капчу: {type(e).__name__}'}
+    # Сохраняем в coordinator чтобы submit прошёл в той же session
+    if coord:
+        coord.pending[cid] = dict(coord.pending.get(cid, {}),
+                                  acc_key=captcha.account_key(state.acc),
+                                  captcha_state=state_val, backurl=backurl,
+                                  failurl=backurl, url=captcha.browser_url(record),
+                                  fails=0, captcha_key=key, session=session,
+                                  challenge_url=record['captcha_url'])
+        coord._seen.add(cid)
+    return _Resp(content=image, media_type='image/png',
+                 headers={'Cache-Control': 'no-store', 'X-Captcha-Id': cid})
+
+
+@router.post('/api/account/{idx}/captcha/solve')
+async def api_account_captcha_solve(idx: int, request: Request):
+    """Submit user's captcha answer from the dashboard. Body: {"text": "..."}"""
+    from app import captcha
+    from app.captcha_solver import submit_captcha, fetch_captcha_image
+    state = bot._get_apply_state(idx)
+    if state is None:
+        return {'ok': False, 'error': 'Аккаунт не найден'}
+    try:
+        body = await request.json()
+    except Exception:
+        return {'ok': False, 'error': 'bad json'}
+    text = (body.get('text') or '').strip()
+    if not text:
+        return {'ok': False, 'error': 'Введите текст с картинки'}
+    record = captcha.current(state.acc)
+    if not record:
+        return {'ok': False, 'error': 'Капча уже решена или отсутствует'}
+    coord = getattr(bot, 'telegram_captcha_coordinator', None)
+    cid = record['id']
+    item = coord.pending.get(cid) if coord else None
+    if not item or item.get('session') is None or not item.get('captcha_key'):
+        # Загружаем сессию с нуля если не было
+        try:
+            session, key, _img, state_val, backurl = await asyncio.to_thread(
+                fetch_captcha_image, state.acc, record['captcha_url'])
+        except Exception as e:
+            return {'ok': False, 'error': f'Не удалось получить капчу: {type(e).__name__}'}
+        item = dict(session=session, captcha_key=key, captcha_state=state_val,
+                    backurl=backurl, failurl=backurl)
+    try:
+        ok, reason = await asyncio.to_thread(
+            submit_captcha, item['session'], text, item['captcha_key'],
+            item['captcha_state'], item['backurl'], item.get('failurl') or item['backurl'])
+    except Exception as e:
+        return {'ok': False, 'error': f'submit_captcha: {type(e).__name__}'}
+    if ok:
+        captcha.clear(state.acc, cid)
+        try:
+            await asyncio.to_thread(bot.resume_challenge_account, captcha.account_key(state.acc))
+        except Exception:
+            pass
+        if coord:
+            coord.pending.pop(cid, None)
+            coord.bot.forget(cid)
+        return {'ok': True, 'message': '✅ Капча решена, worker возобновлён'}
+    return {'ok': False, 'error': f'Не принято HH: {reason}', 'refresh_needed': True}
+
+
 @router.post('/api/account/{idx}/captcha/refresh')
 async def api_account_captcha_refresh(idx: int):
     """One read-only API probe; never resumes or sends an application."""

@@ -20,9 +20,13 @@ def test_photo_and_reply(bot):
         method, fields, image = bot._call.call_args.args
         assert method == 'sendPhoto' and image == b'png'
         assert fields['chat_id'] == '-123' and 'test' in fields['caption']
-        await bot.on_message('text', 999, 7)
-        await bot.on_message('text', -123, 8)
+        await bot.on_message('text', 999, 7)  # wrong chat_id → ignore
         bot.resolver.assert_not_called()
+        # Fallback: если pending содержит ровно 1 challenge, любое сообщение
+        # (даже без reply_to) → resolver вызван (UX: юзеру не нужно жать "Ответить").
+        await bot.on_message('text', -123, 8)
+        bot.resolver.assert_awaited_once_with('cid', 'text')
+        bot.resolver.reset_mock()
         await bot.on_message(' text ', -123, 7)
         bot.resolver.assert_awaited_once_with('cid', 'text')
         await bot.push_challenge('cid', 'test', b'new')

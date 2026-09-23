@@ -44,7 +44,7 @@ class CaptchaCoordinator:
                     try:
                         await self.photo(cid, self.pending[cid], acc)
                     except Exception:
-                        logger.warning('HH captcha refresh failed; will retry')
+                        logger.exception('HH captcha refresh failed; will retry')
                 if not cid or cid in self._seen or acc is None:
                     continue
                 query = parse_qs(urlsplit(captcha.browser_url(record)).query)
@@ -68,11 +68,8 @@ class CaptchaCoordinator:
     async def photo(self, cid, item, acc):
         item['captcha_key'] = None
         item['session'] = None
-        # Возвращает свежую session с DDoS-Guard cookies и captchaKey.
         session, key, image, state, backurl = await asyncio.to_thread(
             fetch_captcha_image, acc, item['challenge_url'])
-        # state/backurl могут отличаться от того что было в challenge URL
-        # (HH может отредиректнуть) — обновляем чтобы submit шёл в правильную session.
         item['captcha_state'] = state or item['captcha_state']
         item['backurl'] = backurl or item['backurl']
         result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)

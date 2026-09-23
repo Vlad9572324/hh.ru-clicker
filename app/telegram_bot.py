@@ -92,6 +92,10 @@ class TelegramCaptchaBot:
         if str(chat_id) != self.chat_id or not isinstance(text, str) or not text.strip():
             return
         challenge_id = self.pending.get(reply_to_message_id)
+        # Fallback: если reply-to не установлен, но в очереди ровно один
+        # challenge — используем его. Юзеру не нужно жать "Ответить" на фото.
+        if not challenge_id and len(set(self.pending.values())) == 1:
+            challenge_id = next(iter(self.pending.values()))
         if challenge_id and self.resolver:
             await self.resolver(challenge_id, text.strip())
 
