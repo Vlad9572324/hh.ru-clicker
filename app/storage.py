@@ -41,12 +41,14 @@ def _atomic_write_json(path: Path, data) -> None:
         os.replace(tmp, path)
         # fsync родительского каталога — иначе rename может быть потерян
         # даже если файл сфсинкан.
-        try:
-            dir_fd = os.open(str(path.parent), os.O_DIRECTORY)
-            os.fsync(dir_fd)
-        except OSError as exc:
-            if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):
-                raise
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if directory_flag is not None:
+            try:
+                dir_fd = os.open(str(path.parent), directory_flag)
+                os.fsync(dir_fd)
+            except OSError as exc:
+                if exc.errno not in (errno.EINVAL, errno.ENOTSUP, errno.ENOSYS):
+                    raise
     finally:
         if dir_fd is not None:
             try:
@@ -474,7 +476,7 @@ def _strip_sensitive_session_fields(s: dict) -> dict:
     """Удалить raw cookie line из сохранённого snapshot — иначе он лежит в
     browser_sessions.json в открытом виде (kimi-search-3 #8)."""
     out = {k: v for k, v in s.items() if k not in (
-        "_raw_cookie_line", "raw_cookie_line", "_mutation_guard", "_pinned_resume_id", "_on_challenge")}
+        "_raw_cookie_line", "raw_cookie_line", "_mutation_guard", "_pinned_resume_id")}
     return out
 
 
