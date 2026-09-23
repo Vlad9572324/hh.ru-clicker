@@ -32,8 +32,18 @@ async def _lifespan(_app: FastAPI):
     try:
         from app.storage import _cleanup_stale_tmp
         _cleanup_stale_tmp()  # подметаем config.tmp/accounts.tmp от прошлых crash'ей
-        from app.config import load_accounts
+        from app.config import CONFIG, load_accounts
         load_accounts()
+        # ENV → CONFIG для TG (deploy-friendly: одни креды на captcha и alerts).
+        # Приоритет TELEGRAM_* (наши) > HH_TELEGRAM_* (PR #27 by Antiokh).
+        _tg_token = (os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+                     or os.environ.get("HH_TELEGRAM_BOT_TOKEN", "").strip())
+        _tg_chat = (os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+                    or os.environ.get("HH_TELEGRAM_CHAT_ID", "").strip())
+        if _tg_token and not CONFIG.telegram_bot_token:
+            CONFIG.telegram_bot_token = _tg_token
+        if _tg_chat and not CONFIG.telegram_chat_id:
+            CONFIG.telegram_chat_id = _tg_chat
         bot.start()
         from app.captcha_worker import captcha_orchestrator
         captcha_task = asyncio.create_task(captcha_orchestrator(bot), name="captcha_orchestrator")
