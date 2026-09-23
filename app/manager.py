@@ -30,6 +30,7 @@ from app.vacancy_salary import salary_for_ruble_threshold
 from app.mutation_safety import MutationBlocked, ensure_mutation_allowed
 from app.search_scope import remote_it_filters, remote_it_url, remote_it_rejection, scope_metadata
 from app.apply_quarantine import blocked as quarantine_blocked
+from app.telegram_notify import is_configured as telegram_is_configured, send_once as telegram_send_once
 
 
 def parse_search_url(url: str) -> tuple[str, int | str | list[str] | None, dict]:
@@ -1238,6 +1239,7 @@ class BotManager:
             if state._deleted or _self._stop_event.is_set():
                 return
             if event_name == "chat_message_create":
+                _self._start_telegram_message_scan(state)
                 import time as _t
                 now = _t.time()
                 if now - _last_trigger[0] < 10:
@@ -1279,6 +1281,7 @@ class BotManager:
                 return
             etype = getattr(event, "type", "") or ""
             if etype == "chat_message_create":
+                self._start_telegram_message_scan(state)
                 import time as _t
                 now = _t.time()
                 if now - getattr(state, "_ws_realtime_last_trigger", 0.0) < 10:
@@ -1310,6 +1313,74 @@ class BotManager:
                 log_debug(f"WS realtime [{state.short}] {etype}")
         except Exception as e:
             log_debug(f"on_realtime_event error: {e}")
+
+    def _start_telegram_message_scan(self, state: AccountState) -> None:
+        """Schedule a read-only chat scan without blocking a polling/WS worker."""
+        if not telegram_is_configured() or state._deleted or self._stop_event.is_set():
+            return
+        if not state._telegram_notify_lock.acquire(blocking=False):
+            return
+        worker = threading.Thread(
+            target=self._notify_employer_messages,
+            args=(state, True),
+            daemon=True,
+            name=f"telegram-chat-{state.short}",
+        )
+        try:
+            worker.start()
+        except Exception:
+            state._telegram_notify_lock.release()
+            raise
+
+    def _notify_employer_messages(self, state: AccountState, lock_held: bool = False) -> None:
+        """Alert about unread employer messages; this never writes to HH."""
+        if not telegram_is_configured():
+            return
+        acquired = lock_held or state._telegram_notify_lock.acquire(blocking=False)
+        if not acquired:
+            return
+        try:
+            items_by_id, display_info, cur_pid = get_client(state.acc).fetch_chat_list(max_pages=3)
+            for neg_id, item in items_by_id.items():
+                if item.get("type") != "NEGOTIATION":
+                    continue
+                thread = _build_thread_from_chat_item(item, display_info, cur_pid, str(neg_id))
+                if not thread.get("needs_reply"):
+                    continue
+                message_id = thread.get("last_msg_id", "")
+                employer_message = thread.get("last_employer_msg", "").strip()
+                if not message_id or not employer_message:
+                    continue
+                text = (
+                    "HH: требуется ваш ответ\n"
+                    f"Вакансия: {thread.get('vacancy_title') or 'не указана'}\n"
+                    f"Работодатель: {thread.get('employer_name') or 'не указан'}\n"
+                    f"Диалог: {neg_id}\n\n{employer_message[:2500]}\n\n"
+                    "Откройте HH Clicker или переговоры на hh.ru, чтобы ответить."
+                )
+                telegram_send_once(f"message:{state.short}:{neg_id}:{message_id}", text)
+        except Exception as exc:
+            log_debug(f"telegram message scan [{state.short}] failed: {type(exc).__name__}: {exc}")
+        finally:
+            if acquired:
+                state._telegram_notify_lock.release()
+
+    def _notify_new_interviews(self, state: AccountState, interviews: list) -> None:
+        """Alert once for every interview negotiation found during stats refresh."""
+        if not telegram_is_configured():
+            return
+        for item in interviews:
+            neg_id = str(item.get("neg_id", "")).strip()
+            if not neg_id:
+                continue
+            text = (
+                "HH: новое приглашение на интервью\n"
+                f"Вакансия: {item.get('text') or 'не указана'}\n"
+                f"Дата в HH: {item.get('date') or 'не указана'}\n"
+                f"Диалог: {neg_id}\n\n"
+                "Откройте HH Clicker или переговоры на hh.ru, чтобы посмотреть детали."
+            )
+            telegram_send_once(f"interview:{state.short}:{neg_id}", text)
 
     def start(self):
         # Регистр всех worker-threads чтобы stop() мог их join'нуть — иначе
@@ -4713,6 +4784,9 @@ class BotManager:
                 state.hh_interview_neg_ids = stats.get("neg_ids", [])
                 state.hh_discard_neg_ids = set(str(x) for x in stats.get("discard_neg_ids", []))
                 state.hh_unread_by_employer = stats.get("unread_by_employer", 0)
+
+                self._notify_new_interviews(state, stats["interviews_list"])
+                self._start_telegram_message_scan(state)
 
                 for neg_id in state.hh_interview_neg_ids:
                     upsert_interview(neg_id, acc=state.short, acc_color=state.color)
