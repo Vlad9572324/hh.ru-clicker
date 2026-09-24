@@ -1122,6 +1122,17 @@
     </details>
 
     <!-- ═══════ ГРУППА 5: Продвинутое ═══════ -->
+    <details class="q-section" open>
+      <summary class="q-section-title">🤖 Человеческий режим</summary>
+      <div style="padding:12px">
+        <div id="human-settings" class="settings-grid"></div>
+        <p id="human-preview" aria-live="polite"></p>
+        <p style="font-size:12px;color:var(--dim)">Часы — локальное время сервера, конец окна не включён. Между сериями действует бюджет около 4 откликов/час (~68 за 07–24). В выходные активность ниже на 30%; после капчи задержки удваиваются. Фактический темп зависит от доступных вакансий.</p>
+        <button onclick="applyHumanSettings()">✅ Применить человеческий режим</button>
+        <span id="human-settings-status" role="status"></span>
+      </div>
+    </details>
+
     <div class="settings-group-header">🔧 Продвинутое</div>
 
     <!-- JSON Editor -->

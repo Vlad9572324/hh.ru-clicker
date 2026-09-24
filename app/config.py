@@ -82,6 +82,15 @@ class Config:
     pages_per_url = 100  # Maximum safety budget; API stops at the reported end.
     automation_paused: bool = False
     max_concurrent = 20
+    human_mode_enabled: bool = True
+    human_active_hours: str = '07-24'
+    human_apply_delay_min: int = 5
+    human_apply_delay_max: int = 20
+    human_burst_size_min: int = 3
+    human_burst_size_max: int = 8
+    human_burst_pause_min_sec: int = 180
+    human_burst_pause_max_sec: int = 480
+    human_captcha_backoff_hours: int = 2
     response_delay = 1
     pause_between_cycles = 60
     limit_check_interval = 30
@@ -270,6 +279,16 @@ def _url_pages_map() -> dict:
 
 
 _CONFIG_KEYS = [
+    'human_mode_enabled',
+    'human_active_hours',
+    'human_apply_delay_min',
+    'human_apply_delay_max',
+    'human_burst_size_min',
+    'human_burst_size_max',
+    'human_burst_pause_min_sec',
+    'human_burst_pause_max_sec',
+    'human_captcha_backoff_hours',
+
     "tg_alert_interview_enabled",
     "tg_alert_offer_enabled",
     "tg_alert_hr_question_enabled",

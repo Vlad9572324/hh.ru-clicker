@@ -5889,8 +5889,100 @@ document.getElementById('tabs').addEventListener('click', e => {
   }
 });
 
+const HUMAN_SETTINGS = [
+  ['human_mode_enabled', 'Включён', 'checkbox', true],
+  ['human_active_hours', 'Активные часы (HH-HH)', 'text', '07-24'],
+  ['human_apply_delay_min', 'Задержка min (сек)', 'number', 5],
+  ['human_apply_delay_max', 'Задержка max (сек)', 'number', 20],
+  ['human_burst_size_min', 'Размер серии min', 'number', 3],
+  ['human_burst_size_max', 'Размер серии max', 'number', 8],
+  ['human_burst_pause_min_sec', 'Пауза серии min (мин)', 'number', 3, 60],
+  ['human_burst_pause_max_sec', 'Пауза серии max (мин)', 'number', 8, 60],
+  ['human_captcha_backoff_hours', 'Замедление после капчи (час)', 'number', 2],
+];
+const humanDrafts = new Map();
+const humanPending = new Map();
+
+function humanValue(key, type, scale = 1) {
+  const el = document.getElementById('hp-' + key);
+  return type === 'checkbox' ? el.checked : type === 'number' ? Number(el.value) * scale : el.value.trim();
+}
+
+function syncHumanSettings(snap) {
+  const container = document.getElementById('human-settings');
+  if (!container) return;
+  if (!container.children.length) {
+    HUMAN_SETTINGS.forEach(([key, label, type, initial, scale = 1]) => {
+      const row = document.createElement('label');
+      row.textContent = label + ' ';
+      const el = document.createElement('input');
+      el.id = 'hp-' + key;
+      el.type = type;
+      if (type === 'number') { el.min = key.includes('size') ? 1 : 0; el.step = 1; }
+      if (type === 'checkbox') el.checked = initial; else el.value = initial;
+      el.addEventListener('input', () => {
+        humanDrafts.set(key, humanValue(key, type, scale));
+        humanPending.delete(key);
+        humanPreview();
+      });
+      row.appendChild(el);
+      container.appendChild(row);
+    });
+  }
+  HUMAN_SETTINGS.forEach(([key, , type, , scale = 1]) => {
+    const value = snap.config[key];
+    if (value === undefined) return;
+    if (humanPending.has(key) && humanPending.get(key) === value) {
+      humanPending.delete(key); humanDrafts.delete(key);
+    }
+    if (humanDrafts.has(key)) return;
+    const el = document.getElementById('hp-' + key);
+    if (document.activeElement === el) return;
+    if (type === 'checkbox') el.checked = value; else el.value = type === 'number' ? value / scale : value;
+  });
+  humanPreview();
+}
+
+function humanPreview() {
+  const hours = document.getElementById('hp-human_active_hours');
+  if (!hours) return;
+  const match = /^(\d{2})-(\d{2})$/.exec(hours.value.trim());
+  const start = match ? Number(match[1]) : -1, end = match ? Number(match[2]) : -1;
+  const valid = start >= 0 && start < 24 && end >= 0 && end <= 24 && start !== end;
+  const config = State.lastSnapshot?.config || {};
+  const hour = config.human_local_hour;
+  const active = valid && hour !== undefined && (start < end ? hour >= start && hour < end : hour >= start || hour < end);
+  const val = key => Number(document.getElementById('hp-' + key).value);
+  const size = Math.max(1, (val('human_burst_size_min') + val('human_burst_size_max')) / 2);
+  const delay = 0.9 * (val('human_apply_delay_min') + (val('human_apply_delay_max') - val('human_apply_delay_min')) * 2 / 7) + 0.1 * 45;
+  const pause = 0.9 * (val('human_burst_pause_min_sec') + val('human_burst_pause_max_sec')) * 30 + 0.1 * 900;
+  const rate = Math.min(config.human_target_applies_per_hour || 4, 3600 / (delay + pause / size)) * (config.human_weekend_variance || 1);
+  const enabled = document.getElementById('hp-human_mode_enabled').checked;
+  document.getElementById('human-preview').textContent = !valid ? 'Некорректные часы: используйте HH-HH (например 07-24 или 22-06).' :
+    `Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (сервер: ${hour ?? '—'} ч); предполагаемый темп: ${enabled ? rate.toFixed(1) + ' applies/hour в активное окно, без captcha-backoff' : 'режим выключен'}`;
+}
+
+function applyHumanSettings() {
+  const values = Object.fromEntries(HUMAN_SETTINGS.map(([key, , type, , scale = 1]) => [key, humanValue(key, type, scale)]));
+  const status = document.getElementById('human-settings-status');
+  const match = /^(\d{2})-(\d{2})$/.exec(values.human_active_hours);
+  if (!match || +match[1] > 23 || +match[2] > 24 || +match[1] === +match[2]) { status.textContent = 'Проверьте активные часы'; return; }
+  for (const [key, , type] of HUMAN_SETTINGS) {
+    if (type === 'number' && (!Number.isInteger(values[key]) || values[key] < (key.includes('size') ? 1 : 0))) { status.textContent = 'Введите неотрицательные целые значения (размер серии от 1)'; return; }
+  }
+  for (const [low, high] of [['human_apply_delay_min', 'human_apply_delay_max'], ['human_burst_size_min', 'human_burst_size_max'], ['human_burst_pause_min_sec', 'human_burst_pause_max_sec']]) {
+    if (values[low] > values[high]) { status.textContent = 'Минимум не должен превышать максимум'; return; }
+  }
+  for (const [key, value] of Object.entries(values)) {
+    humanDrafts.set(key, value); humanPending.set(key, value);
+    sendCmd({type: 'set_config', key, value});
+  }
+  status.textContent = 'Настройки отправлены';
+}
+
 function syncSettingsSliders(snap) {
   if (!snap.config) return;
+  syncHumanSettings(snap);
   SETTINGS_DEF.forEach(s => {
     const el = document.getElementById('sr-' + s.key);
     const sv = document.getElementById('sv-' + s.key);

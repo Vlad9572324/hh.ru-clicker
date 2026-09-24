@@ -16,6 +16,7 @@ import threading
 import requests
 import urllib.parse
 from types import SimpleNamespace
+from app import human_pace
 from app.hh_http import HH
 from app.user_agent import mobile_user_agent, webview_user_agent
 try:
@@ -364,6 +365,8 @@ class BotManager:
 
     def _hold_captcha(self, state):
         with state._state_lock:
+            state._last_captcha_at = time.time()
+            state.acc['_last_captcha_at'] = state._last_captcha_at
             state.paused = True
             if not state.pending_apply and state.paused_reason not in ('auth', 'limit', 'message_outcome_unknown'):
                 state.paused_reason = 'challenge'
@@ -2222,6 +2225,10 @@ class BotManager:
                 "telegram_bot_token_set": bool(CONFIG.telegram_bot_token),
                 "telegram_connected": bool(getattr(getattr(self, "telegram_captcha_bot", None), "connected", False)),
                 "pages_per_url": CONFIG.pages_per_url,
+                **{key: getattr(CONFIG, key) for key in human_pace.HUMAN_CONFIG_KEYS},
+                "human_target_applies_per_hour": human_pace.TARGET_APPLIES_PER_HOUR,
+                "human_local_hour": datetime.now().hour,
+                "human_weekend_variance": human_pace.weekend_variance(),
                 "response_delay": CONFIG.response_delay,
                 "pause_between_cycles": CONFIG.pause_between_cycles,
                 "batch_responses": CONFIG.batch_responses,
@@ -2317,6 +2324,32 @@ class BotManager:
                 state.status = "idle"
                 state.status_detail = "Перезапущен после ошибки"
                 self._add_log(state.short, state.color, "\U0001f504 Worker перезапущен", "info")
+
+    def _wait_human_pace(self, state):
+        """Wait once per serialized attempt, after its result is persisted."""
+        if not CONFIG.human_mode_enabled or not self._can_mutate(state):
+            return
+        if not state._human_burst_target:
+            state._human_burst_target = human_pace.random_burst_size()
+            state._human_burst_started = time.monotonic()
+        state._human_burst_count += 1
+        delay = human_pace.random_apply_delay() * human_pace.delay_multiplier(state)
+        set_activity(state, "wait_between_batches", "Пауза между откликами",
+            "Проверит активные часы и ограничения перед следующим откликом",
+            wait_until=datetime.now(timezone.utc) + timedelta(seconds=delay))
+        if self._stop_event.wait(delay):
+            return
+        if state._human_burst_count >= state._human_burst_target:
+            multiplier = human_pace.delay_multiplier(state)
+            budget = state._human_burst_count * 3600 / human_pace.TARGET_APPLIES_PER_HOUR
+            remaining = budget * multiplier - (time.monotonic() - state._human_burst_started)
+            delay = max(human_pace.random_burst_pause() * multiplier, remaining)
+            state._human_burst_count = 0
+            state._human_burst_target = 0
+            set_activity(state, "wait_between_batches", "Пауза после серии откликов",
+                "Начнёт следующую серию в активные часы",
+                wait_until=datetime.now(timezone.utc) + timedelta(seconds=delay))
+            self._stop_event.wait(delay)
 
     def _run_account_worker_inner(self, idx: int, state: AccountState) -> None:
         acc = state.acc
@@ -2977,6 +3010,10 @@ class BotManager:
             i = 0
 
             while i < len(filtered):
+                if CONFIG.human_mode_enabled:
+                    human_pace.sleep_until_active_hour(state, self._stop_event)
+                # Serialize web submissions as well as OAuth in human mode.
+                batch_size = 1 if CONFIG.human_mode_enabled else CONFIG.batch_responses
                 if (self._stop_event.is_set() or self.paused or state.paused
                         or state.limit_exceeded or getattr(state, "_deleted", False)):
                     break
@@ -3172,11 +3209,11 @@ class BotManager:
                                     attempt_accounts[vid].get("_pinned_resume_id") or attempt_accounts[vid].get("resume_hash", ""),
                                     reason_code="transport_unknown")
                                 break
-                        if CONFIG.response_delay > 0:
+                        if not CONFIG.human_mode_enabled and CONFIG.response_delay > 0:
                             set_activity(state, "wait_between_batches", "Выдерживает интервал между откликами",
                                 "Проверит возможность обработки следующей вакансии",
                                 wait_until=datetime.now(timezone.utc) + timedelta(seconds=CONFIG.response_delay))
-                            time.sleep(CONFIG.response_delay)
+                            self._stop_event.wait(CONFIG.response_delay)
                 else:
                     self._activity_vacancy(state)
                     set_activity(state, "apply", "Отправляет пакет откликов и ожидает ответы HH",
@@ -3572,13 +3609,15 @@ class BotManager:
                 if state.cookies_expired:
                     break
 
+                if CONFIG.human_mode_enabled and results:
+                    self._wait_human_pace(state)
                 i += batch_size
-                if i < len(filtered):
+                if i < len(filtered) and not CONFIG.human_mode_enabled:
                     set_activity(state, "wait_between_batches", "Выдерживает интервал между пакетами откликов",
                         "Проверит ограничения перед обработкой следующего пакета",
                         progress=(min(i, len(filtered)), len(filtered)),
                         wait_until=datetime.now(timezone.utc) + timedelta(seconds=CONFIG.response_delay))
-                    time.sleep(CONFIG.response_delay)
+                    self._stop_event.wait(CONFIG.response_delay)
 
             finish_cycle(state, "blocked" if (self.paused or state.paused
                 or state.limit_exceeded or state.hard_stopped or state._deleted
@@ -3597,17 +3636,19 @@ class BotManager:
             if not state.limit_exceeded and not state.paused:
                 state.status = "waiting"
                 state.status_detail = "Цикл завершён"
+                cycle_pause = (human_pace.random_burst_pause() * human_pace.delay_multiplier(state)
+                               if CONFIG.human_mode_enabled else CONFIG.pause_between_cycles)
                 self._add_log(
                     state.short, state.color,
-                    f"⏳ Цикл завершён, пауза {CONFIG.pause_between_cycles}с",
+                    f"⏳ Цикл завершён, пауза {cycle_pause:.0f}с",
                     "info",
                 )
                 reserve_wait = state.activity.get("phase") == "fresh_reserve"
                 set_activity(state, "fresh_reserve" if reserve_wait else "cycle_wait",
                     "Ожидает свежие вакансии: действует резерв откликов" if reserve_wait else "Цикл обработки завершён; ожидает следующего поиска",
                     "Снова загрузит вакансии и проверит новые предложения",
-                    wait_until=datetime.now(timezone.utc) + timedelta(seconds=CONFIG.pause_between_cycles))
-                if self._stop_event.wait(CONFIG.pause_between_cycles):
+                    wait_until=datetime.now(timezone.utc) + timedelta(seconds=cycle_pause))
+                if self._stop_event.wait(cycle_pause):
                     return
 
     def _hh_limit_tracker_worker(self):

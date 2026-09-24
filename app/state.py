@@ -18,6 +18,10 @@ class AccountState:
 
     def __init__(self, acc_data: dict):
         self.acc = acc_data
+        self._last_captcha_at = acc_data.setdefault("_last_captcha_at", 0.0)
+        self._human_burst_count = 0
+        self._human_burst_target = 0
+        self._human_burst_started = 0.0
         # Прокидываем cookies_lock в acc, чтобы hh_chat / hh_apply могли
         # сериализовать мутации acc["cookies"] (defensive — см. _ensure_chatik_cookies).
         # Сам lock создаётся ниже как self._cookies_lock; ставим shared reference.
