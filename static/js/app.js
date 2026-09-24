@@ -4004,6 +4004,11 @@ function buildCardHTML(acc) {
         onchange="degradedFallbackToggle(${acc.idx}, this)">
       🔑 OAuth-fallback при протухших cookies
     </label>
+    <label class="acc-skip-tests" id="acc-humanmode-label-${acc.idx}" title="Человекоподобный режим: рандомные задержки 5-20с, burst 3-8 → пауза 3-8 мин, часы 07-24. Минимизирует капчу.">
+      <input type="checkbox" id="acc-humanmode-cb-${acc.idx}"
+        onchange="humanModeToggle(this)">
+      🤖 Человеческий режим (снижает капчу)
+    </label>
     <div class="acc-actions">
       <button class="btn-sm" id="acc-pause-btn-${acc.idx}"
         onclick="sendCmd({type:'account_pause', idx:${acc.idx}})">${t('btn_acc_pause')}</button>
@@ -5056,6 +5061,16 @@ function updateCard(card, acc) {
   if (skipLabel) {
     if (acc.apply_tests) skipLabel.classList.add('active');
     else skipLabel.classList.remove('active');
+  }
+
+  // Human mode checkbox — синк из глобального config snapshot.
+  const humanCb = document.getElementById('acc-humanmode-cb-' + acc.idx);
+  const humanLabel = document.getElementById('acc-humanmode-label-' + acc.idx);
+  const humanOn = State.lastSnapshot?.config?.human_mode_enabled !== false;
+  if (humanCb && humanCb.checked !== humanOn) humanCb.checked = humanOn;
+  if (humanLabel) {
+    if (humanOn) humanLabel.classList.add('active');
+    else humanLabel.classList.remove('active');
   }
 
   // Per-account protective preflight and its session counters.
@@ -7513,6 +7528,26 @@ async function safetyToggle(idx, cb) {
     if (!res.ok || !data.ok) cb.checked = !cb.checked;
   } catch(e) {
     cb.checked = !cb.checked;
+  }
+}
+
+async function humanModeToggle(cb) {
+  // Глобальный флаг (общий для всех аккаунтов) — но toggle доступен с любой
+  // карточки. Синхронизируем состояние всех остальных чекбоксов на этом snapshot.
+  const enabled = cb.checked;
+  try {
+    const res = await fetch('/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({key:'human_mode_enabled', value: enabled})
+    });
+    const data = await res.json();
+    if (!data.ok) { cb.checked = !enabled; return; }
+    // Обновить остальные чекбоксы на других карточках + в Settings
+    document.querySelectorAll('[id^="acc-humanmode-cb-"]').forEach(el => el.checked = enabled);
+    const settingsCb = document.getElementById('hp-human_mode_enabled');
+    if (settingsCb) settingsCb.checked = enabled;
+  } catch(e) {
+    cb.checked = !enabled;
   }
 }
 

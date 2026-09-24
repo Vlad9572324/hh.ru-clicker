@@ -2229,6 +2229,7 @@ class BotManager:
                 "human_target_applies_per_hour": human_pace.TARGET_APPLIES_PER_HOUR,
                 "human_local_hour": datetime.now().hour,
                 "human_weekend_variance": human_pace.weekend_variance(),
+                "human_mode_enabled": CONFIG.human_mode_enabled,
                 "response_delay": CONFIG.response_delay,
                 "pause_between_cycles": CONFIG.pause_between_cycles,
                 "batch_responses": CONFIG.batch_responses,
