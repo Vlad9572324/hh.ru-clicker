@@ -123,15 +123,27 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
     from app.logging_utils import log_debug
     import json
     log_debug('captcha_result_metadata ' + json.dumps(diagnostic, sort_keys=True))
-    # A redirect alone is not proof: login and failure pages redirect too.
+    # Redirect analysis. Live-разведано (2026-09-24):
+    # - HH на успех: 302 БЕЗ Location (JS-redirect в body) — самый частый signal.
+    # - HH на успех: 302 на backurl / любую user-content страницу HH.
+    # - HH на failure: 302 на /account/captcha (обратно, isBot).
+    # - HH на auth-fail: 302 на /account/login (session мёртв).
+    _FAIL_PATHS = ('/account/captcha', '/account/login')
     if r.status_code in (302, 303):
         from app.captcha import safe_url
         location = r.headers.get('Location', '')
         location = urljoin('https://hh.ru/account/captcha', location) if location else ''
-        if safe_url(failurl) and location == failurl and failurl != backurl:
-            return False, 'isBot'
-        if safe_url(backurl) and location == backurl and safe_url(failurl) and failurl != backurl:
+        if location and safe_url(location):
+            from urllib.parse import urlsplit as _split
+            _path = _split(location).path
+            if _path in _FAIL_PATHS:
+                return False, 'isBot'
+            # Редирект на HH-страницу вне failure-paths — HH принял.
             return True, ''
+        # Пустой Location = JS-redirect от HH-frontend = success.
+        if not location:
+            return True, ''
+        # Location на внешний хост — подозрительно, не считаем успехом.
         return False, 'unconfirmed_redirect'
     # 200/400/403 могут содержать JSON {hhcaptcha:{isBot:true}} — failure.
     try:

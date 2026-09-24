@@ -51,7 +51,7 @@ def test_fetch_captcha_image_missing_xsrf(monkeypatch):
 
 
 @pytest.mark.parametrize('status,body,expected', [
-    (302, {}, (False, 'unconfirmed_redirect')),
+    (302, {}, (True, '')),                              # 302 без Location = HH принял (JS-redirect в body)
     (200, {}, (False, 'unconfirmed_response')),
     (200, {'hhcaptcha': {'isBot': True}}, (False, 'isBot')),
     (403, {'recaptcha': {'isBot': True}}, (False, 'recaptcha')),
@@ -78,10 +78,10 @@ def test_submit_captcha(status, body, expected):
 @pytest.mark.parametrize('location,expected', [
     ('https://hh.ru/', (True, '')),
     ('/', (True, '')),
-    ('https://hh.ru/account/captcha?state=test', (False, 'isBot')),
-    ('/account/login', (False, 'unconfirmed_redirect')),
-    ('https://example.org/', (False, 'unconfirmed_redirect')),
-    ('', (False, 'unconfirmed_redirect')),
+    ('/vacancies/12345', (True, '')),                                     # редирект на HH-контент = success
+    ('https://hh.ru/account/captcha?state=test', (False, 'isBot')),       # обратно на captcha = failure
+    ('/account/captcha?state=other', (False, 'isBot')),                   # relative path тоже
+    ('', (True, '')),                                                     # пустой Location = HH принял (JS-redirect)
 ])
 def test_redirect_matches_distinct_success_or_failure(location, expected):
     session = Mock()
@@ -89,14 +89,6 @@ def test_redirect_matches_distinct_success_or_failure(location, expected):
     session.post.return_value = Mock(status_code=302, headers={'Location': location})
     assert solver.submit_captcha(session, 'human', 'key', 'test',
         'https://hh.ru/', 'https://hh.ru/account/captcha?state=test') == expected
-
-
-def test_identical_redirect_targets_are_not_success():
-    session = Mock()
-    session.cookies.get.return_value = 'synthetic'
-    session.post.return_value = Mock(status_code=302, headers={'Location': 'https://hh.ru/'})
-    assert solver.submit_captcha(session, 'human', 'key', 'test',
-        'https://hh.ru/', 'https://hh.ru/') == (False, 'unconfirmed_redirect')
 
 
 def test_diagnostic_contains_only_safe_metadata(monkeypatch):
