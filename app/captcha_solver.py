@@ -17,7 +17,7 @@
   Используем свой requests.Session per-challenge.
 """
 import requests
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urljoin
 
 from app.hh_http import egress_proxies
 
@@ -107,9 +107,32 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
         'backurl': backurl,
         'failurl': failurl or backurl,
     }, headers=headers, timeout=10, allow_redirects=False)
-    # 302/303 → HH принял ответ, редирект на backurl.
+    # Whitelisted metadata only: never log URLs, cookies, answers or raw bodies.
+    try:
+        diagnostic_body = r.json()
+    except (ValueError, TypeError):
+        diagnostic_body = None
+    diagnostic = {'http_status': r.status_code,
+                  'format': 'json' if diagnostic_body is not None else 'non_json'}
+    for field in ('hhcaptcha', 'recaptcha'):
+        value = diagnostic_body.get(field) if isinstance(diagnostic_body, dict) else None
+        if isinstance(value, dict) and isinstance(value.get('isBot'), bool):
+            diagnostic[field + '_isBot'] = value['isBot']
+    diagnostic['redirect_present'] = bool(r.headers.get('Location'))
+    session.hh_captcha_diagnostic = diagnostic
+    from app.logging_utils import log_debug
+    import json
+    log_debug('captcha_result_metadata ' + json.dumps(diagnostic, sort_keys=True))
+    # A redirect alone is not proof: login and failure pages redirect too.
     if r.status_code in (302, 303):
-        return True, ''
+        from app.captcha import safe_url
+        location = r.headers.get('Location', '')
+        location = urljoin('https://hh.ru/account/captcha', location) if location else ''
+        if safe_url(failurl) and location == failurl and failurl != backurl:
+            return False, 'isBot'
+        if safe_url(backurl) and location == backurl and safe_url(failurl) and failurl != backurl:
+            return True, ''
+        return False, 'unconfirmed_redirect'
     # 200/400/403 могут содержать JSON {hhcaptcha:{isBot:true}} — failure.
     try:
         body = r.json()
@@ -120,7 +143,7 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
                 return False, 'isBot'
     except (ValueError, TypeError):
         pass
-    # 200 без явного isBot маркера — тоже успех (HH иногда так подтверждает).
+    # Unknown HTML/JSON must never be interpreted as success.
     if r.status_code == 200:
-        return True, ''
+        return False, 'unconfirmed_response'
     return False, f'http_{r.status_code}'

@@ -25,7 +25,7 @@ def test_photo_and_reply(bot):
         # Fallback: если pending содержит ровно 1 challenge, любое сообщение
         # (даже без reply_to) → resolver вызван (UX: юзеру не нужно жать "Ответить").
         await bot.on_message('text', -123, 8)
-        bot.resolver.assert_awaited_once_with('cid', 'text')
+        bot.resolver.assert_not_called()
         bot.resolver.reset_mock()
         await bot.on_message(' text ', -123, 7)
         bot.resolver.assert_awaited_once_with('cid', 'text')

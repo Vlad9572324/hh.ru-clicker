@@ -44,7 +44,7 @@ class CaptchaCoordinator:
                     try:
                         await self.photo(cid, self.pending[cid], acc)
                     except Exception:
-                        logger.exception('HH captcha refresh failed; will retry')
+                        logger.warning('HH captcha refresh failed; will retry')
                 if not cid or cid in self._seen or acc is None:
                     continue
                 query = parse_qs(urlsplit(captcha.browser_url(record)).query)
@@ -60,7 +60,7 @@ class CaptchaCoordinator:
                 try:
                     await self.photo(cid, item, acc)
                 except Exception:
-                    logger.exception('HH captcha delivery failed; will retry')
+                    logger.warning('HH captcha delivery failed; will retry')
                     continue
                 self.pending[cid] = item
                 self._seen.add(cid)
@@ -99,12 +99,26 @@ class CaptchaCoordinator:
                 submit_captcha, item['session'], text, item['captcha_key'], item['captcha_state'],
                 item['backurl'], item['failurl'])
             if ok:
-                # clear() compares IDs under the same lock as hold(), with atomic rename.
+                # HH подтвердил через 302 на backurl → снимаем challenge и
+                # будим worker'а. GUI-panel скроется через syncAccountCard.
                 captcha.clear(acc, cid)
-                await asyncio.to_thread(self.manager.resume_challenge_account, item['acc_key'])
+                try:
+                    await asyncio.to_thread(self.manager.resume_challenge_account, item['acc_key'])
+                except Exception:
+                    pass
                 self.pending.pop(cid, None)
+                # Чистим и GUI-сессию если была параллельно открыта — картинка/session там stale.
+                gui = getattr(self, 'gui_pending', None)
+                if gui and cid in gui:
+                    try:
+                        s = gui[cid].get('session')
+                        if s is not None:
+                            s.close()
+                    except Exception:
+                        pass
+                    gui.pop(cid, None)
                 self.bot.forget(cid)
-                await self.bot.send_message('✅ Капча HH решена')
+                await self.bot.send_message('✅ Капча HH решена, отклики возобновлены')
                 return
             item['fails'] += 1
             if reason == 'recaptcha' or item['fails'] >= 3:

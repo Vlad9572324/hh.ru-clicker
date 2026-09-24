@@ -51,8 +51,8 @@ def test_fetch_captcha_image_missing_xsrf(monkeypatch):
 
 
 @pytest.mark.parametrize('status,body,expected', [
-    (302, {}, (True, '')),
-    (200, {}, (True, '')),
+    (302, {}, (False, 'unconfirmed_redirect')),
+    (200, {}, (False, 'unconfirmed_response')),
     (200, {'hhcaptcha': {'isBot': True}}, (False, 'isBot')),
     (403, {'recaptcha': {'isBot': True}}, (False, 'recaptcha')),
     (500, {}, (False, 'http_500')),
@@ -61,7 +61,7 @@ def test_submit_captcha(status, body, expected):
     session = Mock()
     session.cookies = Mock()
     session.cookies.get = lambda k, default='': 'xsrf-x' if k == '_xsrf' else default
-    session.post = Mock(return_value=Mock(status_code=status, json=lambda: body))
+    session.post = Mock(return_value=Mock(status_code=status, headers={}, json=lambda: body))
     got = solver.submit_captcha(session, 'text-1', 'CK-1', 'STATE-1', 'https://hh.ru/back', 'https://hh.ru/fail')
     assert got == expected
     args, kw = session.post.call_args
@@ -73,3 +73,42 @@ def test_submit_captcha(status, body, expected):
     assert kw['params']['failurl'] == 'https://hh.ru/fail'
     assert kw['allow_redirects'] is False
     assert kw['headers']['X-Xsrftoken'] == 'xsrf-x'
+
+
+@pytest.mark.parametrize('location,expected', [
+    ('https://hh.ru/', (True, '')),
+    ('/', (True, '')),
+    ('https://hh.ru/account/captcha?state=test', (False, 'isBot')),
+    ('/account/login', (False, 'unconfirmed_redirect')),
+    ('https://example.org/', (False, 'unconfirmed_redirect')),
+    ('', (False, 'unconfirmed_redirect')),
+])
+def test_redirect_matches_distinct_success_or_failure(location, expected):
+    session = Mock()
+    session.cookies.get.return_value = 'synthetic'
+    session.post.return_value = Mock(status_code=302, headers={'Location': location})
+    assert solver.submit_captcha(session, 'human', 'key', 'test',
+        'https://hh.ru/', 'https://hh.ru/account/captcha?state=test') == expected
+
+
+def test_identical_redirect_targets_are_not_success():
+    session = Mock()
+    session.cookies.get.return_value = 'synthetic'
+    session.post.return_value = Mock(status_code=302, headers={'Location': 'https://hh.ru/'})
+    assert solver.submit_captcha(session, 'human', 'key', 'test',
+        'https://hh.ru/', 'https://hh.ru/') == (False, 'unconfirmed_redirect')
+
+
+def test_diagnostic_contains_only_safe_metadata(monkeypatch):
+    from app import logging_utils
+    logs = []
+    monkeypatch.setattr(logging_utils, 'log_debug', logs.append)
+    session = Mock()
+    session.cookies.get.return_value = 'PRIVATE_COOKIE'
+    session.post.return_value = Mock(status_code=200, headers={}, json=lambda: {
+        'hhcaptcha': {'isBot': False}, 'token': 'PRIVATE_TOKEN'})
+    result = solver.submit_captcha(session, 'PRIVATE_ANSWER', 'PRIVATE_KEY', 'PRIVATE_STATE')
+    assert result == (False, 'unconfirmed_response')
+    assert session.hh_captcha_diagnostic == {'http_status': 200, 'format': 'json',
+        'hhcaptcha_isBot': False, 'redirect_present': False}
+    assert logs and 'PRIVATE' not in str(logs)

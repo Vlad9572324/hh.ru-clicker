@@ -1775,6 +1775,12 @@ async function loadCaptchaImg(idx) {
   const img = document.getElementById('acc-captcha-img-' + idx);
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!img) return;
+  if (img.dataset.busy === '1') return;
+  img.dataset.busy = '1';
+  const answer = document.getElementById('acc-captcha-input-' + idx);
+  if (answer) answer.value = '';
+  img.dataset.challengeId = '';
+  img.dataset.challengeKey = '';
   img.style.display = 'none';
   if (box) box.textContent = 'Загружаю картинку…';
   try {
@@ -1785,13 +1791,21 @@ async function loadCaptchaImg(idx) {
       const d = await r.json().catch(() => ({}));
       throw new Error(d.error || `HTTP ${r.status}`);
     }
+    if (!(r.headers.get('Content-Type') || '').startsWith('image/')) {
+      const data = await r.json(); throw new Error(data.error || 'HH не вернул картинку');
+    }
     const blob = await r.blob();
+    img.dataset.challengeId = r.headers.get('X-Captcha-Id') || '';
+    img.dataset.challengeKey = r.headers.get('X-Captcha-Key') || '';
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
     img.src = URL.createObjectURL(blob);
     img.style.display = 'block';
     if (box) box.textContent = '';
     document.getElementById('acc-captcha-input-' + idx)?.focus();
   } catch (e) {
     if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+  } finally {
+    img.dataset.busy = '';
   }
 }
 
@@ -1799,28 +1813,61 @@ async function solveCaptcha(idx) {
   const input = document.getElementById('acc-captcha-input-' + idx);
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!input || !input.value.trim()) return;
+  const img = document.getElementById('acc-captcha-img-' + idx);
+  if (!img || img.dataset.busy === '1' || !img.dataset.challengeKey) return;
+  img.dataset.busy = '1';
   const text = input.value.trim();
   if (box) { box.textContent = '⏳ Отправляю…'; box.style.color = ''; }
   try {
     const r = await fetch(`/api/account/${idx}/captcha/solve`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text})
+      body: JSON.stringify({text, id: document.getElementById('acc-captcha-img-' + idx)?.dataset.challengeId,
+                            key: document.getElementById('acc-captcha-img-' + idx)?.dataset.challengeKey})
     });
     const d = await r.json();
     if (r.ok && d.ok) {
-      if (box) { box.textContent = d.message || '✅ Решено'; box.style.color = 'var(--green)'; }
+      if (box) {
+        box.textContent = d.message || '✅ Капча решена, отклики возобновлены';
+        box.style.color = 'var(--green)';
+      }
       input.value = '';
-      // Скрыть панель через 2 сек — captcha panel обновится через syncAccountCard
+      img.dataset.challengeKey = '';
+      // Auto-hide panel: server уже сделал clear+resume, snapshot скоро придёт
+      // с paused_reason≠challenge и syncAccountCard спрячет её сам, но
+      // страхуемся таймаутом.
       setTimeout(() => {
         const panel = document.getElementById('acc-captcha-' + idx);
         if (panel) panel.hidden = true;
       }, 2000);
     } else {
+      if (d.unconfirmed) {
+        if (box) {
+          box.textContent = '⚠ Результат неизвестен: HH не подтвердил прохождение. Это не означает, что ответ неверный. Отклики остаются на паузе. Нажмите «Открыть проверку на HH / продолжить» и завершите проверку на странице HH; пока не подтверждайте продолжение.';
+          box.style.color = 'var(--yellow)';
+          if (d.diagnostic && Number.isInteger(d.diagnostic.http_status)) {
+            const details = document.createElement('div');
+            details.textContent = 'Диагностика: HTTP ' + d.diagnostic.http_status +
+              '; формат: ' + (d.diagnostic.format === 'json' ? 'JSON' : 'не JSON') +
+              '; перенаправление: ' + (d.diagnostic.redirect_present ? 'да' : 'нет');
+            for (const key of ['hhcaptcha_isBot', 'recaptcha_isBot']) {
+              if (typeof d.diagnostic[key] === 'boolean') details.textContent += '; ' + key + '=' + d.diagnostic[key];
+            }
+            box.appendChild(details);
+          }
+        }
+        img.dataset.challengeKey = '';
+        return;
+      }
       if (box) { box.textContent = '❌ ' + (d.error || 'HH не принял ответ'); box.style.color = 'var(--red)'; }
-      if (d.refresh_needed) setTimeout(() => loadCaptchaImg(idx), 500);
+      if (d.refresh_needed) {
+        img.dataset.challengeKey = '';
+        if (box) box.textContent += ' Отклики на паузе. Нажмите «Другая» и введите ответ с новой картинки.';
+      }
     }
   } catch (e) {
     if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+  } finally {
+    img.dataset.busy = '';
   }
 }
 
@@ -3925,6 +3972,7 @@ function buildCardHTML(acc) {
           <input id="acc-captcha-input-${acc.idx}" type="text" placeholder="Текст с картинки" style="padding:4px 8px;font-size:13px" onkeydown="if(event.key==='Enter'){solveCaptcha(${acc.idx})}">
           <button class="btn-sm" onclick="solveCaptcha(${acc.idx})">✓ Отправить</button>
           <button class="btn-sm" onclick="loadCaptchaImg(${acc.idx})">🔄 Другая</button>
+          <button class="btn-sm" onclick="loadAccountCaptcha(${acc.idx})">Открыть проверку на HH / продолжить</button>
         </div>
       </div>
       <div id="acc-captcha-result-${acc.idx}" role="status" style="margin-top:6px;font-size:12px"></div>

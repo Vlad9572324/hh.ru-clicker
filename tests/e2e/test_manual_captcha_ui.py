@@ -1,4 +1,28 @@
 from playwright.sync_api import expect
+import pytest
+
+
+@pytest.mark.parametrize('result,expected', [
+    ({'ok': True}, 'HH подтвердил ответ'),
+    ({'ok': False, 'unconfirmed': True}, 'Результат неизвестен'),
+    ({'ok': False, 'error': 'HH отклонил ответ', 'refresh_needed': True}, 'HH отклонил ответ'),
+])
+def test_answer_status_remains_visible_without_extra_panels(ui, result, expected):
+    ui.state['accounts'][0].update(paused=True, paused_reason='challenge', cookies_expired=False,
+        hard_stopped=False, limit_exceeded=False, pending_apply=None, pending_applies=[])
+    ui.open()
+    ui.page.route('**/api/account/0/captcha/solve', lambda route: route.fulfill(json=result))
+    ui.page.evaluate("""() => {
+        const i = document.getElementById('acc-captcha-img-0');
+        i.dataset.busy = ''; i.dataset.challengeId = 'test'; i.dataset.challengeKey = 'key';
+    }""")
+    ui.page.locator('#acc-captcha-input-0').fill('human-answer')
+    ui.page.get_by_role('button', name='✓ Отправить').click()
+    box = ui.page.locator('#acc-captcha-result-0')
+    expect(box).to_contain_text(expected)
+    ui.push_state()
+    expect(box).to_contain_text(expected)
+    expect(box.locator('a, button')).to_have_count(0)
 
 
 def test_missing_link_cannot_claim_completed_captcha(ui):
@@ -7,7 +31,7 @@ def test_missing_link_cannot_claim_completed_captcha(ui):
     ui.open()
     ui.page.route('**/api/account/0/captcha', lambda route: route.fulfill(json={
         'ok': True, 'id': 'legacy', 'has_direct_link': False, 'url': ''}))
-    ui.page.locator('#acc-captcha-0 button').click()
+    ui.page.get_by_role('button', name='Открыть проверку на HH / продолжить').click()
     box = ui.page.locator('#acc-captcha-result-0')
     expect(box.locator('a')).to_have_count(0)
     expect(box.locator('button')).to_have_text('Проверить API без отклика')
@@ -23,6 +47,7 @@ def test_captcha_link_and_explicit_confirmation(ui):
         'url': 'https://hh.ru/account/captcha?state=synthetic&backurl=https%3A%2F%2Fhh.ru%2F'}))
     ui.page.evaluate("document.getElementById('acc-captcha-0').hidden = true")
     ui.push_state()
+    ui.page.get_by_role('button', name='Открыть проверку на HH / продолжить').click()
     expect(ui.page.locator('#acc-captcha-0')).to_be_visible()
     expect(ui.page.locator('#acc-pause-btn-0')).to_be_disabled()
     expect(ui.page.locator('#acc-captcha-result-0 a')).to_have_text('Пройти капчу на HH ↗')

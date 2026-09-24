@@ -35,6 +35,7 @@ def test_flow(monkeypatch, outcomes):
             await bot.on_message('answer', -123, 7)
         assert submit.call_args.args == (session, 'answer', 'test-key', 'test-state', 'https://hh.ru/', 'https://hh.ru/')
         if outcomes[-1][0]:
+            # На успехе challenge снят, worker разбужен (auto-resume UX).
             assert not captcha.current(acc)
             manager.resume_challenge_account.assert_called_once_with('test-account')
         else:

@@ -98,7 +98,7 @@ def send_once(event_id: str, message: str) -> bool:
                 log_debug("telegram notifications: Telegram rejected an alert")
                 return False
         except Exception as exc:
-            log_debug(f"telegram notifications: delivery failed: {type(exc).__name__}: {exc}")
+            log_debug(f"telegram notifications: delivery failed: {type(exc).__name__}")
             return False
 
         sent_events[event_id] = datetime.now().astimezone().isoformat(timespec="seconds")
