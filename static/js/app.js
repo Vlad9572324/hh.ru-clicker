@@ -8617,3 +8617,26 @@ async function saveCaptchaLLM(input) {
     document.getElementById('tg-result').textContent = 'Не удалось сохранить настройки';
   }
 }
+
+
+async function saveTelegramStatusInterval(input) {
+  if (!input.reportValidity()) return;
+  const result = document.getElementById('tg-alert-result');
+  try {
+    const response = await telegramPost('/api/settings', {key: 'telegram_status_interval_min', value: Number(input.value)});
+    if (!response.ok) throw new Error('Save failed');
+    document.getElementById('tg-summary-label').textContent = `раз в ${input.value} мин`;
+    result.textContent = 'Сохранено';
+  } catch (e) { result.textContent = 'Не удалось сохранить настройки'; }
+}
+
+(async () => {
+  try {
+    const response = await fetch('/api/telegram/status-settings');
+    if (!response.ok) return;
+    const settings = await response.json();
+    document.getElementById('tg-summary-enabled').checked = settings.enabled;
+    document.getElementById('tg-summary-interval').value = settings.interval_min;
+    document.getElementById('tg-summary-label').textContent = `раз в ${settings.interval_min} мин`;
+  } catch (e) { /* Keep defaults if offline. */ }
+})();

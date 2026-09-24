@@ -145,6 +145,8 @@ class Config:
     captcha_llm_max_length: int = 8
     captcha_llm_solved: int = 0
     captcha_llm_forwarded: int = 0
+    telegram_status_enabled: bool = True
+    telegram_status_interval_min: int = 30
     telegram_captcha_enabled: bool = True
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
@@ -301,6 +303,7 @@ _CONFIG_KEYS = [
     "tg_alert_daily_limit_enabled",
 
     "telegram_bot_token", "telegram_chat_id", "telegram_captcha_enabled",
+    "telegram_status_enabled", "telegram_status_interval_min",
     "captcha_llm_enabled", "captcha_llm_prompt", "captcha_llm_max_length",
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",

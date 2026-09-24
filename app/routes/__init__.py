@@ -29,6 +29,7 @@ async def _lifespan(_app: FastAPI):
     # ── startup ──
     broadcast_task = None
     captcha_task = None
+    status_task = None
     try:
         from app.storage import _cleanup_stale_tmp
         _cleanup_stale_tmp()  # подметаем config.tmp/accounts.tmp от прошлых crash'ей
@@ -44,9 +45,20 @@ async def _lifespan(_app: FastAPI):
             CONFIG.telegram_bot_token = _tg_token
         if _tg_chat and not CONFIG.telegram_chat_id:
             CONFIG.telegram_chat_id = _tg_chat
+        from app.telegram_status import install_status_tracking, status_heartbeat
+        from app import telegram_notify
+        install_status_tracking(bot)
         bot.start()
         from app.captcha_worker import captcha_orchestrator
         captcha_task = asyncio.create_task(captcha_orchestrator(bot), name="captcha_orchestrator")
+        # send_once uses HH credentials; align with dashboard credentials.
+        if CONFIG.telegram_bot_token and CONFIG.telegram_chat_id:
+            os.environ["HH_TELEGRAM_BOT_TOKEN"] = CONFIG.telegram_bot_token
+            os.environ["HH_TELEGRAM_CHAT_ID"] = CONFIG.telegram_chat_id
+        if CONFIG.telegram_status_enabled and telegram_notify.is_configured():
+            status_task = asyncio.create_task(
+                status_heartbeat(bot, getattr(bot, "telegram_captcha_bot", None),
+                                 CONFIG.telegram_status_interval_min), name="telegram_status")
         from app.routes.core import broadcast_loop
         # Сохраняем handle: иначе task может быть garbage-collected до завершения
         # (Python docs warn) и shutdown не может его отменить (kimi-r14-1 #1).
@@ -59,6 +71,10 @@ async def _lifespan(_app: FastAPI):
     yield
 
     # ── shutdown ──
+    if status_task is not None:
+        status_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+            await asyncio.wait_for(status_task, timeout=5)
     if captcha_task is not None:
         captcha_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
@@ -253,3 +269,10 @@ async def telegram_test():
         return {'ok': False, 'error': 'Не удалось отправить фото в TG'}
     finally:
         await test_bot.stop()
+
+
+@app.get('/api/telegram/status-settings')
+async def telegram_status_settings():
+    from app.config import CONFIG
+    return {"enabled": CONFIG.telegram_status_enabled,
+            "interval_min": CONFIG.telegram_status_interval_min}

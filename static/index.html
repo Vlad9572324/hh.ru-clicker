@@ -96,6 +96,9 @@
           </label>
         </div>
         <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <label><input type="checkbox" id="tg-summary-enabled" checked onchange="saveTelegramAlert(this, 'telegram_status_enabled')"> 📊 Периодическая сводка (<span id="tg-summary-label">раз в 30 мин</span>)</label>
+          <label>Интервал, мин <input id="tg-summary-interval" type="number" min="10" max="120" value="30" onchange="saveTelegramStatusInterval(this)"></label>
+          <small>Включение после запуска требует перезапуска. Не более одной сводки в час.</small>
           <button class="btn-sm" onclick="testTelegramAlerts()">Тест уведомления</button>
           <button class="btn-sm" onclick="testTelegramPhoto()">Тест фото</button>
         </div>
