@@ -74,6 +74,11 @@ accounts_data: list = []
 
 class Config:
     """Глобальные настройки (можно менять в runtime)"""
+    tg_alert_interview_enabled: bool = True
+    tg_alert_offer_enabled: bool = True
+    tg_alert_hr_question_enabled: bool = True
+    tg_alert_account_blocked_enabled: bool = True
+    tg_alert_daily_limit_enabled: bool = False
     pages_per_url = 100  # Maximum safety budget; API stops at the reported end.
     automation_paused: bool = False
     max_concurrent = 20
@@ -265,6 +270,12 @@ def _url_pages_map() -> dict:
 
 
 _CONFIG_KEYS = [
+    "tg_alert_interview_enabled",
+    "tg_alert_offer_enabled",
+    "tg_alert_hr_question_enabled",
+    "tg_alert_account_blocked_enabled",
+    "tg_alert_daily_limit_enabled",
+
     "telegram_bot_token", "telegram_chat_id", "telegram_captcha_enabled",
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",

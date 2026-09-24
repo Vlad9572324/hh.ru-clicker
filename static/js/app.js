@@ -8439,3 +8439,36 @@ async function telegramPost(url, body) {
   if (!response.ok) throw new Error('Request failed');
   return response.json();
 }
+
+
+async function saveTelegramAlert(input, key) {
+  const result = document.getElementById('tg-alert-result');
+  try {
+    const response = await telegramPost('/api/settings', {key, value: input.checked});
+    if (response.ok === false) throw new Error('Save failed');
+    result.textContent = 'Сохранено';
+  } catch (e) {
+    input.checked = !input.checked;
+    result.textContent = 'Не удалось сохранить настройки';
+  }
+}
+
+async function testTelegramAlerts() {
+  const result = document.getElementById('tg-alert-result');
+  try {
+    const response = await telegramPost('/api/telegram/test', {});
+    result.textContent = response.ok ? 'Тест отправлен' : 'Не удалось отправить тест';
+  } catch (e) { result.textContent = 'Ошибка отправки'; }
+}
+
+setInterval(() => {
+  const cfg = State.lastSnapshot?.config;
+  if (!cfg) return;
+  for (const name of ['interview', 'offer', 'hr_question', 'account_blocked', 'daily_limit']) {
+    const input = document.getElementById(`tg-alert-${name}`);
+    if (input && !input.dataset.initialized) {
+      input.checked = cfg[`tg_alert_${name}_enabled`] ?? (name !== 'daily_limit');
+      input.dataset.initialized = '1';
+    }
+  }
+}, 1000);

@@ -486,6 +486,17 @@
       <span id="tg-result" role="status"></span>
     </section>
 
+    <section class="q-section">
+      <h3>🔔 TG уведомления</h3>
+      <label><input type="checkbox" id="tg-alert-interview" onchange="saveTelegramAlert(this, 'tg_alert_interview_enabled')" checked> Приглашения на интервью</label>
+      <label><input type="checkbox" id="tg-alert-offer" onchange="saveTelegramAlert(this, 'tg_alert_offer_enabled')" checked> Офферы</label>
+      <label><input type="checkbox" id="tg-alert-hr_question" onchange="saveTelegramAlert(this, 'tg_alert_hr_question_enabled')" checked> Вопросы HR</label>
+      <label><input type="checkbox" id="tg-alert-account_blocked" onchange="saveTelegramAlert(this, 'tg_alert_account_blocked_enabled')" checked> Проблемы авторизации</label>
+      <label><input type="checkbox" id="tg-alert-daily_limit" onchange="saveTelegramAlert(this, 'tg_alert_daily_limit_enabled')"> Дневной лимит откликов</label>
+      <button onclick="testTelegramAlerts()">Проверить отправку</button>
+      <span id="tg-alert-result" role="status"></span>
+    </section>
+
     <!-- ═══════ ГРУППА 0: Карьера (UI full coverage) ═══════ -->
     <div class="settings-group-header">🧭 Карьера</div>
 

@@ -30,6 +30,8 @@ from app.vacancy_salary import salary_for_ruble_threshold
 from app.mutation_safety import MutationBlocked, ensure_mutation_allowed
 from app.search_scope import remote_it_filters, remote_it_url, remote_it_rejection, scope_metadata
 from app.apply_quarantine import blocked as quarantine_blocked
+from app.telegram_alerts import (AlertCategory, TOGGLES, account_key, scope_key,
+                                 classify_chat_message, send_alert, notify_account_state_change)
 from app.telegram_notify import is_configured as telegram_is_configured, send_once as telegram_send_once
 
 
@@ -1335,6 +1337,8 @@ class BotManager:
     def _notify_employer_messages(self, state: AccountState, lock_held: bool = False) -> None:
         """Alert about unread employer messages; this never writes to HH."""
         if not telegram_is_configured():
+            if lock_held:
+                state._telegram_notify_lock.release()
             return
         acquired = lock_held or state._telegram_notify_lock.acquire(blocking=False)
         if not acquired:
@@ -1345,20 +1349,25 @@ class BotManager:
                 if item.get("type") != "NEGOTIATION":
                     continue
                 thread = _build_thread_from_chat_item(item, display_info, cur_pid, str(neg_id))
-                if not thread.get("needs_reply"):
+                last = item.get("last_msg") or (item.get("messages") or {}).get("last") or item.get("lastMessage") or {}
+                workflow = last.get("workflow_transition") or last.get("workflowTransition")
+                workflow_unread = (workflow and item.get("unreadCount", 0) > 0
+                                   and str(last.get("participant_id", last.get("participantId", ""))) != str(cur_pid))
+                if not thread.get("needs_reply") and not workflow_unread:
                     continue
-                message_id = thread.get("last_msg_id", "")
-                employer_message = thread.get("last_employer_msg", "").strip()
-                if not message_id or not employer_message:
-                    continue
-                text = (
-                    "HH: требуется ваш ответ\n"
-                    f"Вакансия: {thread.get('vacancy_title') or 'не указана'}\n"
-                    f"Работодатель: {thread.get('employer_name') or 'не указан'}\n"
-                    f"Диалог: {neg_id}\n\n{employer_message[:2500]}\n\n"
-                    "Откройте HH Clicker или переговоры на hh.ru, чтобы ответить."
+                participant = last.get("participant_display") or last.get("participantDisplay") or {}
+                is_bot = last.get("is_bot", participant.get("is_bot", participant.get("isBot", False)))
+                is_bot = is_bot or str(last.get("participant_id", last.get("participantId", ""))).endswith("-BOT")
+                category, key, text = classify_chat_message(
+                    neg_id, thread.get("last_employer_msg") or last.get("body") or last.get("text", ""), workflow, is_bot,
+                    [{"msg_id": thread.get("last_msg_id")}],
                 )
-                telegram_send_once(f"message:{state.short}:{neg_id}:{message_id}", text)
+                if category:
+                    text += (f"\nВакансия: {thread.get('vacancy_title') or 'не указана'}"
+                             f"\nРаботодатель: {thread.get('employer_name') or 'не указан'}")
+                    send_alert(category, scope_key(account_key(state), key), text,
+                               sender=telegram_send_once)
+
         except Exception as exc:
             log_debug(f"telegram message scan [{state.short}] failed: {type(exc).__name__}: {exc}")
         finally:
@@ -1380,7 +1389,9 @@ class BotManager:
                 f"Диалог: {neg_id}\n\n"
                 "Откройте HH Clicker или переговоры на hh.ru, чтобы посмотреть детали."
             )
-            telegram_send_once(f"interview:{state.short}:{neg_id}", text)
+            send_alert(AlertCategory.interview_invitation,
+                       scope_key(account_key(state), f"interview:{neg_id}"), text,
+                       sender=telegram_send_once)
 
     def start(self):
         # Регистр всех worker-threads чтобы stop() мог их join'нуть — иначе
@@ -2206,6 +2217,7 @@ class BotManager:
             "log": self._snap_deque(self.activity_log, self._deque_lock),
             "llm_log": self._snap_deque(self.llm_log, self._deque_lock),
             "config": {
+                **{key: getattr(CONFIG, key) for key in TOGGLES.values()},
                 "telegram_captcha_enabled": CONFIG.telegram_captcha_enabled,
                 "telegram_bot_token_set": bool(CONFIG.telegram_bot_token),
                 "telegram_connected": bool(getattr(getattr(self, "telegram_captcha_bot", None), "connected", False)),
@@ -2326,8 +2338,12 @@ class BotManager:
                 log_debug(f"active_search [{state.short}] exception: {e}")
 
         while not self._stop_event.is_set() and not state._deleted:
+            notify_account_state_change(state, AlertCategory.account_blocked)
+            notify_account_state_change(state, AlertCategory.daily_limit_reached)
             # Global + per-account pause
             while (self.paused or state.paused or getattr(state, "_auth_recovery_pending", False)) and not self._stop_event.is_set() and not state._deleted:
+                notify_account_state_change(state, AlertCategory.account_blocked)
+                notify_account_state_change(state, AlertCategory.daily_limit_reached)
                 self._reconcile_pending_if_due(state)
                 self._quarantine_exhausted_apply(state)
                 self._network_probe_if_due(state)
@@ -3372,6 +3388,7 @@ class BotManager:
                                 self._add_response(state, vid, title, company, "already")
                             elif q_result == "limit":
                                 state.limit_exceeded = True
+                                notify_account_state_change(state, AlertCategory.daily_limit_reached)
                                 state.limit_reset_time = datetime.now() + timedelta(
                                     minutes=CONFIG.limit_check_interval
                                 )
@@ -3389,6 +3406,7 @@ class BotManager:
                                 log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=questionnaire")
                                 with state._state_lock:
                                     state.cookies_expired = True
+                                    notify_account_state_change(state, AlertCategory.account_blocked)
                                     if not state.paused:
                                         state.paused = True
                                         state.paused_reason = "outcome_unknown" if state.pending_apply else "auth"
@@ -3457,6 +3475,7 @@ class BotManager:
                     elif result == "limit":
                         log_debug(f"HH_LIMIT [{state.short}] vid={vid} retry_after={info.get('retry_after_seconds', '?')}")
                         state.limit_exceeded = True
+                        notify_account_state_change(state, AlertCategory.daily_limit_reached)
                         if CONFIG.stop_on_hh_limit:
                             # Hard stop — no retries
                             state.hard_stopped = True
@@ -3508,12 +3527,14 @@ class BotManager:
                                 state._web_auth_warned = True
                             log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply → degraded")
                             state.cookies_expired = True
+                            notify_account_state_change(state, AlertCategory.account_blocked)
                             # Прервать текущий батч cookie-applies, не пытаемся снова
                             # тем же путём в этом цикле.
                             break
                         else:
                             log_debug(f"AUTH_ERROR [{state.short}] vid={vid} flow=apply")
                             state.cookies_expired = True
+                            notify_account_state_change(state, AlertCategory.account_blocked)
                             state.paused = True
                             if not state.pending_apply:
                                 state.paused_reason = "auth"
@@ -3860,6 +3881,7 @@ class BotManager:
                     if not (state.use_oauth or CONFIG.use_oauth_apply):
                         log_debug(f"AUTH_ERROR [{state.short}] vid=- flow=collect")
                         state.cookies_expired = True
+                        notify_account_state_change(state, AlertCategory.account_blocked)
                     return url, set(), {}, {}, {}
                 if html:
                     ids = parse_ids(html)
@@ -4767,6 +4789,7 @@ class BotManager:
                 if stats.get("auth_error"):
                     log_debug(f"AUTH_ERROR [{state.short}] vid=- flow=stats")
                     state.cookies_expired = True
+                    notify_account_state_change(state, AlertCategory.account_blocked)
                     self._add_log(
                         state.short, state.color,
                         "⚠️ Куки протухли! (HH stats) Обновите куки.", "error",
