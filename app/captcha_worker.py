@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from app import captcha
 from app.config import CONFIG
+from app.captcha_llm import recognize_captcha
 from app.captcha_solver import fetch_captcha_image, submit_captcha
 from app.telegram_bot import TelegramCaptchaBot
 
@@ -43,8 +44,10 @@ class CaptchaCoordinator:
                 if cid in self.pending and acc is not None and not self.pending[cid]['captcha_key']:
                     try:
                         await self.photo(cid, self.pending[cid], acc)
+                        self._seen.add(cid)
                     except Exception:
-                        logger.exception('HH captcha refresh failed; will retry')
+                        logger.warning('HH captcha refresh failed; will retry')
+                    continue
                 if not cid or cid in self._seen or acc is None:
                     continue
                 query = parse_qs(urlsplit(captcha.browser_url(record)).query)
@@ -57,29 +60,91 @@ class CaptchaCoordinator:
                             url=captcha.browser_url(record), fails=0,
                             captcha_key=None, session=None,
                             challenge_url=record.get('captcha_url', ''))
+                self.pending[cid] = item
                 try:
                     await self.photo(cid, item, acc)
                 except Exception:
                     logger.warning('HH captcha delivery failed; will retry')
                     continue
-                self.pending[cid] = item
                 self._seen.add(cid)
 
     async def photo(self, cid, item, acc):
+        self._close_session(item.get('session'))
         item['captcha_key'] = None
         item['session'] = None
         session, key, image, state, backurl = await asyncio.to_thread(
             fetch_captcha_image, acc, item['challenge_url'])
         item['captcha_state'] = state or item['captcha_state']
         item['backurl'] = backurl or item['backurl']
-        result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)
+        if CONFIG.captcha_llm_enabled and item.get('llm_attempted') is not True:
+            item['llm_attempted'] = True
+            try:
+                answer = await asyncio.to_thread(recognize_captcha, image)
+            except Exception:
+                answer = None
+            if answer:
+                try:
+                    ok, _ = await asyncio.to_thread(
+                        submit_captcha, session, answer, key, item['captcha_state'],
+                        item['backurl'], item['failurl'])
+                except Exception:
+                    ok = False
+                if ok:
+                    captcha.clear(acc, cid)
+                    CONFIG.captcha_llm_solved += 1
+                    self.pending.pop(cid, None)
+                    self.bot.forget(cid)
+                    gui = getattr(self, 'gui_pending', None)
+                    if gui and cid in gui:
+                        self._close_session(gui.pop(cid).get('session'))
+                    self._close_session(session)
+                    try:
+                        await asyncio.to_thread(self.manager.resume_challenge_account, item['acc_key'])
+                    except Exception:
+                        pass
+                    self._log(acc, '🤖 Капча решена LLM — отклики возобновлены', 'success')
+                    if getattr(self.bot, 'connected', False) is True:
+                        try:
+                            await self.bot.send_message('🤖 Капча решена автоматически (LLM)')
+                        except Exception:
+                            pass
+                    return
+                self._log(acc, '🤖 LLM: ответ отклонён HH → передаю юзеру', 'info')
+                self._close_session(session)
+                # Rejected submissions can invalidate the old image/key.
+                session, key, image, state, backurl = await asyncio.to_thread(
+                    fetch_captcha_image, acc, item['challenge_url'])
+                item['captcha_state'] = state or item['captcha_state']
+                item['backurl'] = backurl or item['backurl']
+        try:
+            result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)
+        except Exception:
+            self._close_session(session)
+            raise
         if not result:
+            self._close_session(session)
             raise RuntimeError('TG bot disabled')
+        if not item.get('forwarded'):
+            CONFIG.captcha_llm_forwarded += 1
+            item['forwarded'] = True
         item['captcha_key'] = key
         item['session'] = session
         try:
             self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
                                   '📱 Капча отправлена в Telegram — жду ответа', 'info')
+        except Exception:
+            pass
+
+    @staticmethod
+    def _close_session(session):
+        try:
+            session.close()
+        except Exception:
+            pass
+
+    def _log(self, acc, message, level):
+        try:
+            self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'), message, level)
         except Exception:
             pass
 
@@ -175,7 +240,7 @@ async def captcha_orchestrator(bot_manager):
                 signature = current
                 if current[2]:
                     await bot.start()
-            if current[2] and bot._task:
+            if CONFIG.captcha_llm_enabled or (current[2] and bot._task):
                 try:
                     await coordinator.scan()
                 except Exception:

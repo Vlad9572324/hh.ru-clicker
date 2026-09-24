@@ -140,6 +140,11 @@ class Config:
     hh_proxy_url: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    captcha_llm_enabled: bool = True
+    captcha_llm_prompt: str = "Прочитай текст на этой капче HH.ru. Верни ТОЛЬКО символы, без объяснений. Игнорируй фон и искажения. Если нет уверенности — верни 'unclear'."
+    captcha_llm_max_length: int = 8
+    captcha_llm_solved: int = 0
+    captcha_llm_forwarded: int = 0
     telegram_captcha_enabled: bool = True
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
@@ -296,6 +301,7 @@ _CONFIG_KEYS = [
     "tg_alert_daily_limit_enabled",
 
     "telegram_bot_token", "telegram_chat_id", "telegram_captcha_enabled",
+    "captcha_llm_enabled", "captcha_llm_prompt", "captcha_llm_max_length",
     "pages_per_url", "max_concurrent", "response_delay", "pause_between_cycles", "remote_it_only",
     "limit_check_interval", "resume_touch_interval", "batch_responses", "min_salary",
     "auto_pause_errors", "questionnaire_default_answer", "llm_fill_questionnaire",

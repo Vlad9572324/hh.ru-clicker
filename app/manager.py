@@ -2232,6 +2232,7 @@ class BotManager:
             "config": {
                 **{key: getattr(CONFIG, key) for key in TOGGLES.values()},
                 "telegram_captcha_enabled": CONFIG.telegram_captcha_enabled,
+                **{key: getattr(CONFIG, key) for key in ("captcha_llm_enabled", "captcha_llm_solved", "captcha_llm_forwarded")},
                 "telegram_bot_token_set": bool(CONFIG.telegram_bot_token),
                 "telegram_connected": bool(getattr(getattr(self, "telegram_captcha_bot", None), "connected", False)),
                 "pages_per_url": CONFIG.pages_per_url,

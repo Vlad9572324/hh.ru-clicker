@@ -8554,6 +8554,13 @@ setInterval(() => {
   const status = document.getElementById('tg-status');
   if (!cfg || !status) return;
   status.textContent = !cfg.telegram_bot_token_set ? '⚠ токен не задан' : cfg.telegram_connected ? '🟢 подключён' : '🔴 offline';
+  const llmEnabled = document.getElementById('captcha-llm-enabled');
+  if (llmEnabled && !llmEnabled.dataset.initialized) {
+    llmEnabled.checked = cfg.captcha_llm_enabled !== false;
+    llmEnabled.dataset.initialized = '1';
+  }
+  const stats = document.getElementById('captcha-llm-stats');
+  if (stats) stats.textContent = `За запуск: решено LLM — ${cfg.captcha_llm_solved || 0} / передано юзеру — ${cfg.captcha_llm_forwarded || 0}`;
   const enabled = document.getElementById('tg-enabled');
   if (!enabled.dataset.initialized) {
     enabled.checked = cfg.telegram_captcha_enabled !== false;
@@ -8599,3 +8606,14 @@ setInterval(() => {
     }
   }
 }, 1000);
+
+async function saveCaptchaLLM(input) {
+  try {
+    const result = await telegramPost('/api/settings', {key: 'captcha_llm_enabled', value: input.checked});
+    if (result.ok === false) throw new Error('Save failed');
+    document.getElementById('tg-result').textContent = 'Сохранено';
+  } catch (e) {
+    input.checked = !input.checked;
+    document.getElementById('tg-result').textContent = 'Не удалось сохранить настройки';
+  }
+}
