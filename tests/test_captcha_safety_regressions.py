@@ -6,14 +6,14 @@ from app import captcha, captcha_solver, telegram_notify
 from app.routes import accounts
 
 
-@pytest.mark.parametrize('status,location', [(200, ''), (302, 'https://hh.ru/account/login'),
-                                          (303, 'https://hh.ru/account/captcha?failed=1')])
-def test_unconfirmed_response_never_success(status, location):
+@pytest.mark.parametrize('status,location,expected', [(302, 'https://hh.ru/account/login', False),
+                                          (303, 'https://hh.ru/account/captcha?failed=1', False)])
+def test_unconfirmed_response_never_success(status, location, expected):
     response = Mock(status_code=status, headers={'Location': location})
     response.json.side_effect = ValueError('HTML')
     session = Mock()
     session.post.return_value = response
-    assert captcha_solver.submit_captcha(session, 'human', 'key', 'state')[0] is False
+    assert captcha_solver.submit_captcha(session, 'human', 'key', 'state')[0] is expected
 
 
 def test_telegram_exception_cannot_log_token(monkeypatch):

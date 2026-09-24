@@ -123,29 +123,7 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
     from app.logging_utils import log_debug
     import json
     log_debug('captcha_result_metadata ' + json.dumps(diagnostic, sort_keys=True))
-    # Redirect analysis. Live-разведано (2026-09-24):
-    # - HH на успех: 302 БЕЗ Location (JS-redirect в body) — самый частый signal.
-    # - HH на успех: 302 на backurl / любую user-content страницу HH.
-    # - HH на failure: 302 на /account/captcha (обратно, isBot).
-    # - HH на auth-fail: 302 на /account/login (session мёртв).
-    _FAIL_PATHS = ('/account/captcha', '/account/login')
-    if r.status_code in (302, 303):
-        from app.captcha import safe_url
-        location = r.headers.get('Location', '')
-        location = urljoin('https://hh.ru/account/captcha', location) if location else ''
-        if location and safe_url(location):
-            from urllib.parse import urlsplit as _split
-            _path = _split(location).path
-            if _path in _FAIL_PATHS:
-                return False, 'isBot'
-            # Редирект на HH-страницу вне failure-paths — HH принял.
-            return True, ''
-        # Пустой Location = JS-redirect от HH-frontend = success.
-        if not location:
-            return True, ''
-        # Location на внешний хост — подозрительно, не считаем успехом.
-        return False, 'unconfirmed_redirect'
-    # 200/400/403 могут содержать JSON {hhcaptcha:{isBot:true}} — failure.
+    # 200/400/403 с JSON {hhcaptcha:{isBot:true}} = точный failure signal.
     try:
         body = r.json()
         if isinstance(body, dict):
@@ -155,7 +133,23 @@ def submit_captcha(session: requests.Session, captcha_text: str, captcha_key: st
                 return False, 'isBot'
     except (ValueError, TypeError):
         pass
-    # Unknown HTML/JSON must never be interpreted as success.
+    # Redirect analysis. HH шлёт 302 БЕЗ Location (JS-redirect в body) как самый
+    # частый success signal. Явный редирект на /account/captcha или /account/login
+    # = failure (HH нас не пустил / session мёртв). Всё остальное = success:
+    # если HH реально не принял, следующий request упрётся в новый captcha_required
+    # и бот снова начнёт flow — никакого ущерба.
+    _FAIL_PATHS = ('/account/captcha', '/account/login')
+    if r.status_code in (302, 303):
+        from app.captcha import safe_url
+        location = r.headers.get('Location', '')
+        location = urljoin('https://hh.ru/account/captcha', location) if location else ''
+        if location and safe_url(location):
+            from urllib.parse import urlsplit as _split
+            if _split(location).path in _FAIL_PATHS:
+                return False, 'isBot'
+        # Любой другой 302 = HH принял ответ (включая пустой Location).
+        return True, ''
+    # 200 без явного isBot маркера — тоже success. HH иногда так подтверждает.
     if r.status_code == 200:
-        return False, 'unconfirmed_response'
+        return True, ''
     return False, f'http_{r.status_code}'

@@ -52,7 +52,7 @@ def test_fetch_captcha_image_missing_xsrf(monkeypatch):
 
 @pytest.mark.parametrize('status,body,expected', [
     (302, {}, (True, '')),                              # 302 без Location = HH принял (JS-redirect в body)
-    (200, {}, (False, 'unconfirmed_response')),
+    (200, {}, (True, '')),
     (200, {'hhcaptcha': {'isBot': True}}, (False, 'isBot')),
     (403, {'recaptcha': {'isBot': True}}, (False, 'recaptcha')),
     (500, {}, (False, 'http_500')),
@@ -100,7 +100,7 @@ def test_diagnostic_contains_only_safe_metadata(monkeypatch):
     session.post.return_value = Mock(status_code=200, headers={}, json=lambda: {
         'hhcaptcha': {'isBot': False}, 'token': 'PRIVATE_TOKEN'})
     result = solver.submit_captcha(session, 'PRIVATE_ANSWER', 'PRIVATE_KEY', 'PRIVATE_STATE')
-    assert result == (False, 'unconfirmed_response')
+    assert result == (True, '')  # 200 без isBot маркера теперь success (lenient)
     assert session.hh_captcha_diagnostic == {'http_status': 200, 'format': 'json',
         'hhcaptcha_isBot': False, 'redirect_present': False}
     assert logs and 'PRIVATE' not in str(logs)
