@@ -136,6 +136,15 @@ class CaptchaCoordinator:
                                       f'❌ Капча не принята HH (попытка {item["fails"]}/3, reason={reason})', 'warning')
             except Exception:
                 pass
+            # Сообщение в TG что ответ отклонён — иначе юзер видит только
+            # новую картинку (editMessageMedia) без объяснения почему.
+            try:
+                await self.bot.send_message(
+                    f'❌ Ответ неверный (попытка {item["fails"]}/3). '
+                    f'HH прислал новую капчу — введите ответ ниже.'
+                )
+            except Exception:
+                pass
             if reason == 'recaptcha' or item['fails'] >= 3:
                 logger.warning('HH captcha requires manual resolution')
                 self.pending.pop(cid, None)

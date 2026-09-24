@@ -262,6 +262,13 @@ async def _captcha_solve_locked(idx: int, request: Request):
                          '✅ Капча пройдена (GUI) — отклики возобновлены', 'success')
         except Exception:
             pass
+        # Уведомим в TG что юзер решил через GUI — иначе юзер там видит фото
+        # без обратной связи, а бот уже разбужен.
+        try:
+            if coord and getattr(coord, 'bot', None):
+                await coord.bot.send_message(f'✅ Капча решена (через дашборд), отклики [{state.acc.get("short","")}] возобновлены')
+        except Exception:
+            pass
         return {'ok': True, 'message': '✅ Капча решена, отклики возобновлены'}
     if reason.startswith('unconfirmed_'):
         try:
@@ -275,6 +282,14 @@ async def _captcha_solve_locked(idx: int, request: Request):
     try:
         bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
                      f'❌ Капча (GUI) не принята HH: {reason}', 'warning')
+    except Exception:
+        pass
+    try:
+        if coord and getattr(coord, 'bot', None):
+            await coord.bot.send_message(
+                f'❌ Ответ (введён в дашборде) отклонён HH ({reason}). '
+                f'Обновите картинку и попробуйте снова, либо через Telegram.'
+            )
     except Exception:
         pass
     return {'ok': False, 'error': f'Не принято HH: {reason}', 'refresh_needed': True}
