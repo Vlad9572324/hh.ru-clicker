@@ -2,6 +2,7 @@
 from collections import defaultdict, deque
 from datetime import datetime
 from enum import Enum
+from html import escape as _html_escape
 import hashlib
 import re
 import threading
@@ -9,6 +10,48 @@ import time
 
 from app.config import CONFIG
 from app import telegram_notify
+
+
+_CAT_ICONS = {
+    "interview_invitation": "🗓️",
+    "job_offer": "🎁",
+    "hr_question": "💬",
+    "account_blocked": "🚫",
+    "daily_limit_reached": "📉",
+}
+
+
+def _h(s):
+    """HTML-escape для TG parse_mode=HTML."""
+    return _html_escape(str(s or ""))
+
+
+def build_alert_html(category, *, acc_short="", employer="", vacancy_title="",
+                     vacancy_id="", neg_id="", body="", extra_lines=()):
+    """Красивый HTML-шаблон для TG-уведомления с живыми ссылками hh.ru/chat и /vacancy."""
+    icon = _CAT_ICONS.get(getattr(category, "value", category), "🔔")
+    label = _LABELS.get(category, str(category)) if category else "уведомление"
+    lines = [f"{icon} <b>HH: {_h(label)}</b>", ""]
+    if acc_short:
+        lines.append(f"<b>Аккаунт:</b> {_h(acc_short)}")
+    if vacancy_title:
+        if vacancy_id:
+            lines.append(f"<b>Вакансия:</b> <a href=\"https://hh.ru/vacancy/{_h(vacancy_id)}\">{_h(vacancy_title)}</a>")
+        else:
+            lines.append(f"<b>Вакансия:</b> {_h(vacancy_title)}")
+    if employer:
+        lines.append(f"<b>Работодатель:</b> {_h(employer)}")
+    for line in extra_lines:
+        if line:
+            lines.append(_h(line))
+    body_str = str(body or "").strip()
+    if body_str:
+        lines.append("")
+        lines.append(f"<i>{_h(body_str[:1500])}</i>")
+    if neg_id:
+        lines.append("")
+        lines.append(f"🔗 <a href=\"https://hh.ru/chat/{_h(neg_id)}\">Открыть чат в HH</a>")
+    return "\n".join(lines)
 
 
 class AlertCategory(str, Enum):
@@ -74,8 +117,12 @@ def scope_key(account, key):
     return f"{kind}:{account}:{rest}"
 
 
-def send_alert(category, dedup_key, text, *, sender=None):
-    """Send an account-scoped key (kind:account:event) using existing transport."""
+def send_alert(category, dedup_key, text, *, sender=None, parse_mode=None):
+    """Send an account-scoped key (kind:account:event) using existing transport.
+
+    parse_mode='HTML' → передаётся в telegram_notify.send_once для форматирования
+    с <b>/<i>/<a> tags (кликабельные ссылки на hh.ru/chat/<id> и /vacancy/<id>).
+    """
     category = AlertCategory(category)
     if getattr(CONFIG, TOGGLES[category]) is not True:
         return False
@@ -87,7 +134,13 @@ def send_alert(category, dedup_key, text, *, sender=None):
             window.popleft()
         if len(window) >= 20:
             return False
-        if (sender or telegram_notify.send_once)(dedup_key, text):
+        send_fn = sender or telegram_notify.send_once
+        try:
+            delivered = send_fn(dedup_key, text, parse_mode=parse_mode) if parse_mode else send_fn(dedup_key, text)
+        except TypeError:
+            # Sender не поддерживает parse_mode kwarg (mock-инъекции в тестах).
+            delivered = send_fn(dedup_key, text)
+        if delivered:
             window.append(time.monotonic())
             return True
     return False
@@ -104,5 +157,16 @@ def notify_account_state_change(state, kind):
     if not active:
         return False
     day = datetime.now().astimezone().date().isoformat()
+    icon = _CAT_ICONS.get(category.value, "🔔")
+    if category == AlertCategory.account_blocked:
+        body = ("Cookies протухли или OAuth недействителен. "
+                "Откройте дашборд и обновите авторизацию.")
+    else:
+        body = "HH ограничил количество откликов на сегодня. Отклики возобновятся автоматически завтра."
+    html_text = (
+        f"{icon} <b>HH: {_LABELS[category]}</b>\n\n"
+        f"<b>Аккаунт:</b> {_html_escape(state.short)}\n\n"
+        f"<i>{_html_escape(body)}</i>"
+    )
     return send_alert(category, scope_key(account_key(state), f"{category.value}:{day}"),
-                      f"HH [{state.short}]: {_LABELS[category]}")
+                      html_text, parse_mode='HTML')

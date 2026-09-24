@@ -72,8 +72,12 @@ def _save_sent_events(events: dict) -> None:
     tmp.replace(_NOTIFICATIONS_FILE)
 
 
-def send_once(event_id: str, message: str) -> bool:
-    """Deliver an alert once and record it only after Telegram accepts it."""
+def send_once(event_id: str, message: str, parse_mode: str = None) -> bool:
+    """Deliver an alert once and record it only after Telegram accepts it.
+
+    parse_mode: None | 'HTML' | 'MarkdownV2' (Telegram Bot API standard).
+    HTML позволяет <b>, <i>, <a href="...">.
+    """
     token, chat_id = _credentials()
     if not token or not chat_id:
         return False
@@ -88,9 +92,13 @@ def send_once(event_id: str, message: str) -> bool:
         if event_id in sent_events:
             return False
         try:
+            payload = {"chat_id": chat_id, "text": message,
+                       "disable_web_page_preview": True}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
             response = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": message, "disable_web_page_preview": True},
+                json=payload,
                 timeout=15,
             )
             response.raise_for_status()

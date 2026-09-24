@@ -1366,10 +1366,17 @@ class BotManager:
                     [{"msg_id": thread.get("last_msg_id")}],
                 )
                 if category:
-                    text += (f"\nВакансия: {thread.get('vacancy_title') or 'не указана'}"
-                             f"\nРаботодатель: {thread.get('employer_name') or 'не указан'}")
-                    send_alert(category, scope_key(account_key(state), key), text,
-                               sender=telegram_send_once)
+                    from app.telegram_alerts import build_alert_html
+                    html_text = build_alert_html(
+                        category, acc_short=state.short,
+                        employer=thread.get('employer_name'),
+                        vacancy_title=thread.get('vacancy_title'),
+                        vacancy_id=str(thread.get('vacancy_id') or ''),
+                        neg_id=neg_id,
+                        body=thread.get('last_employer_msg') or last.get('body') or last.get('text', ''),
+                    )
+                    send_alert(category, scope_key(account_key(state), key), html_text,
+                               sender=telegram_send_once, parse_mode='HTML')
 
         except Exception as exc:
             log_debug(f"telegram message scan [{state.short}] failed: {type(exc).__name__}: {exc}")
@@ -1381,20 +1388,23 @@ class BotManager:
         """Alert once for every interview negotiation found during stats refresh."""
         if not telegram_is_configured():
             return
+        from app.telegram_alerts import build_alert_html
         for item in interviews:
             neg_id = str(item.get("neg_id", "")).strip()
             if not neg_id:
                 continue
-            text = (
-                "HH: новое приглашение на интервью\n"
-                f"Вакансия: {item.get('text') or 'не указана'}\n"
-                f"Дата в HH: {item.get('date') or 'не указана'}\n"
-                f"Диалог: {neg_id}\n\n"
-                "Откройте HH Clicker или переговоры на hh.ru, чтобы посмотреть детали."
+            extra = []
+            if item.get('date'):
+                extra.append(f"Дата в HH: {item.get('date')}")
+            html_text = build_alert_html(
+                AlertCategory.interview_invitation, acc_short=state.short,
+                vacancy_title=item.get('text'),
+                vacancy_id=str(item.get('vacancy_id') or ''),
+                neg_id=neg_id, extra_lines=extra,
             )
             send_alert(AlertCategory.interview_invitation,
-                       scope_key(account_key(state), f"interview:{neg_id}"), text,
-                       sender=telegram_send_once)
+                       scope_key(account_key(state), f"interview:{neg_id}"), html_text,
+                       sender=telegram_send_once, parse_mode='HTML')
 
     def start(self):
         # Регистр всех worker-threads чтобы stop() мог их join'нуть — иначе
