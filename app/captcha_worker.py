@@ -44,7 +44,7 @@ class CaptchaCoordinator:
                     try:
                         await self.photo(cid, self.pending[cid], acc)
                     except Exception:
-                        logger.warning('HH captcha refresh failed; will retry')
+                        logger.exception('HH captcha refresh failed; will retry')
                 if not cid or cid in self._seen or acc is None:
                     continue
                 query = parse_qs(urlsplit(captcha.browser_url(record)).query)

@@ -62,7 +62,9 @@ class TelegramCaptchaBot:
                         continue
                 if not body.get('ok'):
                     self.connected = False
-                    raise RuntimeError('Telegram API request failed')
+                    # Полный лог ответа TG чтобы понять причину (Bad Request / message can't be edited / etc)
+                    logger.warning('Telegram API %s failed: %s', method, body)
+                    raise RuntimeError(f'Telegram API {method} failed: {body.get("description", body)}')
                 self.connected = True
                 return body.get('result')
         raise RuntimeError('Telegram flood limit')
@@ -70,14 +72,26 @@ class TelegramCaptchaBot:
     async def push_challenge(self, challenge_id, acc_short, image_bytes):
         caption = f'🔐 Капча для {acc_short}. Ответьте текстом с картинки'
         previous = next((mid for mid, cid in self.pending.items() if cid == challenge_id), None)
-        fields = {'chat_id': self.chat_id}
+        # editMessageMedia может фейлить (message старее 48ч, удалён юзером,
+        # 'photo is not modified' и т.д.) — тогда fallback на новое sendPhoto.
         if previous is not None:
-            fields.update(message_id=previous, media=json.dumps(
-                {'type': 'photo', 'media': 'attach://photo', 'caption': caption}, ensure_ascii=False))
-            result = await self._call('editMessageMedia', fields, image_bytes)
-        else:
-            fields.update(caption=caption, reply_markup=json.dumps({'force_reply': True}))
-            result = await self._call('sendPhoto', fields, image_bytes)
+            try:
+                fields = {'chat_id': self.chat_id, 'message_id': previous,
+                          'media': json.dumps({'type': 'photo', 'media': 'attach://photo',
+                                               'caption': caption}, ensure_ascii=False)}
+                result = await self._call('editMessageMedia', fields, image_bytes)
+                if result:
+                    self.pending[result['message_id']] = challenge_id
+                return result
+            except Exception as exc:
+                logger.info('editMessageMedia failed (%s) → fallback to sendPhoto', exc)
+                # Забываем старую привязку — новое sendPhoto ниже
+                self.pending = {mid: cid for mid, cid in self.pending.items() if cid != challenge_id}
+        # Свежее фото: previous не было или edit провалился → sendPhoto.
+        fields = {'chat_id': self.chat_id,
+                  'caption': caption,
+                  'reply_markup': json.dumps({'force_reply': True})}
+        result = await self._call('sendPhoto', fields, image_bytes)
         if result:
             self.pending[result['message_id']] = challenge_id
         return result
