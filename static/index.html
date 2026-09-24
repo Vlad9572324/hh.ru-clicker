@@ -68,6 +68,39 @@
         <div class="card-title" data-i18n="gs_session">📊 Сессия</div>
         <div id="global-stats-body"></div>
       </div>
+      <!-- TG уведомления -->
+      <div class="card" id="tg-alerts-card">
+        <div class="card-title">🔔 TG уведомления
+          <span id="tg-status" style="font-size:11px;font-weight:normal;color:var(--dim);margin-left:6px">⚠ токен не задан</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px;font-size:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="tg-alert-interview" onchange="saveTelegramAlert(this, 'tg_alert_interview_enabled')" checked>
+            <span>🗓️ Приглашения на интервью</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="tg-alert-offer" onchange="saveTelegramAlert(this, 'tg_alert_offer_enabled')" checked>
+            <span>🎁 Офферы работы</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="tg-alert-hr_question" onchange="saveTelegramAlert(this, 'tg_alert_hr_question_enabled')" checked>
+            <span>💬 Вопросы HR (не автоответы)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="tg-alert-account_blocked" onchange="saveTelegramAlert(this, 'tg_alert_account_blocked_enabled')" checked>
+            <span>🚫 Аккаунт заблокирован / cookies</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="tg-alert-daily_limit" onchange="saveTelegramAlert(this, 'tg_alert_daily_limit_enabled')">
+            <span>📉 Дневной лимит откликов</span>
+          </label>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn-sm" onclick="testTelegramAlerts()">Тест уведомления</button>
+          <button class="btn-sm" onclick="testTelegramPhoto()">Тест фото</button>
+        </div>
+        <span id="tg-alert-result" role="status" style="font-size:11px;color:var(--dim);display:block;margin-top:4px"></span>
+      </div>
       <!-- Recent responses -->
       <div class="card" style="flex:1;overflow:hidden">
         <div class="card-title" data-i18n="sidebar_recent">📬 Последние отклики</div>
@@ -486,16 +519,9 @@
       <span id="tg-result" role="status"></span>
     </section>
 
-    <section class="q-section">
-      <h3>🔔 TG уведомления</h3>
-      <label><input type="checkbox" id="tg-alert-interview" onchange="saveTelegramAlert(this, 'tg_alert_interview_enabled')" checked> Приглашения на интервью</label>
-      <label><input type="checkbox" id="tg-alert-offer" onchange="saveTelegramAlert(this, 'tg_alert_offer_enabled')" checked> Офферы</label>
-      <label><input type="checkbox" id="tg-alert-hr_question" onchange="saveTelegramAlert(this, 'tg_alert_hr_question_enabled')" checked> Вопросы HR</label>
-      <label><input type="checkbox" id="tg-alert-account_blocked" onchange="saveTelegramAlert(this, 'tg_alert_account_blocked_enabled')" checked> Проблемы авторизации</label>
-      <label><input type="checkbox" id="tg-alert-daily_limit" onchange="saveTelegramAlert(this, 'tg_alert_daily_limit_enabled')"> Дневной лимит откликов</label>
-      <button onclick="testTelegramAlerts()">Проверить отправку</button>
-      <span id="tg-alert-result" role="status"></span>
-    </section>
+    <!-- Переехало на главную (sidebar-card #tg-alerts-card) — здесь чекбоксов больше нет,
+         управление TG-уведомлениями теперь рядом со Статистикой сессии. -->
+
 
     <!-- ═══════ ГРУППА 0: Карьера (UI full coverage) ═══════ -->
     <div class="settings-group-header">🧭 Карьера</div>
@@ -1139,7 +1165,7 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=manual-captcha-16"></script>
+<script src="/static/js/app.js?v=tg-alerts-main"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
 <script src="/static/js/features/job_status.js?v=1"></script>
 <script src="/static/js/features/skills.js?v=1"></script>
