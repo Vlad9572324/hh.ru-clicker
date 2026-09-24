@@ -69,15 +69,26 @@ def hold(acc, details):
     callback = acc.get('_on_challenge')
     if callable(callback):
         callback()
+    new_challenge = False
     with LOCK:
         data = _read()
         key = account_key(acc)
+        if key not in data:
+            new_challenge = True
         if key not in data or (not (data[key].get('captcha_url') or data[key].get('fallback_url'))
                                and (safe_url(details.get('captcha_url')) or safe_url(details.get('fallback_url')))):
             data[key] = {'id': uuid.uuid4().hex, 'created_at': datetime.now(timezone.utc).isoformat(),
                          'captcha_url': safe_url(details.get('captcha_url')),
                          'fallback_url': safe_url(details.get('fallback_url'))}
         _atomic_write_json(PATH, data)
+    # UI лог: показать что HH запросил капчу для этого аккаунта (только на первый).
+    if new_challenge:
+        try:
+            from app.instances import bot as _bot
+            _bot._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
+                          '🔐 HH запросил капчу — ожидание ответа (TG/GUI)', 'warning')
+        except Exception:
+            pass
 
 
 def capture(acc, status, payload):

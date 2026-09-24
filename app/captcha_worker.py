@@ -77,6 +77,11 @@ class CaptchaCoordinator:
             raise RuntimeError('TG bot disabled')
         item['captcha_key'] = key
         item['session'] = session
+        try:
+            self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
+                                  '📱 Капча отправлена в Telegram — жду ответа', 'info')
+        except Exception:
+            pass
 
     async def resolve(self, cid, text):
         async with self._lock:
@@ -118,13 +123,28 @@ class CaptchaCoordinator:
                         pass
                     gui.pop(cid, None)
                 self.bot.forget(cid)
+                try:
+                    self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
+                                          '✅ Капча пройдена (Telegram) — отклики возобновлены', 'success')
+                except Exception:
+                    pass
                 await self.bot.send_message('✅ Капча HH решена, отклики возобновлены')
                 return
             item['fails'] += 1
+            try:
+                self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
+                                      f'❌ Капча не принята HH (попытка {item["fails"]}/3, reason={reason})', 'warning')
+            except Exception:
+                pass
             if reason == 'recaptcha' or item['fails'] >= 3:
                 logger.warning('HH captcha requires manual resolution')
                 self.pending.pop(cid, None)
                 self.bot.forget(cid)
+                try:
+                    self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
+                                          '⚠ Капча усложнилась (reCAPTCHA/3 попытки) — решите вручную по ссылке', 'error')
+                except Exception:
+                    pass
                 await self.bot.send_message('капча HH усложнилась (возможно reCAPTCHA), решите вручную по ссылке: ' + item['url'])
                 return
             await self.photo(cid, item, acc)

@@ -245,15 +245,11 @@ async def _captcha_solve_locked(idx: int, request: Request):
     except Exception as e:
         return {'ok': False, 'error': f'submit_captcha: {type(e).__name__}'}
     if ok:
-        # HH подтвердил ответ через 302 на backurl (safe_url + explicit match в
-        # submit_captcha). Логика возобновления: чистим challenge и будим worker'а
-        # сразу — юзеру не нужно повторно жать что-то в UI.
         captcha.clear(state.acc, cid)
         try:
             await asyncio.to_thread(bot.resume_challenge_account, captcha.account_key(state.acc))
         except Exception:
             pass
-        # Убираем session чтобы не переиспользовалась после успеха.
         try:
             coord.gui_pending.pop(cid, None)
             if cid in coord.pending:
@@ -261,11 +257,26 @@ async def _captcha_solve_locked(idx: int, request: Request):
                 coord.bot.forget(cid)
         except Exception:
             pass
+        try:
+            bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
+                         '✅ Капча пройдена (GUI) — отклики возобновлены', 'success')
+        except Exception:
+            pass
         return {'ok': True, 'message': '✅ Капча решена, отклики возобновлены'}
     if reason.startswith('unconfirmed_'):
+        try:
+            bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
+                         f'⚠ Капча (GUI) — HH не подтвердил ({reason})', 'warning')
+        except Exception:
+            pass
         return {'ok': False, 'unconfirmed': True,
                 'diagnostic': getattr(item['session'], 'hh_captcha_diagnostic', {}),
                 'error': 'HH не дал однозначного подтверждения. Это не означает неверный ответ. Откройте оригинальную проверку HH; пауза сохранена.'}
+    try:
+        bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
+                     f'❌ Капча (GUI) не принята HH: {reason}', 'warning')
+    except Exception:
+        pass
     return {'ok': False, 'error': f'Не принято HH: {reason}', 'refresh_needed': True}
 
 
