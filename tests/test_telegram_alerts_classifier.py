@@ -20,6 +20,12 @@ from app import telegram_alerts as alerts
     ('Есть опыт?', {'id': 'APPLICATION_ACCEPTED'}, False, None),
     ('Есть опыт?', None, True, None),
     ('Здравствуйте', None, False, None),
+    # Rejections (HH шлёт через workflow INTERVIEW, но это отказ) — silence
+    ('Спасибо за интерес. К сожалению, не готовы пригласить', {'id': 'INTERVIEW'}, False, None),
+    ('Мы приняли решение остановить кандидатуру. Сохраним резюме.', None, False, None),
+    ('Мы не готовы предложить эту вакансию', {'id': 'INTERVIEW'}, False, None),
+    ('Ищем специалиста другого профиля', {'id': 'INTERVIEW'}, False, None),
+    ('Unfortunately we cannot offer this position', {'id': 'INTERVIEW'}, False, None),
 ])
 def test_classification(body, workflow, bot, expected):
     category, key, text = alerts.classify_chat_message('n1', body, workflow, bot, [{'id': 'm1'}])

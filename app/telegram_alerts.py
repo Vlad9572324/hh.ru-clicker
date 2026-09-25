@@ -90,8 +90,25 @@ def classify_chat_message(neg_id, message_body, workflow, is_bot, employer_last_
     body = str(body).strip()
     wf_id = workflow.get("id") if isinstance(workflow, dict) else workflow
     wf_id = str(wf_id or "").strip().upper()
+    # Detect отказ (HR шлёт отказы через тот же workflow INTERVIEW) — silence.
+    rejection = re.search(
+        r"к\s+сожален|не\s+готов[ыа]?\s+(пригласить|предложить|рассмотрет)"
+        r"|не\s+смож(ем|ет)\s+пригласи"
+        r"|не\s+сможем\s+продолж"
+        r"|не\s+подход(ите|ит)"
+        r"|не\s+соответству(ете|ет)"
+        r"|поиск(ем|а)?\s+специалист[аов]+\s+другого"
+        r"|ищем\s+специалист[аов]+\s+(другого|иного)"
+        r"|сохран(им|яем)\s+(ваше\s+)?резюме"
+        r"|приняли\s+решени[ея]\s+остановит"
+        r"|решили\s+не\s+продолж"
+        r"|отказ(ать|ываем)"
+        r"|not\s+moving\s+forward|unfortunately\s+we|regret\s+to\s+inform",
+        body, re.I)
     category = None
-    if wf_id in {"INTERVIEW", "INVITATION", "PHONE_INTERVIEW", "VIDEO_INTERVIEW"} or re.search(r"приглаш|собеседовани|интервью|созвон|встреч", body, re.I):
+    if rejection:
+        pass  # HR-отказ — silence
+    elif wf_id in {"INTERVIEW", "INVITATION", "PHONE_INTERVIEW", "VIDEO_INTERVIEW"} or re.search(r"приглаш|собеседовани|интервью|созвон|встреч", body, re.I):
         category = AlertCategory.interview_invitation
     elif wf_id in {"OFFER", "JOB_OFFER"} or re.search(r"оффер|предложение работы|job offer|готовы предложить|предлагаем позицию", body, re.I):
         category = AlertCategory.job_offer
