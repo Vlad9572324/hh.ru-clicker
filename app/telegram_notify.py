@@ -73,13 +73,14 @@ def _save_sent_events(events: dict) -> None:
 
 
 def send_once(event_id: str, message: str, parse_mode: str = None) -> bool:
-    """Deliver an alert once and record it only after Telegram accepts it.
+    """Deliver an alert once, broadcasting to all subscribers (multi-user).
 
-    parse_mode: None | 'HTML' | 'MarkdownV2' (Telegram Bot API standard).
-    HTML позволяет <b>, <i>, <a href="...">.
+    Fans out to admin chat_id + все `/start`-подписчики (data/telegram_subscribers.json).
+    Событие помечается delivered если хотя бы один chat_id принял; для остальных
+    ошибки логируются но не блокируют.
     """
-    token, chat_id = _credentials()
-    if not token or not chat_id:
+    token, admin = _credentials()
+    if not token:
         return False
 
     event_id = str(event_id).strip()
@@ -87,28 +88,37 @@ def send_once(event_id: str, message: str, parse_mode: str = None) -> bool:
     if not event_id or not message:
         return False
 
+    from app.telegram_subscribers import list_all as _sub_list
+    chats = _sub_list()
+    if not chats and admin:
+        chats = [admin]  # fallback: если subscribers.json пуст, шлём хотя бы admin
+    if not chats:
+        return False
+
     with _LOCK:
         sent_events = _load_sent_events()
         if event_id in sent_events:
             return False
-        try:
-            payload = {"chat_id": chat_id, "text": message,
-                       "disable_web_page_preview": True}
-            if parse_mode:
-                payload["parse_mode"] = parse_mode
-            response = requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json=payload,
-                timeout=15,
-            )
-            response.raise_for_status()
-            if not response.json().get("ok"):
-                log_debug("telegram notifications: Telegram rejected an alert")
-                return False
-        except Exception as exc:
-            log_debug(f"telegram notifications: delivery failed: {type(exc).__name__}")
+        any_ok = False
+        for cid in chats:
+            try:
+                payload = {"chat_id": cid, "text": message,
+                           "disable_web_page_preview": True}
+                if parse_mode:
+                    payload["parse_mode"] = parse_mode
+                response = requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json=payload, timeout=15,
+                )
+                response.raise_for_status()
+                if response.json().get("ok"):
+                    any_ok = True
+                else:
+                    log_debug(f"telegram broadcast to {cid}: rejected")
+            except Exception as exc:
+                log_debug(f"telegram broadcast to {cid} failed: {type(exc).__name__}")
+        if not any_ok:
             return False
-
         sent_events[event_id] = datetime.now().astimezone().isoformat(timespec="seconds")
         try:
             _save_sent_events(sent_events)
