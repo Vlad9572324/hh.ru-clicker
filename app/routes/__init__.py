@@ -51,6 +51,15 @@ async def _lifespan(_app: FastAPI):
         bot.start()
         from app.captcha_worker import captcha_orchestrator
         captcha_task = asyncio.create_task(captcha_orchestrator(bot), name="captcha_orchestrator")
+        # Let the orchestrator create the Telegram bot and its HTTP session.
+        await asyncio.sleep(0)
+        telegram_bot = getattr(bot, "telegram_captcha_bot", None)
+        if telegram_bot is not None and telegram_bot._session is not None:
+            from app.telegram_menu import BOT_COMMANDS
+            try:
+                await telegram_bot._set_commands(BOT_COMMANDS)
+            except Exception:
+                log_debug("telegram: command menu registration failed")
         # send_once uses HH credentials; align with dashboard credentials.
         if CONFIG.telegram_bot_token and CONFIG.telegram_chat_id:
             os.environ["HH_TELEGRAM_BOT_TOKEN"] = CONFIG.telegram_bot_token

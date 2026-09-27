@@ -134,6 +134,47 @@ class TelegramCaptchaBot:
                 logger.info('sendMessage to %s failed: %s', chat_id, exc)
         return first
 
+    async def _set_commands(self, commands):
+        await self._call('setMyCommands', {'commands': json.dumps(commands, ensure_ascii=False)})
+
+    async def send_menu(self, chat_id, text, keyboard):
+        return await self._call('sendMessage', {
+            'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML',
+            'reply_markup': json.dumps(keyboard, ensure_ascii=False)})
+
+    async def on_callback(self, callback_query):
+        from app import telegram_menu
+        from app.instances import bot as _bot_manager
+        from app.telegram_subscribers import is_known
+
+        message = callback_query.get('message') or {}
+        chat_id = (message.get('chat') or {}).get('id')
+        message_id = message.get('message_id')
+        data = callback_query.get('data', '')
+        popup, keyboard = 'Не подписаны', None
+        authorized = False
+        try:
+            authorized = chat_id is not None and is_known(str(chat_id))
+            if authorized and message_id is not None:
+                popup, keyboard = await asyncio.wait_for(
+                    telegram_menu.handle_callback(_bot_manager, data, chat_id, message_id),
+                    timeout=5)
+        except Exception:
+            popup = 'Не удалось выполнить команду. Попробуйте ещё раз.'
+            logger.warning('TG menu callback failed')
+        finally:
+            await self._call('answerCallbackQuery', {
+                'callback_query_id': callback_query['id'],
+                'text': popup[:200], 'show_alert': 'false'})
+        if keyboard is not None:
+            await self._call('editMessageReplyMarkup', {
+                'chat_id': chat_id, 'message_id': message_id,
+                'reply_markup': json.dumps(keyboard, ensure_ascii=False)})
+        if authorized and data == 'status':
+            await self._call('sendMessage', {
+                'chat_id': chat_id, 'text': await telegram_menu.live_status(_bot_manager),
+                'parse_mode': 'HTML'})
+
     async def on_message(self, text, chat_id, reply_to_message_id):
         # Broadcast-режим: принимаем сообщения от ЛЮБОГО подписанного chat_id,
         # плюс commands /start /stop для управления подпиской.
@@ -141,8 +182,9 @@ class TelegramCaptchaBot:
             return
         text = text.strip()
         cid_s = str(chat_id)
+        command = text.split()[0].split('@', 1)[0].lower()
         # Commands /start /stop доступны кому угодно (bot API уже filter'ит по botToken)
-        if text.lower() in ('/start', '/start@' + (self.chat_id or '')):
+        if command == '/start':
             from app.telegram_subscribers import add as _sub_add
             added = _sub_add(cid_s)
             reply = ('✅ Подписка активна! Вы будете получать уведомления и капчи.'
@@ -151,8 +193,11 @@ class TelegramCaptchaBot:
                 await self._call('sendMessage', {'chat_id': cid_s, 'text': reply})
             except Exception:
                 pass
+            from app import telegram_menu
+            from app.instances import bot as _bot_manager
+            await self.send_menu(cid_s, 'Управление ботом', telegram_menu.build_main_menu(_bot_manager))
             return
-        if text.lower() == '/stop':
+        if command == '/stop':
             from app.telegram_subscribers import remove as _sub_remove
             removed = _sub_remove(cid_s)
             reply = '👋 Отписка. Сообщения больше не будут приходить.' if removed else 'ℹ️ Вы и так не подписаны (или админ — админа удалить нельзя).'
@@ -169,6 +214,22 @@ class TelegramCaptchaBot:
         except Exception:
             if cid_s != self.chat_id:
                 return
+        if command in ('/menu', '/status', '/pause', '/resume'):
+            from app import telegram_menu
+            from app.instances import bot as _bot_manager
+            if command == '/status':
+                await self._call('sendMessage', {
+                    'chat_id': cid_s, 'text': await telegram_menu.live_status(_bot_manager),
+                    'parse_mode': 'HTML'})
+            else:
+                reply = 'Управление ботом'
+                if command in ('/pause', '/resume'):
+                    desired_pause = command == '/pause'
+                    if _bot_manager.paused != desired_pause:
+                        _bot_manager.toggle_pause()
+                    reply = '⏸ Пауза' if _bot_manager.paused else '▶ Работает'
+                await self.send_menu(cid_s, reply, telegram_menu.build_main_menu(_bot_manager))
+            return
         # Reply to captcha challenge — только явный reply_to (без single-pending
         # fallback, чтобы обычные сообщения между challenges не резолвили captcha).
         challenge_id = self.pending.get(reply_to_message_id)
@@ -179,12 +240,15 @@ class TelegramCaptchaBot:
         while True:
             try:
                 updates = await self._call('getUpdates', {
-                    'offset': self._offset, 'timeout': 5, 'allowed_updates': '["message"]'})
+                    'offset': self._offset, 'timeout': 5, 'allowed_updates': '["message", "callback_query"]'})
                 for update in updates or []:
                     # Consume once: replaying a human answer against a refreshed image is unsafe.
                     self._offset = update['update_id'] + 1
                     message = update.get('message', {})
                     try:
+                        if 'callback_query' in update:
+                            await self.on_callback(update['callback_query'])
+                            continue
                         await self.on_message(message.get('text'), message.get('chat', {}).get('id'),
                                               message.get('reply_to_message', {}).get('message_id'))
                     except Exception:
