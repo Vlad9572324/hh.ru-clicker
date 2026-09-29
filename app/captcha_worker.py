@@ -60,7 +60,7 @@ class CaptchaCoordinator:
                         await self.photo(cid, self.pending[cid], acc)
                         self._seen.add(cid)
                     except Exception:
-                        logger.warning('HH captcha refresh failed; will retry')
+                        logger.exception('HH captcha refresh failed; will retry')
                     continue
                 if not cid or cid in self._seen or acc is None:
                     continue
@@ -78,7 +78,7 @@ class CaptchaCoordinator:
                 try:
                     await self.photo(cid, item, acc)
                 except Exception:
-                    logger.warning('HH captcha delivery failed; will retry')
+                    logger.exception('HH captcha delivery failed; will retry')
                     continue
                 self._seen.add(cid)
 
@@ -117,11 +117,11 @@ class CaptchaCoordinator:
                     except Exception:
                         pass
                     self._log(acc, '🤖 Капча решена LLM — отклики возобновлены', 'success')
-                    if getattr(self.bot, 'connected', False) is True:
-                        try:
-                            await self.bot.send_message('🤖 Капча решена автоматически (LLM)')
-                        except Exception:
-                            pass
+                    try:
+                        await self.bot.send_message(
+                            f'🤖 Капча HH решена автоматически (LLM) для {acc.get("short") or acc.get("name") or "аккаунта"} — отклики возобновлены')
+                    except Exception:
+                        logger.exception('TG notify (LLM solved) failed')
                     return
                 self._log(acc, '🤖 LLM: ответ отклонён HH → передаю юзеру', 'info')
                 self._close_session(session)

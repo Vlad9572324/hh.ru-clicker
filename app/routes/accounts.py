@@ -382,6 +382,14 @@ async def api_account_captcha_continue(idx: int, request: Request):
         return {'ok': False, 'error': 'Ошибка сохранения. Отправки остаются остановленными.'}
     finally:
         state._auth_recovery_pending = False
+    try:
+        tg = getattr(bot, 'telegram_captcha_bot', None)
+        if tg is not None:
+            short = state.acc.get('short') or state.acc.get('name') or 'аккаунт'
+            asyncio.create_task(tg.send_message(
+                f'✅ Капча HH пройдена (дашборд) для {short} — отклики возобновлены'))
+    except Exception:
+        pass
     return {'ok': True, 'message': 'Продолжение разрешено вами. Если HH снова потребует капчу, отправки остановятся.'}
 
 @router.post("/api/account/{idx}/pause")
