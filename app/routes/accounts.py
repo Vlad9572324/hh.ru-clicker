@@ -7,6 +7,7 @@ import json
 import re
 import threading
 import time
+from contextlib import suppress
 
 import requests
 from fastapi import APIRouter, Request
@@ -170,6 +171,8 @@ async def _captcha_image_locked(idx: int):
     from app import captcha
     from app.captcha_solver import fetch_captcha_image
     from fastapi.responses import Response as _Resp
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    import secrets
     state = bot._get_apply_state(idx)
     if state is None:
         return {'ok': False, 'error': 'Аккаунт не найден'}
@@ -181,25 +184,45 @@ async def _captcha_image_locked(idx: int):
     # GUI sessions are separate: refreshing here must not replace Telegram's image.
     if not hasattr(coord, 'gui_pending'):
         coord.gui_pending = {}
+    url = captcha.browser_url(record)
+    if not url:
+        return {'ok': False, 'error': 'Ссылка проверки не сохранена. Откройте карточку аккаунта.'}
+    # Only a per-attempt redirect is proof, not an arbitrary redirect to HH home.
+    backurl = 'https://hh.ru/?manual_captcha_return=' + secrets.token_hex(16)
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != 'backurl']
+    query.append(('backurl', backurl))
+    url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    try:
+        captcha.claim_manual(state.acc, cid)
+        fetch = asyncio.create_task(asyncio.to_thread(fetch_captcha_image, state.acc, url))
+        try:
+            session, key, image, state_val, backurl = await asyncio.shield(fetch)
+        except asyncio.CancelledError:
+            def close_fetched(done):
+                if not done.cancelled():
+                    with suppress(Exception):
+                        done.result()[0].close()
+            fetch.add_done_callback(close_fetched)
+            raise
+    except Exception as e:
+        return {'ok': False, 'error': f'Не удалось загрузить капчу: {type(e).__name__}'}
+    if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
+        session.close()
+        return {'ok': False, 'error': 'Проверка изменилась. Обновите страницу.'}
+    # Preserve the old usable image/session if replacement fails.
     old = coord.gui_pending.pop(cid, None)
     if old and old.get('session') is not None:
         old['session'].close()
-    try:
-        session, key, image, state_val, backurl = await asyncio.to_thread(
-            fetch_captcha_image, state.acc, record['captcha_url'])
-    except Exception as e:
-        return {'ok': False, 'error': f'Не удалось загрузить капчу: {type(e).__name__}'}
-    if captcha.current(state.acc).get('id') != cid:
-        session.close()
-        return {'ok': False, 'error': 'Проверка изменилась. Обновите страницу.'}
     # Сохраняем в coordinator чтобы submit прошёл в той же session
     if coord:
         coord.gui_pending[cid] = dict(
                                   acc_key=captcha.account_key(state.acc),
-                                  captcha_state=state_val, backurl='https://hh.ru/',
-                                  failurl=captcha.browser_url(record), url=captcha.browser_url(record),
+                                  captcha_state=state_val, backurl=backurl,
+                                  failurl=url, url=url,
+                                  created=time.monotonic(), submitted=False,
                                   fails=0, captcha_key=key, session=session,
-                                  challenge_url=record['captcha_url'])
+                                  challenge_url=url)
     return _Resp(content=image, media_type='image/png',
                  headers={'Cache-Control': 'no-store', 'X-Captcha-Id': cid, 'X-Captcha-Key': key})
 
@@ -216,7 +239,7 @@ async def api_account_captcha_solve(idx: int, request: Request):
 async def _captcha_solve_locked(idx: int, request: Request):
     """Submit user's captcha answer from the dashboard. Body: {"text": "..."}"""
     from app import captcha
-    from app.captcha_solver import submit_captcha, fetch_captcha_image
+    from app.captcha_solver import submit_captcha, verify_manual_completion
     state = bot._get_apply_state(idx)
     if state is None:
         return {'ok': False, 'error': 'Аккаунт не найден'}
@@ -227,7 +250,7 @@ async def _captcha_solve_locked(idx: int, request: Request):
     if not isinstance(body, dict) or not isinstance(body.get('text'), str):
         return {'ok': False, 'error': 'Некорректный ответ'}
     text = body['text'].strip()
-    if not text:
+    if not text or len(text) > 256:
         return {'ok': False, 'error': 'Введите текст с картинки'}
     record = captcha.current(state.acc)
     if not record:
@@ -236,63 +259,51 @@ async def _captcha_solve_locked(idx: int, request: Request):
     cid = record['id']
     item = getattr(coord, 'gui_pending', {}).get(cid) if coord else None
     if (not item or item.get('session') is None or not item.get('captcha_key')
-            or body.get('id') != cid or body.get('key') != item['captcha_key']):
+            or body.get('id') != cid or body.get('key') != item['captcha_key']
+            or item.get('submitted') or time.monotonic() - item.get('created', 0) > 600
+            or getattr(state, '_deleted', False)):
         return {'ok': False, 'error': 'Картинка устарела. Обновите её и введите ответ заново.'}
+    item['submitted'] = True  # Consume before I/O: timeout must never replay a POST.
+    def submit_once():
+        try:
+            result = submit_captcha(item['session'], text, item['captcha_key'],
+                item['captcha_state'], item['backurl'], item['failurl'], require_confirmation=True)
+            if not result[0] and result[1].startswith('unconfirmed'):
+                return verify_manual_completion(item['session'], item['challenge_url'], item['backurl'])
+            return result
+        finally:
+            with suppress(Exception):
+                item['session'].close()
     try:
-        ok, reason = await asyncio.to_thread(
-            submit_captcha, item['session'], text, item['captcha_key'],
-            item['captcha_state'], item['backurl'], item.get('failurl') or item['backurl'])
-    except Exception as e:
-        return {'ok': False, 'error': f'submit_captcha: {type(e).__name__}'}
-    if ok:
-        captcha.clear(state.acc, cid)
+        work = asyncio.create_task(asyncio.to_thread(submit_once))
         try:
-            await asyncio.to_thread(bot.resume_challenge_account, captcha.account_key(state.acc))
-        except Exception:
-            pass
-        try:
+            ok, reason = await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # The thread may still be sending: remove its session from the
+            # coordinator so a refresh cannot close/reuse it prematurely.
             coord.gui_pending.pop(cid, None)
-            if cid in coord.pending:
-                coord.pending.pop(cid, None)
-                coord.bot.forget(cid)
-        except Exception:
-            pass
-        try:
-            bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
-                         '✅ Капча пройдена (GUI) — отклики возобновлены', 'success')
-        except Exception:
-            pass
-        # Уведомим в TG что юзер решил через GUI — иначе юзер там видит фото
-        # без обратной связи, а бот уже разбужен.
-        try:
-            if coord and getattr(coord, 'bot', None):
-                await coord.bot.send_message(f'✅ Капча решена (через дашборд), отклики [{state.acc.get("short","")}] возобновлены')
-        except Exception:
-            pass
-        return {'ok': True, 'message': '✅ Капча решена, отклики возобновлены'}
-    if reason.startswith('unconfirmed_'):
-        try:
-            bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
-                         f'⚠ Капча (GUI) — HH не подтвердил ({reason})', 'warning')
-        except Exception:
-            pass
+            work.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+            raise
+    except Exception:
+        ok, reason = False, 'unconfirmed_transport'
+    if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
+        return {'ok': False, 'refresh_needed': True,
+                'error': 'Проверка изменилась. Результат старой проверки не используется.'}
+    if ok:
+        item['confirmed'] = True
+        return {'ok': True, 'confirmed': True, 'requires_confirmation': True, 'id': cid,
+                'message': 'HH подтвердил ответ. Отклики на паузе — подтвердите продолжение отдельно.'}
+    if reason.startswith('unconfirmed'):
         return {'ok': False, 'unconfirmed': True,
+                'refresh_needed': True,
                 'diagnostic': getattr(item['session'], 'hh_captcha_diagnostic', {}),
                 'error': 'HH не дал однозначного подтверждения. Это не означает неверный ответ. Откройте оригинальную проверку HH; пауза сохранена.'}
-    try:
-        bot._add_log(state.acc.get('short', ''), state.acc.get('color', 'yellow'),
-                     f'❌ Капча (GUI) не принята HH: {reason}', 'warning')
-    except Exception:
-        pass
-    try:
-        if coord and getattr(coord, 'bot', None):
-            await coord.bot.send_message(
-                f'❌ Ответ (введён в дашборде) отклонён HH ({reason}). '
-                f'Обновите картинку и попробуйте снова, либо через Telegram.'
-            )
-    except Exception:
-        pass
-    return {'ok': False, 'error': f'Не принято HH: {reason}', 'refresh_needed': True}
+    message = ('HH не принял ответ. Обновите картинку.' if reason == 'isBot' else
+               'HH запросил другой вид проверки. Откройте оригинальную страницу.' if reason == 'recaptcha' else
+               'HH ограничил запросы. Не повторяйте их сейчас.' if reason == 'http_429' else
+               'Ошибка связи с HH. Результат не подтверждён.')
+    return {'ok': False, 'error': message + ' Пауза сохранена.',
+            'refresh_needed': reason != 'http_429'}
 
 
 @router.post('/api/account/{idx}/captcha/refresh')

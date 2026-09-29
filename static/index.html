@@ -1131,9 +1131,9 @@
       <summary class="q-section-title">🤖 Человеческий режим</summary>
       <div style="padding:12px">
         <div id="human-settings" class="settings-grid"></div>
-        <p id="human-preview" aria-live="polite"></p>
-        <p style="font-size:12px;color:var(--dim)">Часы — локальное время сервера, конец окна не включён. Между сериями действует бюджет около 4 откликов/час (~68 за 07–24). В выходные активность ниже на 30%; после капчи задержки удваиваются. Фактический темп зависит от доступных вакансий.</p>
-        <button onclick="applyHumanSettings()">✅ Применить человеческий режим</button>
+        <p id="human-preview" aria-live="polite">Целевой темп: ~2-3 applies/час (~40 в день)</p>
+        <p style="font-size:12px;color:var(--dim)">Общая настройка для всех аккаунтов. Часы — локальное время сервера, конец окна не включён. На аккаунт — одна попытка не чаще чем раз в 24 минуты, с дополнительными паузами между сериями. После капчи — минимум 30 минут без отправок, затем сниженный темп в течение суток. При запросе проверки HH отклики останавливаются до её прохождения; ограничение темпа не гарантирует отсутствие капчи.</p>
+        <button onclick="applyHumanSettings()">✅ Применить ограничения темпа</button>
         <span id="human-settings-status" role="status"></span>
       </div>
     </details>
@@ -1181,7 +1181,7 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=human-card-toggle"></script>
+<script src="/static/js/app.js?v=manual-captcha-ux-2"></script>
 <script src="/static/js/features/hedi.js?v=1"></script>
 <script src="/static/js/features/job_status.js?v=1"></script>
 <script src="/static/js/features/skills.js?v=1"></script>

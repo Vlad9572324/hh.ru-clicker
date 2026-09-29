@@ -1,6 +1,7 @@
 """Watch persisted HH challenges, deliver images to Telegram, and resume after human success."""
 import asyncio
 import logging
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from app import captcha
@@ -36,10 +37,23 @@ class CaptchaCoordinator:
             self._seen.intersection_update(active)
             for cid in list(self.pending):
                 if cid not in active:
-                    self.pending.pop(cid, None)
+                    item = self.pending.pop(cid, None)
+                    self._close_session(item.get('session'))
                     self.bot.forget(cid)
+            # GUI entries are human-owned, independent of Telegram images.
+            # A completed/replaced/expired challenge must not leak its session.
+            gui = getattr(self, 'gui_pending', {})
+            for cid, item in list(gui.items()):
+                if cid not in active or time.monotonic() - item.get('created', 0) > 600:
+                    self._close_session(gui.pop(cid).get('session'))
             for key, record in records.items():
                 cid = record.get('id')
+                if record.get('manual_only'):
+                    item = self.pending.pop(cid, None)
+                    if item:
+                        self._close_session(item.get('session'))
+                    self.bot.forget(cid)
+                    continue
                 acc = self.account(key)
                 if cid in self.pending and acc is not None and not self.pending[cid]['captcha_key']:
                     try:
@@ -154,6 +168,9 @@ class CaptchaCoordinator:
             if item is None:
                 return
             acc = self.account(item['acc_key'])
+            if acc is not None and captcha.current(acc).get('manual_only'):
+                await self.bot.send_message('Проверка переведена в ручной режим. Откройте «Нужна капча» в меню и отвечайте на новую картинку.')
+                return
             if acc is None or captcha.current(acc).get('id') != cid:
                 self.pending.pop(cid, None)
                 self.bot.forget(cid)

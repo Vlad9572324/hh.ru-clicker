@@ -7,11 +7,13 @@ import json
 import time
 import requests
 import aiohttp
+import asyncio
 
 from glom import glom
 
 from app.logging_utils import log_debug, _is_login_page
 from app.config import CONFIG, hh_base
+from app.human_pace import respect_retry_after
 from app.hh_http import HH
 from app.mutation_safety import ensure_mutation_allowed, MutationBlocked, OutcomeUnknown
 # Egress-helpers aiohttp переехали в app/hh_http.py (единая точка egress);
@@ -299,6 +301,10 @@ async def send_response_async(acc: dict, vid: str, letter_max_length: int | None
             ) as r:
                 txt = await r.text()
                 status_code = r.status
+                if status_code == 429:
+                    delay = respect_retry_after(r.headers, default_sec=60)
+                    log_debug(f'HH rate-limit, ждём {delay}с')
+                    await asyncio.sleep(delay)
 
         from app.captcha import capture
         try:
@@ -583,7 +589,9 @@ def _check_vacancy_before_apply(acc: dict, vid: str) -> dict:
         if r.status_code in (401, 403) or _is_login_page(r.text):
             return {"ok": False, "reason": "auth_error", "skip_reason": "auth"}
         if r.status_code == 429:
-            retry_after = _parse_retry_after(r.headers.get("Retry-After", ""))
+            retry_after = respect_retry_after(r.headers, default_sec=60)
+            log_debug(f'HH rate-limit, ждём {retry_after}с')
+            time.sleep(retry_after)
             result = {"ok": False, "reason": "rate_limit", "skip_reason": "retry"}
             if retry_after is not None:
                 result["retry_after_seconds"] = retry_after

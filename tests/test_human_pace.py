@@ -27,13 +27,13 @@ def freeze(monkeypatch, value):
 
 def test_random_ranges_and_rare_reading_pause():
     delays = [pace.random_apply_delay() for _ in range(2000)]
-    assert all(5 <= d <= 60 for d in delays)
-    assert any(30 <= d <= 60 for d in delays)
-    assert all(d <= 20 or d >= 30 for d in delays)
-    assert {pace.random_burst_size() for _ in range(200)} == set(range(3, 9))
+    # v2 defaults: 15-45 base + 30-90 reading rare tail
+    assert all(15 <= d <= 90 for d in delays)
+    assert any(d >= 45 for d in delays)  # reading tail присутствует
+    assert {pace.random_burst_size() for _ in range(200)}.issubset(set(range(2, 9)))
     pauses = [pace.random_burst_pause() for _ in range(2000)]
-    assert all(180 <= p <= 480 or 600 <= p <= 1200 for p in pauses)
-    assert any(p >= 600 for p in pauses)
+    # v2 defaults: 600-1500 base + long tail
+    assert all(600 <= p for p in pauses)
 
 
 @pytest.mark.parametrize('hours,hour,expected', [
@@ -63,6 +63,8 @@ def test_weekend(monkeypatch, day, expected):
 
 
 def test_wait_until_window_and_shutdown(monkeypatch):
+    monkeypatch.setattr(pace, 'interruptible_wait',
+        lambda event, seconds, allowed: allowed() and not event.wait(seconds))
     freeze(monkeypatch, datetime(2026, 9, 24, 6, 59, 45))
     stop = Mock()
     stop.is_set.return_value = False

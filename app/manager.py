@@ -193,6 +193,9 @@ def _protect_fresh_batch(batch: list, vacancy_meta: dict, *, hours: int,
         elif _is_fresh_vacancy(vacancy_meta.get(vid, {}) or {}, hours, now):
             selected.append(vid)
             total_slots -= 1
+            # A fresh response also advances the shared daily counter toward
+            # the reserve boundary for subsequent old vacancies in this batch.
+            old_slots = max(0, old_slots - 1)
         elif old_slots > 0:
             selected.append(vid)
             old_slots -= 1
@@ -355,6 +358,7 @@ class BotManager:
             or state.paused or state._deleted or getattr(state, "hard_stopped", False)
             or getattr(state, "pending_apply", None)
             or getattr(state, "_auth_recovery_pending", False)
+            or human_pace.captcha_cooldown_remaining(state) > 0
             or captcha_active(getattr(state, 'acc', {}))
             or (llm and (not state.llm_enabled or not CONFIG.llm_enabled or not CONFIG.llm_auto_send))
         )
@@ -1861,6 +1865,10 @@ class BotManager:
                 state.paused = False
                 state.paused_reason = None
                 state.consecutive_errors = 0
+                # Legacy/recovered challenges may predate the timestamp hook.
+                if not (getattr(state, '_last_captcha_at', 0) or state.acc.get('_last_captcha_at')):
+                    state._last_captcha_at = time.time()
+                    state.acc['_last_captcha_at'] = state._last_captcha_at
                 event = getattr(state, '_captcha_wake', None)
                 if event is not None:
                     event.set()
@@ -2306,6 +2314,7 @@ class BotManager:
                 "llm_profile_mode": CONFIG.llm_profile_mode,
             },
             "global_stats": {
+                "applied_today": sum(max(s.daily_sent or 0, s.hh_today_applies or 0) for s in all_states),
                 "total_sent": sum(s.sent for s in all_states),
                 "total_tests": sum(s.tests for s in all_states),
                 "total_errors": sum(s.errors for s in all_states),
@@ -2332,40 +2341,165 @@ class BotManager:
                 set_activity(state, "recover_error", "Рабочий цикл завершился ошибкой; ожидает перезапуска",
                     "Попробует начать новый цикл, если нет паузы или остановки",
                     wait_until=datetime.now(timezone.utc) + timedelta(seconds=30))
-                time.sleep(30)
+                if not human_pace.interruptible_wait(
+                        self._stop_event, 30, lambda: not getattr(state, '_deleted', False)):
+                    break
                 state.status = "idle"
                 state.status_detail = "Перезапущен после ошибки"
                 self._add_log(state.short, state.color, "\U0001f504 Worker перезапущен", "info")
 
     def _wait_human_pace(self, state):
-        """Wait once per serialized attempt, after its result is persisted."""
-        if not CONFIG.human_mode_enabled or not self._can_mutate(state):
-            return
-        if not state._human_burst_target:
-            state._human_burst_target = human_pace.random_burst_size()
-            state._human_burst_started = time.monotonic()
-        state._human_burst_count += 1
-        delay = human_pace.random_apply_delay() * human_pace.delay_multiplier(state)
-        set_activity(state, "wait_between_batches", "Пауза между откликами",
-            "Проверит активные часы и ограничения перед следующим откликом",
-            wait_until=datetime.now(timezone.utc) + timedelta(seconds=delay))
-        if self._stop_event.wait(delay):
-            return
-        if state._human_burst_count >= state._human_burst_target:
-            multiplier = human_pace.delay_multiplier(state)
-            budget = state._human_burst_count * 3600 / human_pace.TARGET_APPLIES_PER_HOUR
-            remaining = budget * multiplier - (time.monotonic() - state._human_burst_started)
-            delay = max(human_pace.random_burst_pause() * multiplier, remaining)
-            state._human_burst_count = 0
-            state._human_burst_target = 0
-            set_activity(state, "wait_between_batches", "Пауза после серии откликов",
-                "Начнёт следующую серию в активные часы",
+        """Reserve a durable slot before sending; cancellation never clears it."""
+        while CONFIG.human_mode_enabled:
+            if not self._can_mutate(state):
+                return False
+            human_pace.sleep_until_active_hour(
+                state, self._stop_event, allowed=lambda: self._can_mutate(state))
+            if not self._can_mutate(state):
+                return False
+            if not CONFIG.human_mode_enabled:
+                return False
+            delay = human_pace.reserve_attempt(state.acc, multiplier=human_pace.delay_multiplier(state))
+            if delay <= 0:
+                return True
+            set_activity(state, "wait_between_batches", "Выдерживает сохранённый интервал",
+                "Проверит активные часы и ограничения перед одним откликом",
                 wait_until=datetime.now(timezone.utc) + timedelta(seconds=delay))
-            self._stop_event.wait(delay)
+            # Re-evaluate edited intervals at least once a minute, without
+            # waiting out a stale hours-long deadline.
+            if not human_pace.interruptible_wait(self._stop_event, min(delay, 60),
+                    lambda: CONFIG.human_mode_enabled and self._can_mutate(state)):
+                return False
+        return self._can_mutate(state)
+
+    def _wait_account_start_jitter(self, state):
+        if not CONFIG.human_mode_enabled:
+            return True
+        if not hasattr(state, '_human_start_at'):
+            state._human_start_at = time.monotonic() + human_pace.account_start_jitter()
+        remaining = max(0, state._human_start_at - time.monotonic())
+        if not remaining:
+            return True
+        set_activity(state, 'wait_between_batches', 'Ожидает начала работы аккаунта',
+            'Проверит паузы и ограничения перед началом работы',
+            wait_until=datetime.now(timezone.utc) + timedelta(seconds=remaining))
+        return human_pace.interruptible_wait(self._stop_event, remaining,
+            lambda: not state._deleted)
+
+    def _wait_post_captcha_cooldown(self, state):
+        """Wait in the worker; a resume notification cannot cancel the deadline."""
+        event = state.__dict__.setdefault('_captcha_wake', threading.Event())
+        while not self._stop_event.is_set() and not state._deleted:
+            if self.paused or state.paused:
+                return False
+            remaining = human_pace.captcha_cooldown_remaining(state)
+            if remaining <= 0:
+                return True
+            state.status_detail = f'Пауза после капчи: ещё {(remaining + 59) // 60:.0f} мин'
+            set_activity(state, 'wait_between_batches', state.status_detail,
+                'После паузы проверит ограничения перед возобновлением',
+                wait_until=datetime.now(timezone.utc) + timedelta(seconds=remaining))
+            event.wait(timeout=min(1.0, remaining))
+            event.clear()
+        return False
+
+    def _prepare_human_apply(self, state, acc, vacancy_id):
+        if not CONFIG.human_mode_enabled:
+            return True
+        allowed = lambda: CONFIG.human_mode_enabled and self._can_dispatch_apply(state, vacancy_id)
+        wait = lambda seconds: human_pace.interruptible_wait(self._stop_event, seconds, allowed)
+        if not wait(human_pace.random_apply_delay() * human_pace.delay_multiplier(state)):
+            return False
+        # The helper owns the single 30% draw and the 5–15 second reading wait.
+        human_pace.warm_up_read_vacancy({**acc, '_human_wait': wait}, vacancy_id)
+        return allowed()
+
+    def _human_burst_pause(self, state):
+        idle = human_pace.long_idle_burst()
+        delay = (idle if idle is not None else human_pace.random_burst_pause())
+        delay *= human_pace.delay_multiplier(state)
+        if idle is not None:
+            self._add_log(state.short, state.color, f'human: отвлёкся на {delay / 60:.0f} мин', 'info')
+        return delay
+
+    def _wait_human_burst(self, state):
+        if not CONFIG.human_mode_enabled:
+            return True
+        if not getattr(state, '_human_burst_target', 0):
+            state._human_burst_target = human_pace.random_burst_size()
+        state._human_burst_count = getattr(state, '_human_burst_count', 0) + 1
+        if state._human_burst_count < state._human_burst_target:
+            return True
+        state._human_burst_count = 0
+        state._human_burst_target = human_pace.random_burst_size()
+        delay = self._human_burst_pause(state)
+        set_activity(state, 'wait_between_batches', 'Пауза между сериями откликов',
+            'Проверит сохранённый интервал и ограничения перед следующим откликом',
+            wait_until=datetime.now(timezone.utc) + timedelta(seconds=delay))
+        return human_pace.interruptible_wait(self._stop_event, delay,
+            lambda: CONFIG.human_mode_enabled and self._can_mutate(state))
+
+    def _can_dispatch_apply(self, state, vacancy_id):
+        """Last local check at the write boundary; never sends or clears pauses."""
+        if not self._can_mutate(state) or state.limit_exceeded:
+            return False
+        if CONFIG.human_mode_enabled and not human_pace.is_active_hour():
+            return False
+        # Serial OAuth successes enter daily_sent after the batch. Include them
+        # now so a concurrent tracker update cannot reopen already used slots.
+        used = (max(state.daily_sent or 0, state.hh_today_applies or 0)
+                + getattr(state, '_unaccounted_apply_successes', 0))
+        if not _cap_apply_batch([vacancy_id], used, used):
+            return False
+        if CONFIG.fresh_vacancies_mode:
+            selected, _ = _protect_fresh_batch(
+                [vacancy_id], state.vacancy_meta, hours=CONFIG.fresh_vacancy_hours,
+                ceiling=_effective_daily_ceiling(), reserve=CONFIG.fresh_apply_reserve,
+                used=used)
+            if not selected:
+                return False
+        return (not quarantine_blocked(state.acc, vacancy_id)
+                and (not CONFIG.remote_it_only
+                     or remote_it_rejection(state.vacancy_meta.get(vacancy_id, {})) is None))
+
+    def _recheck_apply_batch(self, state, batch):
+        """Refresh mutable budgets after preflight / a potentially long wait."""
+        self._maybe_roll_daily_counter(state)
+        if not self._can_mutate(state) or state.limit_exceeded:
+            return []
+        batch = _cap_apply_batch(batch, state.daily_sent, state.hh_today_applies)
+        if not batch:
+            with state._state_lock:
+                # Do not replace a newer user or protective pause.
+                if not self._can_mutate(state):
+                    return []
+                state.hard_stopped = True
+                state.paused = True
+                state.paused_reason = 'limit'
+                state.status = 'limit'
+                used = max(state.daily_sent or 0, state.hh_today_applies or 0)
+                state.status_detail = f'Дневной лимит: {used}/{_effective_daily_ceiling()}. Сброс в 00:00 МСК'
+            self._persist_pauses()
+            return []
+        if CONFIG.fresh_vacancies_mode:
+            selected, deferred = _protect_fresh_batch(
+                batch, state.vacancy_meta, hours=CONFIG.fresh_vacancy_hours,
+                ceiling=_effective_daily_ceiling(), reserve=CONFIG.fresh_apply_reserve,
+                used=max(state.daily_sent or 0, state.hh_today_applies or 0))
+            state.fresh_reserved_skipped += deferred
+            for vid in set(batch) - set(selected):
+                cycle_outcome(state, vid, 'skipped', 'fresh_reserve')
+            batch = selected
+            if not batch:
+                set_activity(state, 'fresh_reserve', 'Оставшиеся отклики зарезервированы для свежих вакансий',
+                    'Повторит поиск новых вакансий; лимит и свежесть проверены после ожидания')
+        return batch
 
     def _run_account_worker_inner(self, idx: int, state: AccountState) -> None:
         acc = state.acc
         self._bind_mutation_guard(state)
+        if not self._wait_account_start_jitter(state):
+            return
         if not state._active_search_forced and self._can_mutate(state):
             try:
                 set_activity(state, "resume_check", "Устанавливает статус поиска работы в HH",
@@ -2436,6 +2570,9 @@ class BotManager:
 
             if self._stop_event.is_set():
                 break
+
+            if not self._wait_post_captcha_cooldown(state):
+                continue
 
             now = datetime.now()
 
@@ -3023,7 +3160,8 @@ class BotManager:
 
             while i < len(filtered):
                 if CONFIG.human_mode_enabled:
-                    human_pace.sleep_until_active_hour(state, self._stop_event)
+                    human_pace.sleep_until_active_hour(
+                        state, self._stop_event, allowed=lambda: self._can_mutate(state))
                 # Serialize web submissions as well as OAuth in human mode.
                 batch_size = 1 if CONFIG.human_mode_enabled else CONFIG.batch_responses
                 if (self._stop_event.is_set() or self.paused or state.paused
@@ -3034,7 +3172,13 @@ class BotManager:
                 batch = _cap_apply_batch(filtered[i: i + batch_size],
                                          state.daily_sent, state.hh_today_applies)
                 if not batch:
+                    self._recheck_apply_batch(state, filtered[i: i + batch_size])
                     break
+                if CONFIG.human_mode_enabled and human_pace.random_skip_vacancy():
+                    self._add_log(state.short, state.color, 'human: пропуск случайной вакансии', 'info')
+                    cycle_outcome(state, batch[0], 'skipped', 'human_skip')
+                    i += batch_size
+                    continue
                 state.current_vacancy_idx = i + 1
                 state.status_detail = (
                     f"{i + 1}-{min(i + batch_size, len(filtered))}/{state.total_vacancies}"
@@ -3119,8 +3263,7 @@ class BotManager:
                 # A private account copy pins one resume for the entire attempt.
                 attempt_accounts = {vid: dict(acc) for vid in batch}
                 for scope_vid, attempt_acc in attempt_accounts.items():
-                    attempt_acc['_mutation_guard'] = lambda vid=scope_vid: self._can_mutate(state) and not quarantine_blocked(state.acc, vid) and (
-                        not CONFIG.remote_it_only or remote_it_rejection(state.vacancy_meta.get(vid, {})) is None)
+                    attempt_acc['_mutation_guard'] = lambda vid=scope_vid: self._can_dispatch_apply(state, vid)
                 # Pre-check: skip inconsistent vacancies if enabled
                 if state.safety_enabled:
                     set_activity(state, "preflight", "Проверяет вакансии и выбранное резюме перед отправкой",
@@ -3191,8 +3334,22 @@ class BotManager:
                 # Также форс-OAuth в degraded mode (cookies dead, токен живой).
                 if self.paused or self._stop_event.is_set() or state.paused or state._deleted:
                     break
+                if CONFIG.human_mode_enabled:
+                    batch = batch[:1]
+                    batch_size = 1
+                    if not self._wait_human_pace(state):
+                        break
+                    if not self._prepare_human_apply(state, attempt_accounts[batch[0]], batch[0]):
+                        break
+                batch = self._recheck_apply_batch(state, batch)
+                if not batch:
+                    i += batch_size
+                    if state.paused or state.limit_exceeded or not self._can_mutate(state):
+                        break
+                    continue
                 if state.use_oauth or CONFIG.use_oauth_apply or state.degraded_mode:
                     # OAuth: synchronous, one by one (API doesn't support batch)
+                    state._unaccounted_apply_successes = 0
                     results = []
                     for vid in batch:
                         if self.paused or self._stop_event.is_set() or state.paused or getattr(state, "_deleted", False):
@@ -3204,6 +3361,8 @@ class BotManager:
                                 progress=(min(i + batch.index(vid), len(filtered)), len(filtered)), operation=(i, vid))
                             result = _oauth_apply(attempt_accounts[vid], vid, acc.get("letter", ""))
                             results.append(result)
+                            if isinstance(result, tuple) and result[0] == 'sent':
+                                state._unaccounted_apply_successes += 1
                             if isinstance(result, tuple) and result[0] == 'challenge':
                                 self._hold_captcha(state)
                                 break
@@ -3241,6 +3400,9 @@ class BotManager:
                         return send_batch
                     results = asyncio.run(_make_send_batch(batch)())
 
+                # Confirmed responses enter daily_sent below, before any
+                # questionnaire continuations. Do not count them twice.
+                state._unaccounted_apply_successes = 0
                 # Persist confirmed successes first, even if stop/limit arrives
                 # while requests are in flight. Error handling below may break.
                 completed = _completed_apply_results(batch, results)
@@ -3621,9 +3783,9 @@ class BotManager:
                 if state.cookies_expired:
                     break
 
-                if CONFIG.human_mode_enabled and results:
-                    self._wait_human_pace(state)
                 i += batch_size
+                if i < len(filtered) and not self._wait_human_burst(state):
+                    break
                 if i < len(filtered) and not CONFIG.human_mode_enabled:
                     set_activity(state, "wait_between_batches", "Выдерживает интервал между пакетами откликов",
                         "Проверит ограничения перед обработкой следующего пакета",
@@ -3648,7 +3810,7 @@ class BotManager:
             if not state.limit_exceeded and not state.paused:
                 state.status = "waiting"
                 state.status_detail = "Цикл завершён"
-                cycle_pause = (human_pace.random_burst_pause() * human_pace.delay_multiplier(state)
+                cycle_pause = (self._human_burst_pause(state)
                                if CONFIG.human_mode_enabled else CONFIG.pause_between_cycles)
                 self._add_log(
                     state.short, state.color,
@@ -3660,8 +3822,8 @@ class BotManager:
                     "Ожидает свежие вакансии: действует резерв откликов" if reserve_wait else "Цикл обработки завершён; ожидает следующего поиска",
                     "Снова загрузит вакансии и проверит новые предложения",
                     wait_until=datetime.now(timezone.utc) + timedelta(seconds=cycle_pause))
-                if self._stop_event.wait(cycle_pause):
-                    return
+                human_pace.interruptible_wait(self._stop_event, cycle_pause,
+                    lambda: self._can_mutate(state))
 
     def _hh_limit_tracker_worker(self):
         """Каждые 30 мин дёргает GET /negotiations через OAuth, считает реальное

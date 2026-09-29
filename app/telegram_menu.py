@@ -21,6 +21,7 @@ ALERT_CATEGORIES = {
     'daily_limit': 'Дневной лимит',
 }
 BOT_COMMANDS = [
+    {'command': 'captcha', 'description': 'Пропустили капчу? Открыть ручную проверку HH'},
     {'command': 'start', 'description': 'Подписаться и открыть меню'},
     {'command': 'stop', 'description': 'Отписаться'},
     {'command': 'status', 'description': 'Показать статус бота'},
@@ -34,6 +35,11 @@ def build_main_menu(bot_manager):
     buttons = [dict(button) for button in MENU_MAIN]
     buttons[1]['text'] = '▶ Продолжить' if bot_manager.paused else '⏸ Пауза'
     buttons[3]['text'] += ': ' + ('✅' if CONFIG.human_mode_enabled else '❌')
+    states = list(getattr(bot_manager, 'account_states', [])) + list(getattr(bot_manager, 'temp_states', {}).values())
+    count = sum(1 for state in states if not getattr(state, '_deleted', False)
+                and getattr(state, 'paused_reason', '') == 'challenge')
+    buttons.append({'text': f'🔴 Нужна капча · {count} — открыть' if count else '🔐 Проверки HH',
+                    'callback_data': 'captcha'})
     base = os.environ.get('HH_BOT_DASHBOARD_URL', 'http://localhost:8000').strip().rstrip('/')
     url = base + '/?' + urlencode({'key': os.environ.get('HH_BOT_API_KEY', '').strip()})
     buttons.append({'text': '🔐 Открыть дашборд', 'url': url})
@@ -54,6 +60,8 @@ async def live_status(bot_manager):
 
 
 async def handle_callback(bot_manager, data, chat_id, message_id):
+    if data == 'captcha':
+        return 'Открываю текущие проверки HH', build_main_menu(bot_manager)
     if data in ('status', 'today'):
         snapshot = await asyncio.to_thread(build_status_snapshot, bot_manager)
         accounts = snapshot['accounts']
@@ -62,7 +70,7 @@ async def handle_callback(bot_manager, data, chat_id, message_id):
                    f"Темп: {sum(a['hourly_rate'] for a in accounts):.0f}/час")
         if data == 'status':
             summary = ('⏸ Пауза' if bot_manager.paused else '▶ Работает') + '\n' + summary
-        return summary[:200], None
+        return summary[:200], build_main_menu(bot_manager)
     if data == 'pause_toggle':
         bot_manager.toggle_pause()
         return ('⏸ Пауза' if bot_manager.paused else '▶ Работает'), build_main_menu(bot_manager)

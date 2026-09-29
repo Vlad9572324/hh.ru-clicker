@@ -1771,18 +1771,27 @@ function _renderEmpRatingSlots(vid, data) {
   });
 }
 
+function captchaControlsBusy(idx, busy) {
+  const panel = document.getElementById('acc-captcha-' + idx);
+  if (!panel) return;
+  panel.setAttribute('aria-busy', String(busy));
+  panel.querySelectorAll('input, button').forEach(el => { el.disabled = busy; });
+}
+
 async function loadCaptchaImg(idx) {
   const img = document.getElementById('acc-captcha-img-' + idx);
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!img) return;
   if (img.dataset.busy === '1') return;
   img.dataset.busy = '1';
+  captchaControlsBusy(idx, true);
   const answer = document.getElementById('acc-captcha-input-' + idx);
   if (answer) answer.value = '';
   img.dataset.challengeId = '';
   img.dataset.challengeKey = '';
   img.style.display = 'none';
-  if (box) box.textContent = 'Загружаю картинку…';
+  if (box) { box.textContent = 'Загружаю картинку…'; box.style.color = ''; }
+  let loaded = false;
   try {
     // cache-buster чтобы браузер каждый раз тянул свежую
     const url = `/api/account/${idx}/captcha/image?_=${Date.now()}`;
@@ -1801,44 +1810,62 @@ async function loadCaptchaImg(idx) {
     img.src = URL.createObjectURL(blob);
     img.style.display = 'block';
     if (box) box.textContent = '';
-    document.getElementById('acc-captcha-input-' + idx)?.focus();
+    loaded = true;
   } catch (e) {
     if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
   } finally {
     img.dataset.busy = '';
+    captchaControlsBusy(idx, false);
+    if (loaded) answer?.focus();
   }
 }
 
 async function solveCaptcha(idx) {
   const input = document.getElementById('acc-captcha-input-' + idx);
   const box = document.getElementById('acc-captcha-result-' + idx);
-  if (!input || !input.value.trim()) return;
+  if (!input) return;
+  if (!input.value.trim()) {
+    if (box) box.textContent = 'Введите текст с картинки и нажмите «Отправить».';
+    input.focus(); return;
+  }
   const img = document.getElementById('acc-captcha-img-' + idx);
-  if (!img || img.dataset.busy === '1' || !img.dataset.challengeKey) return;
+  if (!img || img.dataset.busy === '1') return;
+  if (!img.dataset.challengeKey) {
+    if (box) box.textContent = 'Эта картинка уже отправлена или устарела. Дождитесь результата либо нажмите «Другая» для новой попытки.';
+    return;
+  }
   img.dataset.busy = '1';
+  captchaControlsBusy(idx, true);
   const text = input.value.trim();
+  const id = img.dataset.challengeId;
+  const key = img.dataset.challengeKey;
+  // Consume before dispatch: a timeout or invalid response must not replay the
+  // same answer, even if Enter is pressed again after the request ends.
+  img.dataset.challengeKey = '';
   if (box) { box.textContent = '⏳ Отправляю…'; box.style.color = ''; }
   try {
     const r = await fetch(`/api/account/${idx}/captcha/solve`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text, id: document.getElementById('acc-captcha-img-' + idx)?.dataset.challengeId,
-                            key: document.getElementById('acc-captcha-img-' + idx)?.dataset.challengeKey})
+      body: JSON.stringify({text, id, key})
     });
     const d = await r.json();
     if (r.ok && d.ok) {
       if (box) {
-        box.textContent = d.message || '✅ Капча решена, отклики возобновлены';
+        box.textContent = d.message || '✅ HH подтвердил ответ. Проверьте состояние аккаунта перед продолжением.';
         box.style.color = 'var(--green)';
+        if (d.requires_confirmation) {
+          const button = document.createElement('button');
+          button.className = 'btn-sm';
+          button.textContent = 'Подтвердить продолжение откликов';
+          button.style.cssText = 'display:block;margin-top:8px';
+          button.onclick = () => continueAccountCaptcha(idx, id, button, box);
+          box.appendChild(button);
+        }
       }
       input.value = '';
       img.dataset.challengeKey = '';
-      // Auto-hide panel: server уже сделал clear+resume, snapshot скоро придёт
-      // с paused_reason≠challenge и syncAccountCard спрячет её сам, но
-      // страхуемся таймаутом.
-      setTimeout(() => {
-        const panel = document.getElementById('acc-captcha-' + idx);
-        if (panel) panel.hidden = true;
-      }, 2000);
+      // Only a server snapshot can hide this panel. A delayed local timer can
+      // otherwise hide a new challenge or erase explicit resume confirmation.
     } else {
       if (d.unconfirmed) {
         if (box) {
@@ -1865,16 +1892,50 @@ async function solveCaptcha(idx) {
       }
     }
   } catch (e) {
-    if (box) { box.textContent = '❌ ' + (e.message || e); box.style.color = 'var(--red)'; }
+    if (box) {
+      box.textContent = '⚠ Не удалось получить результат отправки. Это не означает неверный ответ. Повтор не выполняется; отклики остаются на паузе. Откройте проверку HH или загрузите новую картинку.';
+      box.style.color = 'var(--yellow)';
+    }
   } finally {
     img.dataset.busy = '';
+    captchaControlsBusy(idx, false);
+  }
+}
+
+async function continueAccountCaptcha(idx, id, button, box) {
+  if (button.disabled) return;
+  const img = document.getElementById('acc-captcha-img-' + idx);
+  if (img?.dataset.busy === '1') return;
+  if (!confirm('Подтверждаете, что вручную прошли проверку в HH именно для этого аккаунта? Это разрешит новые отправки.')) return;
+  if (img) img.dataset.busy = '1';
+  captchaControlsBusy(idx, true);
+  button.disabled = true;
+  try {
+    const r = await fetch(`/api/account/${idx}/captcha/continue`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, confirmed:true})});
+    const result = await r.json();
+    if (!r.ok || !result.ok) throw new Error(result.error || 'Не удалось продолжить');
+    box.textContent = result.message || 'Продолжение разрешено. Дождитесь обновления состояния аккаунта.';
+  } catch(e) {
+    button.disabled = false;
+    let error = box.querySelector('[data-captcha-error]');
+    if (!error) { error = document.createElement('div'); error.dataset.captchaError = '1'; box.appendChild(error); }
+    error.textContent = e instanceof SyntaxError ? 'Сервер не подтвердил продолжение. Проверьте состояние аккаунта.' : (e.message || 'Не удалось продолжить');
+    error.style.color = 'var(--yellow)';
+  } finally {
+    if (img) img.dataset.busy = '';
+    captchaControlsBusy(idx, false);
   }
 }
 
 async function loadAccountCaptcha(idx) {
   const box = document.getElementById('acc-captcha-result-' + idx);
   if (!box) return;
+  const img = document.getElementById('acc-captcha-img-' + idx);
+  if (img?.dataset.busy === '1') return;
+  if (img) img.dataset.busy = '1';
+  captchaControlsBusy(idx, true);
   box.textContent = 'Загружаю ссылку…';
+  box.style.color = '';
   try {
     const response = await fetch(`/api/account/${idx}/captcha`);
     const data = await response.json();
@@ -1908,18 +1969,14 @@ async function loadAccountCaptcha(idx) {
     box.appendChild(link);
     const button = document.createElement('button');
     button.className = 'btn-sm'; button.textContent = 'Я прошёл проверку — продолжить';
-    button.onclick = async () => {
-      if (!confirm('Подтверждаете, что вручную прошли проверку в HH именно для этого аккаунта? Это разрешит новые отправки.')) return;
-      button.disabled = true;
-      try {
-        const r = await fetch(`/api/account/${idx}/captcha/continue`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:data.id, confirmed:true})});
-        const result = await r.json();
-        if (!r.ok || !result.ok) throw new Error(result.error || 'Не удалось продолжить');
-        box.textContent = result.message;
-      } catch(e) { alert(e.message); button.disabled = false; }
-    };
+    button.onclick = () => continueAccountCaptcha(idx, data.id, button, box);
     box.appendChild(button);
-  } catch(e) { box.textContent = e.message || 'Не удалось загрузить проверку'; }
+  } catch(e) {
+    box.textContent = e instanceof SyntaxError ? 'Сервер не вернул данные проверки. Попробуйте загрузить ссылку ещё раз; пауза сохранена.' : (e.message || 'Не удалось загрузить проверку');
+  } finally {
+    if (img) img.dataset.busy = '';
+    captchaControlsBusy(idx, false);
+  }
 }
 
 async function llmInterviewsLoad() {
@@ -3967,9 +4024,9 @@ function buildCardHTML(acc) {
     <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
       <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — введите капчу HH</div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
-        <img id="acc-captcha-img-${acc.idx}" alt="captcha" style="max-width:280px;border:1px solid var(--dim);border-radius:4px;background:#fff;display:none;cursor:pointer" onclick="loadCaptchaImg(${acc.idx})" title="Клик — обновить">
+        <img id="acc-captcha-img-${acc.idx}" alt="Проверка HH: введите символы с картинки" style="max-width:min(280px,100%);border:1px solid var(--dim);border-radius:4px;background:#fff;display:none">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          <input id="acc-captcha-input-${acc.idx}" type="text" placeholder="Текст с картинки" style="padding:4px 8px;font-size:13px" onkeydown="if(event.key==='Enter'){solveCaptcha(${acc.idx})}">
+          <input id="acc-captcha-input-${acc.idx}" type="text" aria-label="Текст с картинки HH" placeholder="Текст с картинки" autocomplete="off" autocapitalize="off" spellcheck="false" style="padding:4px 8px;font-size:16px;max-width:100%;box-sizing:border-box" onkeydown="if(event.key==='Enter'){solveCaptcha(${acc.idx})}">
           <button class="btn-sm" onclick="solveCaptcha(${acc.idx})">✓ Отправить</button>
           <button class="btn-sm" onclick="loadCaptchaImg(${acc.idx})">🔄 Другая</button>
           <button class="btn-sm" onclick="loadAccountCaptcha(${acc.idx})">Открыть проверку на HH / продолжить</button>
@@ -4004,10 +4061,10 @@ function buildCardHTML(acc) {
         onchange="degradedFallbackToggle(${acc.idx}, this)">
       🔑 OAuth-fallback при протухших cookies
     </label>
-    <label class="acc-skip-tests" id="acc-humanmode-label-${acc.idx}" title="Человекоподобный режим: рандомные задержки 5-20с, burst 3-8 → пауза 3-8 мин, часы 07-24. Минимизирует капчу.">
+    <label class="acc-skip-tests" id="acc-humanmode-label-${acc.idx}" title="Ограничение темпа: последовательные отклики, интервалы и активные часы. Не гарантирует отсутствие капчи. При проверке HH отправки останавливаются.">
       <input type="checkbox" id="acc-humanmode-cb-${acc.idx}"
         onchange="humanModeToggle(this)">
-      🤖 Человеческий режим (снижает капчу)
+      ⏱ Ограничение темпа · все аккаунты
     </label>
     <div class="acc-actions">
       <button class="btn-sm" id="acc-pause-btn-${acc.idx}"
@@ -5128,6 +5185,7 @@ function updateCard(card, acc) {
       pauseBtn.title = 'Обычное продолжение заблокировано: сначала проверьте неизвестный исход отклика в HH.';
     } else if (acc.paused && acc.paused_reason === 'challenge') {
       pauseBtn.textContent = acc.telegram_captcha_pending ? '📱 Ждёт TG-ответа' : 'Нужно пройти проверку HH';
+      pauseBtn.classList.add('paused');
       pauseBtn.disabled = true;
       pauseBtn.title = 'Используйте панель ручного прохождения проверки.';
     } else if (acc.paused && acc.paused_reason === 'auth') {
@@ -5907,20 +5965,16 @@ document.getElementById('tabs').addEventListener('click', e => {
 const HUMAN_SETTINGS = [
   ['human_mode_enabled', 'Включён', 'checkbox', true],
   ['human_active_hours', 'Активные часы (HH-HH)', 'text', '07-24'],
-  ['human_apply_delay_min', 'Задержка min (сек)', 'number', 5],
-  ['human_apply_delay_max', 'Задержка max (сек)', 'number', 20],
-  ['human_burst_size_min', 'Размер серии min', 'number', 3],
-  ['human_burst_size_max', 'Размер серии max', 'number', 8],
-  ['human_burst_pause_min_sec', 'Пауза серии min (мин)', 'number', 3, 60],
-  ['human_burst_pause_max_sec', 'Пауза серии max (мин)', 'number', 8, 60],
-  ['human_captcha_backoff_hours', 'Замедление после капчи (час)', 'number', 2],
+  ['human_apply_delay_min', 'Задержка min (сек)', 'number', 15],
+  ['human_apply_delay_max', 'Задержка max (сек)', 'number', 45],
 ];
 const humanDrafts = new Map();
 const humanPending = new Map();
+let humanSubmissionComplete = false;
 
 function humanValue(key, type, scale = 1) {
   const el = document.getElementById('hp-' + key);
-  return type === 'checkbox' ? el.checked : type === 'number' ? Number(el.value) * scale : el.value.trim();
+  return type === 'checkbox' ? el.checked : type === 'number' ? (el.value.trim() ? Number(el.value) * scale : NaN) : el.value.trim();
 }
 
 function syncHumanSettings(snap) {
@@ -5944,6 +5998,7 @@ function syncHumanSettings(snap) {
       container.appendChild(row);
     });
   }
+  const awaitingConfirmation = humanPending.size > 0;
   HUMAN_SETTINGS.forEach(([key, , type, , scale = 1]) => {
     const value = snap.config[key];
     if (value === undefined) return;
@@ -5955,6 +6010,9 @@ function syncHumanSettings(snap) {
     if (document.activeElement === el) return;
     if (type === 'checkbox') el.checked = value; else el.value = type === 'number' ? value / scale : value;
   });
+  if (awaitingConfirmation && humanSubmissionComplete && humanPending.size === 0) {
+    document.getElementById('human-settings-status').textContent = '✓ Настройки сохранены сервером';
+  }
   humanPreview();
 }
 
@@ -5967,32 +6025,46 @@ function humanPreview() {
   const config = State.lastSnapshot?.config || {};
   const hour = config.human_local_hour;
   const active = valid && hour !== undefined && (start < end ? hour >= start && hour < end : hour >= start || hour < end);
-  const val = key => Number(document.getElementById('hp-' + key).value);
-  const size = Math.max(1, (val('human_burst_size_min') + val('human_burst_size_max')) / 2);
-  const delay = 0.9 * (val('human_apply_delay_min') + (val('human_apply_delay_max') - val('human_apply_delay_min')) * 2 / 7) + 0.1 * 45;
-  const pause = 0.9 * (val('human_burst_pause_min_sec') + val('human_burst_pause_max_sec')) * 30 + 0.1 * 900;
-  const rate = Math.min(config.human_target_applies_per_hour || 4, 3600 / (delay + pause / size)) * (config.human_weekend_variance || 1);
+  const minimum = humanValue('human_apply_delay_min', 'number');
+  const maximum = humanValue('human_apply_delay_max', 'number');
+  const delaysValid = Number.isInteger(minimum) && Number.isInteger(maximum) && minimum >= 0 && minimum <= maximum;
+  const target = Number(config.human_target_applies_per_hour) || 2.5;
+  const interval = Math.max(3600 / target, minimum, maximum);
+  const appliedToday = Math.max(0, Number(State.lastSnapshot?.global_stats?.applied_today) || 0);
+  const solved = Math.max(0, Number(config.captcha_llm_solved) || 0);
+  const captchaAverage = appliedToday > 0 ? (100 * solved / appliedToday).toFixed(1) + '%' : 'нет данных';
   const enabled = document.getElementById('hp-human_mode_enabled').checked;
   document.getElementById('human-preview').textContent = !valid ? 'Некорректные часы: используйте HH-HH (например 07-24 или 22-06).' :
-    `Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (сервер: ${hour ?? '—'} ч); предполагаемый темп: ${enabled ? rate.toFixed(1) + ' applies/hour в активное окно, без captcha-backoff' : 'режим выключен'}`;
+    !delaysValid ? 'Укажите обе задержки: неотрицательные целые числа, минимум не больше максимума.' :
+    `Целевой темп: ~2-3 applies/час (~40 в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (сервер: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Решено капч LLM (за запуск) / отклики сегодня: ${solved} / ${appliedToday}; отношение: ${captchaAverage}.`;
 }
 
 function applyHumanSettings() {
   const values = Object.fromEntries(HUMAN_SETTINGS.map(([key, , type, , scale = 1]) => [key, humanValue(key, type, scale)]));
   const status = document.getElementById('human-settings-status');
+  if (!State.ws || State.ws.readyState !== 1) {
+    status.textContent = 'Нет связи с панелью. Настройки не отправлены; черновик сохранён в полях.';
+    return;
+  }
   const match = /^(\d{2})-(\d{2})$/.exec(values.human_active_hours);
   if (!match || +match[1] > 23 || +match[2] > 24 || +match[1] === +match[2]) { status.textContent = 'Проверьте активные часы'; return; }
   for (const [key, , type] of HUMAN_SETTINGS) {
-    if (type === 'number' && (!Number.isInteger(values[key]) || values[key] < (key.includes('size') ? 1 : 0))) { status.textContent = 'Введите неотрицательные целые значения (размер серии от 1)'; return; }
+    if (type === 'number' && (!Number.isInteger(values[key]) || values[key] < 0)) { status.textContent = 'Введите неотрицательные целые значения задержки'; return; }
   }
-  for (const [low, high] of [['human_apply_delay_min', 'human_apply_delay_max'], ['human_burst_size_min', 'human_burst_size_max'], ['human_burst_pause_min_sec', 'human_burst_pause_max_sec']]) {
+  for (const [low, high] of [['human_apply_delay_min', 'human_apply_delay_max']]) {
     if (values[low] > values[high]) { status.textContent = 'Минимум не должен превышать максимум'; return; }
   }
+  humanSubmissionComplete = false;
   for (const [key, value] of Object.entries(values)) {
-    humanDrafts.set(key, value); humanPending.set(key, value);
-    sendCmd({type: 'set_config', key, value});
+    humanDrafts.set(key, value);
+    if (!sendCmd({type: 'set_config', key, value})) {
+      status.textContent = 'Связь прервалась: не все настройки отправлены. Черновик сохранён; проверьте значения после подключения.';
+      return;
+    }
+    humanPending.set(key, value);
   }
-  status.textContent = 'Настройки отправлены';
+  humanSubmissionComplete = true;
+  status.textContent = 'Настройки отправлены — ожидаю подтверждения сервера';
 }
 
 function syncSettingsSliders(snap) {

@@ -39,6 +39,16 @@ class TelegramCaptchaBot:
             await self._session.close()
             self._session = None
         self.connected = False
+        flow = getattr(self, '_manual_flow', None)
+        if flow:
+            flow.close()
+
+    def manual_flow(self):
+        if not hasattr(self, '_manual_flow'):
+            from app.telegram_manual_captcha import ManualCaptchaFlow
+            from app.instances import bot as manager
+            self._manual_flow = ManualCaptchaFlow(manager, self)
+        return self._manual_flow
 
     async def _call(self, method, fields, image=None):
         # Требуется только token; chat_id (для admin-специфичных вызовов)
@@ -65,9 +75,10 @@ class TelegramCaptchaBot:
                         continue
                 if not body.get('ok'):
                     self.connected = False
-                    # Полный лог ответа TG чтобы понять причину (Bad Request / message can't be edited / etc)
-                    logger.warning('Telegram API %s failed: %s', method, body)
-                    raise RuntimeError(f'Telegram API {method} failed: {body.get("description", body)}')
+                    # Never log Telegram payloads: they can contain private data.
+                    logger.warning('Telegram API %s failed (HTTP %s, code %s)',
+                                   method, response.status, body.get('error_code'))
+                    raise RuntimeError(f'Telegram API {method} failed (HTTP {response.status})')
                 self.connected = True
                 return body.get('result')
         raise RuntimeError('Telegram flood limit')
@@ -85,7 +96,7 @@ class TelegramCaptchaBot:
 
     async def push_challenge(self, challenge_id, acc_short, image_bytes):
         """Рассылка капчи ВСЕМ подписчикам. Хранит message_id per (chat, cid)."""
-        caption = f'🔐 Капча для {acc_short}. Ответьте текстом с картинки'
+        caption = f'🔐 Капча для {acc_short}. Нажмите «Ответить» на это сообщение и введите текст с картинки. Если пропустили или ответ не принимается — /captcha для ручной проверки на HH.'
         # pending структура: {message_id: (chat_id, challenge_id)}
         if not hasattr(self, 'pending_chats'):
             self.pending_chats = {}  # {(chat_id, cid): message_id}
@@ -104,7 +115,7 @@ class TelegramCaptchaBot:
                         first_result = first_result or r
                         continue
                 except Exception as exc:
-                    logger.info('editMessageMedia(%s) failed (%s) → fallback sendPhoto', chat_id, exc)
+                    logger.info('Telegram media update failed (%s); fallback to new photo', type(exc).__name__)
                     self.pending_chats.pop((str(chat_id), challenge_id), None)
             fields = {'chat_id': chat_id, 'caption': caption,
                       'reply_markup': json.dumps({'force_reply': True})}
@@ -115,7 +126,7 @@ class TelegramCaptchaBot:
                     self.pending[r['message_id']] = challenge_id
                     first_result = first_result or r
             except Exception as exc:
-                logger.warning('sendPhoto to %s failed: %s', chat_id, exc)
+                logger.warning('Telegram photo delivery failed (%s)', type(exc).__name__)
         return first_result
 
     def forget(self, challenge_id):
@@ -131,7 +142,7 @@ class TelegramCaptchaBot:
                 r = await self._call('sendMessage', {'chat_id': chat_id, 'text': text})
                 first = first or r
             except Exception as exc:
-                logger.info('sendMessage to %s failed: %s', chat_id, exc)
+                logger.info('Telegram message delivery failed (%s)', type(exc).__name__)
         return first
 
     async def _set_commands(self, commands):
@@ -153,8 +164,23 @@ class TelegramCaptchaBot:
         data = callback_query.get('data', '')
         popup, keyboard = 'Не подписаны', None
         authorized = False
+        acknowledged = False
         try:
             authorized = chat_id is not None and is_known(str(chat_id))
+            if authorized and data.startswith(('mc_open:', 'mc_resume:')):
+                acknowledged = True
+                try:
+                    await self._call('answerCallbackQuery', {'callback_query_id': callback_query['id'],
+                        'text': 'Обрабатываю проверку', 'show_alert': 'false'})
+                except Exception:
+                    # Expired popup does not invalidate an authorized action.
+                    logger.warning('TG manual callback acknowledgement failed')
+                flow = self.manual_flow()
+                if data.startswith('mc_open:'):
+                    await flow.open(chat_id, data.split(':', 1)[1])
+                else:
+                    await flow.resume(chat_id, data.split(':', 1)[1])
+                return
             if authorized and message_id is not None:
                 popup, keyboard = await asyncio.wait_for(
                     telegram_menu.handle_callback(_bot_manager, data, chat_id, message_id),
@@ -162,14 +188,29 @@ class TelegramCaptchaBot:
         except Exception:
             popup = 'Не удалось выполнить команду. Попробуйте ещё раз.'
             logger.warning('TG menu callback failed')
+            if acknowledged and authorized:
+                with contextlib.suppress(Exception):
+                    await self._call('sendMessage', {'chat_id': str(chat_id), 'text':
+                        'Не удалось завершить действие. Откройте /captcha и проверьте состояние. '
+                        'Повторной отправки ответа в HH не выполнялось.'})
         finally:
-            await self._call('answerCallbackQuery', {
-                'callback_query_id': callback_query['id'],
-                'text': popup[:200], 'show_alert': 'false'})
+            try:
+                if not acknowledged:
+                    await self._call('answerCallbackQuery', {
+                        'callback_query_id': callback_query['id'],
+                        'text': popup[:200], 'show_alert': 'false'})
+            except Exception:
+                logger.warning('TG callback acknowledgement failed; continuing authorized action')
         if keyboard is not None:
-            await self._call('editMessageReplyMarkup', {
-                'chat_id': chat_id, 'message_id': message_id,
-                'reply_markup': json.dumps(keyboard, ensure_ascii=False)})
+            try:
+                await self._call('editMessageReplyMarkup', {
+                    'chat_id': chat_id, 'message_id': message_id,
+                    'reply_markup': json.dumps(keyboard, ensure_ascii=False)})
+            except Exception:
+                # Unchanged/deleted menu must not suppress the requested action.
+                logger.warning('TG menu refresh failed; continuing authorized action')
+        if authorized and data == 'captcha':
+            await self.on_message('/captcha', chat_id, None)
         if authorized and data == 'status':
             await self._call('sendMessage', {
                 'chat_id': chat_id, 'text': await telegram_menu.live_status(_bot_manager),
@@ -183,12 +224,15 @@ class TelegramCaptchaBot:
         text = text.strip()
         cid_s = str(chat_id)
         command = text.split()[0].split('@', 1)[0].lower()
-        # Commands /start /stop доступны кому угодно (bot API уже filter'ит по botToken)
+        # Shared access is intentional: /start grants the same controls and
+        # dashboard access to every subscriber, as requested by the owner.
         if command == '/start':
             from app.telegram_subscribers import add as _sub_add
             added = _sub_add(cid_s)
-            reply = ('✅ Подписка активна! Вы будете получать уведомления и капчи.'
-                     if added else 'ℹ️ Вы уже подписаны.')
+            reply = ('✅ Общий доступ подключён.' if added else 'ℹ️ Общий доступ уже подключён.')
+            reply += (' Все участники видят общие аккаунты и управляют одним ботом. '
+                      'Пауза, продолжение и изменения настроек действуют для всех. '
+                      'Уведомления включены; /stop — отписаться.')
             try:
                 await self._call('sendMessage', {'chat_id': cid_s, 'text': reply})
             except Exception:
@@ -214,6 +258,9 @@ class TelegramCaptchaBot:
         except Exception:
             if cid_s != self.chat_id:
                 return
+        if command == '/captcha':
+            await self.manual_flow().menu(cid_s)
+            return
         if command in ('/menu', '/status', '/pause', '/resume'):
             from app import telegram_menu
             from app.instances import bot as _bot_manager
@@ -232,9 +279,19 @@ class TelegramCaptchaBot:
             return
         # Reply to captcha challenge — только явный reply_to (без single-pending
         # fallback, чтобы обычные сообщения между challenges не резолвили captcha).
-        challenge_id = self.pending.get(reply_to_message_id)
+        if getattr(self, '_manual_flow', None):
+            if await self._manual_flow.answer(cid_s, reply_to_message_id, text):
+                return
+        if hasattr(self, 'pending_chats'):
+            challenge_id = next((cid for (chat, cid), mid in self.pending_chats.items()
+                                 if chat == cid_s and mid == reply_to_message_id), None)
+        else:
+            challenge_id = self.pending.get(reply_to_message_id) if cid_s == self.chat_id else None
         if challenge_id and self.resolver:
             await self.resolver(challenge_id, text)
+        elif reply_to_message_id is not None or self.pending:
+            await self._call('sendMessage', {'chat_id': cid_s,
+                'text': 'Ответ не отправлен в HH: выберите «Ответить» на актуальном сообщении с капчей. Если оно устарело или потерялось — отправьте /captcha.'})
 
     async def _poll(self):
         while True:

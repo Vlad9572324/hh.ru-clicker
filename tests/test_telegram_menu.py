@@ -25,12 +25,24 @@ def test_main_menu(manager, monkeypatch):
     monkeypatch.setenv('HH_BOT_API_KEY', 'test+key&value')
     buttons = [row[0] for row in menu.build_main_menu(manager)['inline_keyboard']]
     assert [b['callback_data'] for b in buttons[:-1]] == [
-        'status', 'pause_toggle', 'today', 'human_toggle', 'notif']
+        'status', 'pause_toggle', 'today', 'human_toggle', 'notif', 'captcha']
     assert all(len(b['callback_data'].encode()) <= 64 for b in buttons[:-1])
     assert parse_qs(urlsplit(buttons[-1]['url']).query) == {'key': ['test+key&value']}
     assert buttons[1]['text'] == '⏸ Пауза'
     manager.paused = True
     assert menu.build_main_menu(manager)['inline_keyboard'][1][0]['text'] == '▶ Продолжить'
+
+
+def test_captcha_menu_highlights_only_active_challenges(manager):
+    manager.account_states = [SimpleNamespace(paused_reason='challenge'),
+                              SimpleNamespace(paused_reason='manual')]
+    rows = menu.build_main_menu(manager)['inline_keyboard']
+    button = next(row[0] for row in rows if row[0].get('callback_data') == 'captcha')
+    assert button['text'] == '🔴 Нужна капча · 1 — открыть'
+    manager.account_states[0].paused_reason = ''
+    rows = menu.build_main_menu(manager)['inline_keyboard']
+    button = next(row[0] for row in rows if row[0].get('callback_data') == 'captcha')
+    assert button['text'] == '🔐 Проверки HH'
 
 
 def test_pause_toggle(manager):
@@ -76,5 +88,5 @@ def test_live_summary(manager, monkeypatch):
     for command in ('status', 'today', 'status'):
         popup, keyboard = asyncio.run(menu.handle_callback(manager, command, 1, 2))
         assert '12/100' in popup and '4/час' in popup
-        assert len(popup) <= 200 and keyboard is None
+        assert len(popup) <= 200 and keyboard == menu.build_main_menu(manager)
     assert reader.call_count == 3

@@ -16,8 +16,10 @@ x-force-app-access). Fallback-политика: статусы 0 (сеть) / 40
 """
 
 import json
+import time
 
 from app.config import CONFIG
+from app.human_pace import respect_retry_after
 from app.hh_mobile_transport import (
     MobileAPIError,
     is_fallback_status,
@@ -194,6 +196,10 @@ def submit_response(acc: dict, vacancy_id: str, resume_id: str,
             form=form,
         )
     except MobileAPIError as e:
+        if e.status_code == 429:
+            delay = respect_retry_after(getattr(e, 'headers', {}), default_sec=60)
+            log_debug(f'HH rate-limit, ждём {delay}с')
+            time.sleep(delay)
         if e.outcome_unknown:
             raise
         code = _extract_error_code(e.payload)

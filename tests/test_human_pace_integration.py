@@ -33,34 +33,39 @@ def harness(monkeypatch):
     monkeypatch.setattr(pace, 'random_burst_pause', Mock(return_value=180))
     monkeypatch.setattr(pace, 'delay_multiplier', Mock(return_value=1))
     monkeypatch.setattr(module.time, 'monotonic', lambda: 1000)
+    # This harness tests pacing budgets, not the separately tested wait loop.
+    monkeypatch.setattr(pace, 'interruptible_wait',
+                        lambda event, delay, allowed: allowed() and not event.wait(delay))
     monkeypatch.setattr(module, 'set_activity', Mock())
+    monkeypatch.setattr(pace, 'sleep_until_active_hour', Mock())
+    monkeypatch.setattr(pace, 'reserve_attempt', Mock(return_value=0))
     return bot, state
 
 
-def test_burst_spans_batches_and_obeys_average_budget(harness):
+def test_each_attempt_reserves_before_sending(harness):
     bot, state = harness
     for _ in range(3):
         bot._wait_human_pace(state)
-    assert [c.args[0] for c in bot._stop_event.wait.call_args_list] == [10, 10, 10, 2700]
-    pace.random_burst_pause.assert_called_once()
-    assert state._human_burst_count == state._human_burst_target == 0
+    assert pace.reserve_attempt.call_count == 3
+    bot._stop_event.wait.assert_not_called()
 
 
-def test_backoff_and_weekend_slow_all_waits(harness, monkeypatch):
+def test_saved_interval_is_waited_before_reservation(harness, monkeypatch):
     bot, state = harness
-    monkeypatch.setattr(pace, 'delay_multiplier', lambda state: 2 / .7)
+    pace.reserve_attempt.side_effect = [900, 0]
     state._human_burst_target = 1
     state._human_burst_started = 1000
     bot._wait_human_pace(state)
-    assert [c.args[0] for c in bot._stop_event.wait.call_args_list] == pytest.approx([10 * 2 / .7, 900 * 2 / .7])
+    bot._stop_event.wait.assert_called_once_with(60)
 
 
 def test_shutdown_interrupts_before_burst_pause(harness):
     bot, state = harness
     state._human_burst_target = 1
     bot._stop_event.wait.return_value = True
+    pace.reserve_attempt.return_value = 900
     bot._wait_human_pace(state)
-    bot._stop_event.wait.assert_called_once_with(10)
+    bot._stop_event.wait.assert_called_once_with(60)
     pace.random_burst_pause.assert_not_called()
 
 
@@ -101,11 +106,12 @@ def test_real_worker_dispatch_uses_serial_attempts_and_pacing(harness, monkeypat
     tree = ast.parse(textwrap.dedent(inspect.getsource(BotManager._run_account_worker_inner)))
     loop = next(n for n in ast.walk(tree) if isinstance(n, ast.While) and ast.unparse(n.test) == 'i < len(filtered)')
     dispatch = next(n for n in loop.body if isinstance(n, ast.If) and ast.unparse(n.test).startswith('state.use_oauth or'))
-    pacing = next(n for n in loop.body if isinstance(n, ast.If) and ast.unparse(n.test) == 'CONFIG.human_mode_enabled and results')
+    pacing = next(n for n in loop.body if isinstance(n, ast.If) and '_wait_human_pace' in ast.unparse(n))
+    assert loop.body.index(pacing) < loop.body.index(dispatch)
     # Execute the real window gate and batch-size assignment before dispatch.
     nodes = copy.deepcopy(loop.body[:2])
     setup = ast.parse('batch = filtered[i:i + batch_size]').body
-    nodes += setup + [copy.deepcopy(dispatch), copy.deepcopy(pacing)]
+    nodes += setup + ast.parse('assert self._wait_human_pace(state)').body + [copy.deepcopy(dispatch)]
     code = compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), '<human-worker-dispatch>', 'exec')
     env = dict(vars(module), self=bot, state=state, acc=state.acc,
                filtered=['a', 'b', 'c'], attempt_accounts={v: {} for v in 'abc'})
@@ -114,5 +120,5 @@ def test_real_worker_dispatch_uses_serial_attempts_and_pacing(harness, monkeypat
         exec(code, env)
         assert env['batch_size'] == 1
     assert calls == ['a', 'b', 'c']
-    assert pace.sleep_until_active_hour.call_count == 3
-    assert [c.args[0] for c in bot._stop_event.wait.call_args_list] == [10, 10, 10, 2700]
+    assert pace.reserve_attempt.call_count == 3
+    bot._stop_event.wait.assert_not_called()

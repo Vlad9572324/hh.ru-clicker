@@ -187,11 +187,32 @@ async def api_raw_accounts_set(request: Request):
         return {"ok": False, "error": "Невалидный JSON"}
     if not isinstance(data, list):
         return {"ok": False, "error": "Ожидается массив"}
-    old_by_name = {a.get("name", ""): a for a in accounts_data}
-    merged = []
+    # Validate the whole replacement before touching either persistent or live
+    # accounts. Silently skipping malformed entries used to delete accounts.
+    names = []
     for acc in data:
         if not isinstance(acc, dict):
-            continue
+            return {"ok": False, "error": "Каждый аккаунт должен быть объектом. Изменения не сохранены."}
+        name = acc.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return {"ok": False, "error": "У каждого аккаунта должно быть непустое имя."}
+        if not isinstance(acc.get("cookies", {}), dict):
+            return {"ok": False, "error": "Cookies должны быть объектом. Изменения не сохранены."}
+        if any(not isinstance(value, str) for value in acc.get("cookies", {}).values()):
+            return {"ok": False, "error": "Значения cookies должны быть строками."}
+        names.append(name)
+    if len(set(names)) != len(names):
+        return {"ok": False, "error": "Имена аккаунтов должны быть уникальными. Изменения не сохранены."}
+    from app.instances import bot as _bot
+    old_by_name = {a.get("name", ""): a for a in accounts_data}
+    live_by_name = {state.name: state for state in _bot.account_states}
+    if any(name not in old_by_name or name not in live_by_name for name in names):
+        return {"ok": False, "error": "Через JSON можно изменить, удалить или переставить существующие аккаунты. "
+                "Для добавления или переименования используйте карточку аккаунта. Изменения не сохранены."}
+    if len(old_by_name) != len(accounts_data) or len(live_by_name) != len(_bot.account_states):
+        return {"ok": False, "error": "Обнаружены повторяющиеся имена аккаунтов. Сначала исправьте их в карточках."}
+    merged = []
+    for acc in data:
         name = acc.get("name", "")
         old = old_by_name.get(name, {})
         new_cookies = acc.get("cookies", {})
@@ -252,7 +273,7 @@ async def api_raw_accounts_set(request: Request):
     return {
         "ok": True,
         "count": len(merged),
-        "warning": "Удаления применены сразу. Добавление новых аккаунтов требует перезапуска бота.",
+        "warning": "Изменения и удаления применены. Новые аккаунты добавляются через карточку аккаунта.",
     }
 
 
@@ -325,6 +346,45 @@ def _merge_preserve(payload, current, protected: set, path: str = "") -> tuple:
     return out, preserved
 
 
+def _backup_payload_error(name, payload):
+    """Validate file shapes without mutating live config or quiescing workers."""
+    if name in ("accounts.json", "browser_sessions.json"):
+        if not isinstance(payload, list) or any(not isinstance(acc, dict) for acc in payload):
+            return "Ожидается массив объектов аккаунтов"
+        for acc in payload:
+            if not isinstance(acc.get("cookies", {}), dict):
+                return "Cookies должны быть объектом"
+            if any(not isinstance(v, str) for v in acc.get("cookies", {}).values()):
+                return "Значения cookies должны быть строками"
+            for field in ("name", "short", "color", "resume_hash", "letter"):
+                if field in acc and not isinstance(acc[field], str):
+                    return f"Поле {field} должно быть строкой"
+            if "urls" in acc and (not isinstance(acc["urls"], list)
+                                  or any(not isinstance(url, str) for url in acc["urls"])):
+                return "Поле urls должно быть массивом строк"
+    elif name == "config.json":
+        if not isinstance(payload, dict):
+            return "Ожидается объект настроек"
+        for key, value in payload.items():
+            if key in _RAW_LIST_KEYS and not isinstance(value, list):
+                return f"Поле {key} должно быть массивом"
+            if key == "mobile_auth" and not isinstance(value, dict):
+                return "Поле mobile_auth должно быть объектом"
+            if key in _RAW_LLM_KEYS | _RAW_EXTRA_KEYS | set(_CONFIG_KEYS):
+                try:
+                    _safe_cast(key, value)
+                except (ValueError, TypeError, OverflowError):
+                    return f"Неверный тип настройки {key}"
+    elif name == "oauth_tokens.json":
+        if not isinstance(payload, dict) or any(not isinstance(token, dict) for token in payload.values()):
+            return "Ожидается объект записей OAuth"
+        for token in payload.values():
+            if any(field in token and not isinstance(token[field], str)
+                   for field in ("access_token", "refresh_token")):
+                return "Токены OAuth должны быть строками"
+    return ""
+
+
 @router.post("/api/backup")
 async def api_backup_restore(request: Request, force: int = 0):
     """Восстановить из бэкапа. Принимает JSON, сделанный GET /api/backup.
@@ -336,6 +396,15 @@ async def api_backup_restore(request: Request, force: int = 0):
         return {"ok": False, "error": "Невалидный JSON"}
     if not isinstance(data, dict):
         return {"ok": False, "error": "Ожидается объект"}
+    payloads = {name: data[name] for name in _BACKUP_FILES
+                if name in data and data[name] is not None}
+    if not payloads:
+        return {"ok": False, "error": "В файле нет данных бэкапа для восстановления. Аккаунты не изменены."}
+    invalid = {name: error for name, payload in payloads.items()
+               if (error := _backup_payload_error(name, payload))}
+    if invalid:
+        return {"ok": False, "error": "Бэкап повреждён или имеет неверный формат. Изменения не применены.",
+                "errors": invalid, "restored": []}
     restored = []
     errors = {}
     preserved_all = []

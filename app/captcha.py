@@ -56,6 +56,17 @@ def current(acc):
         return dict(_read().get(account_key(acc), {}))
 
 
+def claim_manual(acc, expected_id):
+    """Keep human-owned challenges out of background automation across restarts."""
+    with LOCK:
+        data = _read()
+        record = data.get(account_key(acc))
+        if not record or record.get('id') != expected_id:
+            raise ValueError('Challenge changed')
+        record['manual_only'] = True
+        _atomic_write_json(PATH, data)
+
+
 def active(acc):
     try:
         with LOCK:

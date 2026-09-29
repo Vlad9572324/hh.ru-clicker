@@ -357,11 +357,12 @@ async def api_session_refresh(idx: int):
        если куки живые)
     2. OAuth-based /resumes/mine (fallback когда куки dead — degraded mode)
     """
-    temp_idx = idx - len(bot.account_states)
-    if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
-        return {"status": "error", "message": "Не найдено"}
-    ts = bot.temp_sessions[temp_idx]
-    raw_line = ts.get("_raw_cookie_line", "") or "; ".join(f"{k}={v}" for k, v in ts.get("cookies", {}).items())
+    with bot._activate_lock:
+        temp_idx = idx - len(bot.account_states)
+        if temp_idx < 0 or temp_idx >= len(bot.temp_sessions):
+            return {"status": "error", "message": "Не найдено"}
+        ts = bot.temp_sessions[temp_idx]
+        raw_line = ts.get("_raw_cookie_line", "") or "; ".join(f"{k}={v}" for k, v in ts.get("cookies", {}).items())
     loop = asyncio.get_event_loop()
     profile = await loop.run_in_executor(None, _validate_and_profile, raw_line)
     # Cookie-путь мог вернуть ok=True но с пустым resume_hash — это случай нового
@@ -391,30 +392,33 @@ async def api_session_refresh(idx: int):
             oauth_err = oauth_profile.get("error", "Нет OAuth токена")
             return {"status": "error",
                     "message": f"{cookie_err}\n\nOAuth-fallback тоже не помог: {oauth_err}"}
-    resume_changed = False
-    if profile["resume_hash"]:
-        if bot.temp_sessions[temp_idx].get("resume_hash") != profile["resume_hash"]:
-            resume_changed = True
-        bot.temp_sessions[temp_idx]["resume_hash"] = profile["resume_hash"]
-    if profile.get("all_resumes"):
-        bot.temp_sessions[temp_idx]["all_resumes"] = profile["all_resumes"]
-    if profile["name"] and profile["name"] != "Браузер":
-        old_name = ts.get("name", "")
-        suffix = " (\U0001f310)" if "(\U0001f310)" in old_name else ""
-        bot.temp_sessions[temp_idx]["name"] = profile["name"] + suffix
-    # Если сессия уже активна — обновим runtime-копию, иначе воркер
-    # продолжит работать со старыми resume_hash/именем/URL'ами.
-    active_state = bot.temp_states.get(temp_idx)
-    if active_state is not None:
+    with bot._activate_lock:
+        # Indices can shift while HH responds. Resolve the exact original
+        # object again; never apply A's profile to the account replacing A.
+        temp_idx = next((i for i, candidate in enumerate(bot.temp_sessions) if candidate is ts), None)
+        if temp_idx is None:
+            return {"status": "error", "message": "Сессия удалена во время обновления. Другие аккаунты не изменены."}
+        resume_changed = False
         if profile["resume_hash"]:
-            active_state.acc["resume_hash"] = profile["resume_hash"]
-            if resume_changed:
-                active_state.acc["urls"] = bot._build_session_urls(profile["resume_hash"])
-                active_state.total_urls = len(active_state.acc["urls"])
+            resume_changed = ts.get("resume_hash") != profile["resume_hash"]
+            ts["resume_hash"] = profile["resume_hash"]
+        if profile.get("all_resumes"):
+            ts["all_resumes"] = profile["all_resumes"]
         if profile["name"] and profile["name"] != "Браузер":
-            active_state.name = bot.temp_sessions[temp_idx]["name"]
-            active_state.acc["name"] = bot.temp_sessions[temp_idx]["name"]
-    save_browser_sessions(bot.temp_sessions)
+            old_name = ts.get("name", "")
+            suffix = " (\U0001f310)" if "(\U0001f310)" in old_name else ""
+            ts["name"] = profile["name"] + suffix
+        active_state = bot.temp_states.get(temp_idx)
+        if active_state is not None:
+            if profile["resume_hash"]:
+                active_state.acc["resume_hash"] = profile["resume_hash"]
+                if resume_changed:
+                    active_state.acc["urls"] = bot._build_session_urls(profile["resume_hash"])
+                    active_state.total_urls = len(active_state.acc["urls"])
+            if profile["name"] and profile["name"] != "Браузер":
+                active_state.name = ts["name"]
+                active_state.acc["name"] = ts["name"]
+        save_browser_sessions(bot.temp_sessions)
     return {"status": "ok", "resume_hash": profile["resume_hash"], "name": profile["name"]}
 
 
