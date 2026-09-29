@@ -248,6 +248,13 @@ class ManualCaptchaFlow:
                 item['status'] = 'confirmed'
                 await self.message(chat, '✅ HH подтвердил ответ. Отправки ещё на паузе.',
                     [{'text': '▶ Подтверждаю продолжение откликов', 'callback_data': 'mc_resume:' + token}])
+                idx, _ = self.find(item['cid'])
+                short = state.acc.get('short') or state.acc.get('name') or f'аккаунт {idx + 1 if idx is not None else ""}'
+                try:
+                    await self.bot.send_message(
+                        f'✅ Капча HH решена (Telegram) для {short} — ожидается подтверждение продолжения')
+                except Exception:
+                    pass
             else:
                 label = ('❌ HH не принял ответ' if reason == 'isBot' else
                          '⚠ HH запросил другой вид проверки' if reason == 'recaptcha' else
