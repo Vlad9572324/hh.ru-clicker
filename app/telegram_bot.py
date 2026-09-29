@@ -145,6 +145,37 @@ class TelegramCaptchaBot:
                 logger.info('Telegram message delivery failed (%s)', type(exc).__name__)
         return first
 
+    async def send_browser_option(self, challenge_id, acc_short, url):
+        """Broadcast a way to finish the check on HH itself and confirm it here."""
+        buttons = [[{'text': '✅ Прошёл в браузере — продолжить', 'callback_data': 'bc_done:' + challenge_id}]]
+        if url:
+            buttons.insert(0, [{'text': '🌐 Открыть проверку на HH', 'url': url}])
+        markup = json.dumps({'inline_keyboard': buttons}, ensure_ascii=False)
+        for chat_id in self._chat_targets():
+            try:
+                await self._call('sendMessage', {'chat_id': chat_id, 'reply_markup': markup,
+                    'text': f'Или пройдите проверку {acc_short} прямо на HH и нажмите «Прошёл в браузере».'})
+            except Exception as exc:
+                logger.info('Telegram browser option delivery failed (%s)', type(exc).__name__)
+
+    async def _confirm_browser_solved(self, chat_id, cid):
+        from app import captcha
+        from app.instances import bot as manager
+        from app.routes.accounts import api_account_captcha_continue
+        states = list(enumerate(manager.account_states)) + [
+            (len(manager.account_states) + i, s) for i, s in manager.temp_states.items()]
+        idx = next((i for i, s in states if not getattr(s, '_deleted', False)
+                    and captcha.current(s.acc).get('id') == cid), None)
+        if idx is None:
+            text = 'Эта проверка уже закрыта или заменена новой.'
+        else:
+            class Confirmation:
+                async def json(self): return {'confirmed': True, 'id': cid}
+            result = await api_account_captcha_continue(idx, Confirmation())
+            text = None if result.get('ok') else (result.get('error') or 'Не удалось продолжить.')
+        if text:
+            await self._call('sendMessage', {'chat_id': str(chat_id), 'text': text})
+
     async def _set_commands(self, commands):
         await self._call('setMyCommands', {'commands': json.dumps(commands, ensure_ascii=False)})
 
@@ -167,6 +198,13 @@ class TelegramCaptchaBot:
         acknowledged = False
         try:
             authorized = chat_id is not None and is_known(str(chat_id))
+            if authorized and data.startswith('bc_done:'):
+                acknowledged = True
+                with contextlib.suppress(Exception):
+                    await self._call('answerCallbackQuery', {'callback_query_id': callback_query['id'],
+                        'text': 'Проверяю состояние', 'show_alert': 'false'})
+                await self._confirm_browser_solved(chat_id, data.split(':', 1)[1])
+                return
             if authorized and data.startswith(('mc_open:', 'mc_resume:')):
                 acknowledged = True
                 try:

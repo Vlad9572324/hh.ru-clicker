@@ -126,6 +126,10 @@ def test_delivery_retry_does_not_repeat_llm(vision, monkeypatch, enabled):
         coordinator = captcha_worker.CaptchaCoordinator(manager, bot)
         await coordinator.scan()
         await coordinator.scan()
+        assert bot.push_challenge.await_count == 1  # backoff: no hammering HH
+        for item in coordinator.pending.values():
+            assert item['retry_delay'] == 30
+            item['retry_at'] = 0
         await coordinator.scan()
         assert recognize.call_count == int(enabled)
         assert bot.push_challenge.await_count == 2

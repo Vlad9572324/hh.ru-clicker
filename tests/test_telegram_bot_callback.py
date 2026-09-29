@@ -224,3 +224,34 @@ def test_delivery_exceptions_do_not_log_telegram_token(bot, monkeypatch, caplog)
         asyncio.run(run())
     assert 'PRIVATE_TOKEN' not in caplog.text
     assert 'delivery failed' in caplog.text
+
+
+def test_browser_solved_button_requires_subscriber(bot, monkeypatch):
+    confirm = AsyncMock()
+    monkeypatch.setattr(bot, '_confirm_browser_solved', confirm)
+    asyncio.run(bot.on_callback(query('bc_done:cid-1')))
+    confirm.assert_awaited_once_with(123, 'cid-1')
+    confirm.reset_mock()
+    stranger = {'id': 'q2', 'data': 'bc_done:cid-1',
+                'message': {'chat': {'id': 999}, 'message_id': 7}}
+    asyncio.run(bot.on_callback(stranger))
+    confirm.assert_not_awaited()
+
+
+def test_browser_solved_uses_human_confirmation_route(bot, monkeypatch):
+    from app import captcha
+    from app.routes import accounts
+    state = SimpleNamespace(acc={'user_id': 'u1'})
+    monkeypatch.setattr(instances.bot, 'account_states', [state], raising=False)
+    monkeypatch.setattr(instances.bot, 'temp_states', {}, raising=False)
+    monkeypatch.setattr(captcha, 'current', lambda acc: {'id': 'cid-1'})
+    seen = {}
+    async def fake_continue(idx, request):
+        seen['idx'], seen['body'] = idx, await request.json()
+        return {'ok': True}
+    monkeypatch.setattr(accounts, 'api_account_captcha_continue', fake_continue)
+    asyncio.run(bot._confirm_browser_solved(123, 'cid-1'))
+    assert seen == {'idx': 0, 'body': {'confirmed': True, 'id': 'cid-1'}}
+    bot._call.assert_not_awaited()
+    asyncio.run(bot._confirm_browser_solved(123, 'stale-cid'))
+    assert 'закрыта' in bot._call.call_args.args[1]['text']

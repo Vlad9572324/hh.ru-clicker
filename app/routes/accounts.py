@@ -387,7 +387,7 @@ async def api_account_captcha_continue(idx: int, request: Request):
         if tg is not None:
             short = state.acc.get('short') or state.acc.get('name') or 'аккаунт'
             asyncio.create_task(tg.send_message(
-                f'✅ Капча HH пройдена (дашборд) для {short} — отклики возобновлены'))
+                f'✅ Капча HH пройдена (подтверждено вручную) для {short} — отклики возобновлены'))
     except Exception:
         pass
     return {'ok': True, 'message': 'Продолжение разрешено вами. Если HH снова потребует капчу, отправки остановятся.'}

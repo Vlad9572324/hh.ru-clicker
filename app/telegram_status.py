@@ -200,7 +200,8 @@ async def status_heartbeat(bot_manager, telegram_bot, interval_min):
             current = await asyncio.to_thread(build_status_snapshot, bot_manager)
             current['interval_min'] = max(10, min(120, interval_min))
             if should_send(previous, current):
-                key = f'status:{int(datetime.now().timestamp() // 3600)}'
+                slot = current['interval_min'] * 60
+                key = f'status:{slot}:{int(datetime.now().timestamp() // slot)}'
                 sent = await asyncio.to_thread(telegram_notify.send_once, key,
                                              build_status_html(current, previous), parse_mode='HTML')
                 if sent:
