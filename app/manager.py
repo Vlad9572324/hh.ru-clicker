@@ -1285,7 +1285,8 @@ class BotManager:
         try:
             if not getattr(CONFIG, "use_websocket_realtime", False):
                 return
-            state = next((st for st in self.account_states if st.acc is acc), None)
+            state = next((st for st in list(self.account_states) + list(self.temp_states.values())
+                          if st.acc is acc), None)
             if state is None:
                 return
             etype = getattr(event, "type", "") or ""
@@ -4347,6 +4348,11 @@ class BotManager:
                     log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, системное событие wf={wf_id!r}, пропуск")
                     continue
                 log_debug(f"LLM [{state.short}] {item_id}: unread={unread}, wf.id={wf_id!r} (числовой/int, реальное сообщение)")
+            from app.hr_rejection import is_rejection
+            if is_rejection(last_msg.get("text")):
+                skipped_system += 1
+                log_debug(f"LLM [{state.short}] {item_id}: отказ HR, ответ не нужен")
+                continue
             # Не флудим логи структурой каждого item — только метаданные кандидата (swarm-16 #8).
             log_debug(f"LLM [{state.short}] {item_id}: ✅ кандидат unread={unread}, sender={sender_id}, len={len(last_text)}")
             candidates.append(item_id)

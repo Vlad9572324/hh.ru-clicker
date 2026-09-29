@@ -8,6 +8,7 @@ import requests
 from app.config import hh_base
 from app.hh_http import HH, egress_proxy
 from app.mutation_safety import ensure_mutation_allowed, MutationBlocked, OutcomeUnknown
+from app.hr_rejection import is_rejection
 from app.user_agent import webview_user_agent
 from app.oauth import _token_key
 
@@ -206,9 +207,13 @@ def _build_thread_from_chat_item(item: dict, display_info: dict, cur_pid: str, n
     # Numeric wf.id = internal message reference, not a system event — real employer text
     wf = last_msg.get("workflowTransition") or {}
     wf_id = wf.get("id", "") if isinstance(wf, dict) else ""
-    is_workflow_msg = isinstance(wf_id, str) and bool(wf_id)  # only string types = system events
+    # Numeric string ids ("15563505813") are real HR text attached to a status
+    # change; only named events (REJECTION, APPLICATION...) are system rows.
+    is_workflow_msg = isinstance(wf_id, str) and bool(wf_id) and not wf_id.isdigit()
+    rejection = from_employer and is_rejection(last_text)
+    result["rejection"] = rejection
 
-    needs_reply = (unread > 0) and from_employer and not is_workflow_msg
+    needs_reply = (unread > 0) and from_employer and not is_workflow_msg and not rejection
     result["needs_reply"] = needs_reply
     result["last_msg_id"] = last_msg_id or str(hash(last_text))
 

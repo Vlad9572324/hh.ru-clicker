@@ -91,20 +91,8 @@ def classify_chat_message(neg_id, message_body, workflow, is_bot, employer_last_
     wf_id = workflow.get("id") if isinstance(workflow, dict) else workflow
     wf_id = str(wf_id or "").strip().upper()
     # Detect отказ (HR шлёт отказы через тот же workflow INTERVIEW) — silence.
-    rejection = re.search(
-        r"к\s+сожален|не\s+готов[ыа]?\s+(пригласить|предложить|рассмотрет)"
-        r"|не\s+смож(ем|ет)\s+пригласи"
-        r"|не\s+сможем\s+продолж"
-        r"|не\s+подход(ите|ит)"
-        r"|не\s+соответству(ете|ет)"
-        r"|поиск(ем|а)?\s+специалист[аов]+\s+другого"
-        r"|ищем\s+специалист[аов]+\s+(другого|иного)"
-        r"|сохран(им|яем)\s+(ваше\s+)?резюме"
-        r"|приняли\s+решени[ея]\s+остановит"
-        r"|решили\s+не\s+продолж"
-        r"|отказ(ать|ываем)"
-        r"|not\s+moving\s+forward|unfortunately\s+we|regret\s+to\s+inform",
-        body, re.I)
+    from app.hr_rejection import is_rejection
+    rejection = is_rejection(body)
     category = None
     if rejection:
         pass  # HR-отказ — silence
