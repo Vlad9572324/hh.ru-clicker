@@ -149,7 +149,7 @@ class ManualCaptchaFlow:
                 else:
                     fields['text'] += ' После ожидания нажмите «Новая картинка» ещё раз.'
                 return await self.bot._call('sendMessage', fields)
-            self.cooldown[cid] = time.monotonic() + 60
+            self.cooldown[cid] = time.monotonic() + 10
             for token, old in list(self.items.items()):
                 if old['cid'] == cid:
                     self._retire(token)

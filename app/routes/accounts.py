@@ -319,8 +319,8 @@ async def api_account_captcha_refresh(idx: int):
             return {'ok': False, 'error': 'Состояние аккаунта изменилось'}
         now = time.monotonic()
         if now < getattr(state, '_captcha_probe_after', 0):
-            return {'ok': False, 'error': 'Повторная проверка доступна через минуту'}
-        state._captcha_probe_after = now + 60
+            return {'ok': False, 'error': 'Повторная проверка доступна через 10 секунд'}
+        state._captcha_probe_after = now + 10
     def probe():
         headers = _oauth_headers(state.acc)
         if not headers:
