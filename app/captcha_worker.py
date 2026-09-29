@@ -156,6 +156,70 @@ class CaptchaCoordinator:
         except Exception:
             pass
 
+    def _api_probe(self, acc):
+        """GET /me через OAuth. Возвращает True если HH пропускает запросы
+        без капчи (значит юзер прошёл проверку в браузере, и mobile-путь
+        снова открыт). None = не удалось проверить (нет токена/сеть)."""
+        from app.oauth import _oauth_headers, _token_key
+        from app.hh_http import HH
+        from app import captcha as _captcha
+        headers = _oauth_headers(acc)
+        if not headers:
+            return None
+        try:
+            response = HH.get('https://api.hh.ru/me', headers=headers,
+                              cookie_jar_key=_token_key(acc) or None, timeout=10)
+        except Exception:
+            return None
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        return _captcha.parse(response.status_code, payload) is None and 200 <= response.status_code < 400
+
+    async def probe_browser_solved(self):
+        """Раз в ~120с для challenge-аккаунтов пробуем API. Если чисто —
+        снимаем challenge (юзер решил капчу в браузере) и уведомляем TG."""
+        import time as _t
+        from app import captcha as _captcha
+        states = list(self.manager.account_states) + list(getattr(self.manager, 'temp_states', {}).values())
+        for state in states:
+            if getattr(state, '_deleted', False):
+                continue
+            if getattr(state, 'paused_reason', None) != 'challenge':
+                continue
+            if getattr(state, 'pending_apply', False) or getattr(state, 'pending_applies', 0):
+                continue
+            last = getattr(state, '_browser_probe_at', 0)
+            if _t.monotonic() - last < 120:
+                continue
+            state._browser_probe_at = _t.monotonic()
+            acc = state.acc
+            record = _captcha.current(acc)
+            if not record or record.get('manual_only'):
+                continue
+            ok = await asyncio.to_thread(self._api_probe, acc)
+            if ok is not True:
+                continue
+            try:
+                _captcha.clear(acc, record['id'])
+            except Exception:
+                continue
+            key = str(acc.get('user_id') or acc.get('resume_hash', ''))
+            try:
+                await asyncio.to_thread(self.manager.resume_challenge_account, key)
+            except Exception:
+                pass
+            self.pending.pop(record['id'], None)
+            self.bot.forget(record['id'])
+            short = acc.get('short') or acc.get('name') or 'аккаунт'
+            self._log(acc, '🌐 Капча снята (проверено HH-API) — отклики возобновлены', 'success')
+            try:
+                await self.bot.send_message(
+                    f'🌐 Капча HH снята для {short} (проверено API) — отклики возобновлены')
+            except Exception:
+                logger.warning('TG notify (browser-solved) failed')
+
     def _log(self, acc, message, level):
         try:
             self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'), message, level)
@@ -262,6 +326,10 @@ async def captcha_orchestrator(bot_manager):
                     await coordinator.scan()
                 except Exception:
                     logger.warning('HH captcha scan failed; will retry')
+                try:
+                    await coordinator.probe_browser_solved()
+                except Exception:
+                    logger.warning('HH captcha browser-probe failed; will retry')
             await asyncio.sleep(3)
     finally:
         if bot:
