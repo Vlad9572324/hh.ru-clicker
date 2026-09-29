@@ -94,8 +94,13 @@ class HHWebSocketClient:
         backoff_base: float = 1.0,
         backoff_max: float = 60.0,
         backoff_factor: float = 2.0,
+        user_agent: str = "",
+        device_uuid: str = "",
     ):
         self._access_token = access_token
+        # Must match the account's REST fingerprint; see oauth._account_headers.
+        self._user_agent = user_agent or _MOBILE_UA
+        self._device_uuid = device_uuid
         self._on_event = on_event
         self._on_disconnect = on_disconnect
         self._label = label or "ws"
@@ -145,8 +150,11 @@ class HHWebSocketClient:
         endpoint = f"{self._connection_base}/connection/data"
         headers = {
             "Authorization": f"Bearer {self._access_token}",
-            "User-Agent": _MOBILE_UA,
+            "User-Agent": self._user_agent,
             "x-force-app-access": "true",
+            "x-hh-app-active": "true",
+            "Accept": "application/json",
+            **({"X-Device-Uuid": self._device_uuid} if self._device_uuid else {}),
         }
 
         def _get():
@@ -184,7 +192,8 @@ class HHWebSocketClient:
         """
         ws_url = await self._fetch_ws_url()
         try:
-            ws = await websockets.connect(ws_url, open_timeout=15, ping_interval=None)
+            ws = await websockets.connect(ws_url, open_timeout=15, ping_interval=None,
+                                         user_agent_header=self._user_agent)
         except Exception as e:
             # Только имя типа: str(e) может содержать url с живой sd.
             raise WsHandshakeError(f"WS-коннект не удался: {type(e).__name__}") from e

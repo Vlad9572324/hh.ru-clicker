@@ -23,7 +23,7 @@ from app.storage import save_browser_sessions
 from app.hh_resume import parse_hh_lux_ssr
 from app.instances import bot
 from app.hh_http import HH, is_impersonating
-from app.user_agent import mobile_user_agent, webview_user_agent
+from app.user_agent import webview_user_agent
 
 from app.routes.accounts import _parse_cookies_str, _AUTH_COOKIE_KEYS
 
@@ -315,10 +315,9 @@ def _refresh_via_oauth(acc: dict) -> dict:
     if not token:
         return {"ok": False, "error": "OAuth токен не получен — куки нужны для первичной авторизации"}
     try:
-        r = HH.get("https://api.hh.ru/resumes/mine", headers={
-            "User-Agent": mobile_user_agent(),
-            "Authorization": f"Bearer {token}",
-        }, params={"per_page": 30}, cookie_jar_key=_token_key(acc) or None,
+        from app.hh_mobile_transport import mobile_headers
+        r = HH.get("https://api.hh.ru/resumes/mine", headers=mobile_headers(acc, token),
+            params={"per_page": 30}, cookie_jar_key=_token_key(acc) or None,
             timeout=10, _diag_tag="sess_refresh_oauth")
     except Exception as e:
         return {"ok": False, "error": f"OAuth ошибка: {e}"}

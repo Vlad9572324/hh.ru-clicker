@@ -3687,6 +3687,17 @@ class BotManager:
                     elif result == "limit":
                         log_debug(f"HH_LIMIT [{state.short}] vid={vid} retry_after={info.get('retry_after_seconds', '?')}")
                         state.limit_exceeded = True
+                        if isinstance(info, dict) and info.get("http_429"):
+                            # "Too many requests" is a short throttle, not the daily quota.
+                            wait = max(int(info.get("retry_after_seconds") or 0),
+                                       CONFIG.limit_check_interval * 60)
+                            state.limit_reset_time = datetime.now() + timedelta(seconds=wait)
+                            state.status = "limit"
+                            state.status_detail = f"HH: слишком часто (429). Проверка в {state.limit_reset_time.strftime('%H:%M')}"
+                            self._add_log(state.short, state.color,
+                                f"⏳ HH ответил 429 (слишком часто) — пауза до {state.limit_reset_time.strftime('%H:%M')}",
+                                "warning")
+                            break
                         notify_account_state_change(state, AlertCategory.daily_limit_reached)
                         if CONFIG.stop_on_hh_limit:
                             # Hard stop — no retries

@@ -478,11 +478,15 @@ class WsManager:
                 self._handle_disconnect(entry)
 
             try:
+                from app.user_agent import ensure_device_identity, mobile_user_agent
+                identity = ensure_device_identity(acc) or {}
                 client = HHWebSocketClient(
                     token,
                     _on_event,
                     on_disconnect=_on_disconnect,
                     label=label,
+                    user_agent=mobile_user_agent(acc),
+                    device_uuid=str(identity.get("device_uuid") or ""),
                 )
             except Exception as e:
                 log_debug(f"ws_manager [{label}] создание клиента упало: {e}")

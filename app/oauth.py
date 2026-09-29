@@ -703,11 +703,18 @@ def _extras_get(kind: str, resume_hash: str, ttl: int, fetcher):
     return val
 
 
+def _account_headers(acc: dict, token: str) -> dict:
+    # One device per account: the same UA/UUID/app headers as mobile_request.
+    # A token seen from two app versions/devices is a strong anti-bot signal.
+    from app.hh_mobile_transport import mobile_headers
+    return mobile_headers(acc, token)
+
+
 def _oauth_headers(acc: dict) -> dict:
     tok = _obtain_oauth_token(acc)
     if not tok:
         return {}
-    return {"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {tok}"}
+    return _account_headers(acc, tok)
 
 
 def fetch_saved_vacancy_searches(acc: dict) -> list:
@@ -1077,7 +1084,7 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
         ensure_mutation_allowed(acc)
         r = HH.post(
             "https://api.hh.ru/negotiations",
-            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}",
+            headers={**_account_headers(acc, token),
                      "Content-Type": "application/x-www-form-urlencoded"},
             data=data, cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
@@ -1154,12 +1161,9 @@ def _oauth_apply(acc: dict, vid: str, message: str = "") -> tuple:
         elif r.status_code == 429:
             # Rate-limit от HH — не считаем permanent error (раньше manager
             # auto-pause'ил account на 429 как на consecutive_errors).
-            retry_after = 0
-            try:
-                retry_after = int(r.headers.get("Retry-After", "0"))
-            except (ValueError, TypeError):
-                pass
-            return "limit", {"retry_after": retry_after}
+            from app.human_pace import respect_retry_after
+            return "limit", {"http_429": True,
+                             "retry_after_seconds": respect_retry_after(r.headers, 0)}
         elif r.status_code >= 500:
             return "unknown", {"http_status": r.status_code}
         else:
@@ -1181,7 +1185,7 @@ def _oauth_touch_resume(acc: dict) -> tuple:
         ensure_mutation_allowed(acc)
         r = HH.post(
             f"https://api.hh.ru/resumes/{resume_hash_quoted}/publish",
-            headers={"User-Agent": _mobile_user_agent(), "Authorization": f"Bearer {token}"},
+            headers=_account_headers(acc, token),
             cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code >= 500:
@@ -1303,7 +1307,6 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         cid = int(str(chat_id).strip())
     except (ValueError, TypeError):
         return False
-    ua = _mobile_user_agent()
     payload = {
         "text": text,
         "idempotency_key": str(_uuid.uuid4()),
@@ -1314,12 +1317,7 @@ def send_chat_message_oauth(acc: dict, chat_id, text: str, is_automated: bool = 
         r = HH.post(
             f"https://api.hh.ru/common/chats/{cid}/messages",
             json=payload,
-            headers={
-                "User-Agent": ua,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-            },
+            headers={**_account_headers(acc, token), "Content-Type": "application/json"},
             cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         log_debug(f"OAuth chat send chat_id={cid}: HTTP {r.status_code} | {r.text[:300]}")
@@ -1389,8 +1387,6 @@ def fetch_negotiations_statistic(acc: dict) -> dict:
     H = _oauth_headers(acc)
     if not H:
         return {}
-    # mobile-endpoint требует x-force-app-access + mobile UA (без них 406)
-    H = {**H, "x-force-app-access": "true", "User-Agent": _mobile_user_agent()}
     try:
         r = HH.get("https://api.hh.ru/negotiations_statistic/mine",
                    headers=H, cookie_jar_key=_token_key(acc) or None, timeout=8)
