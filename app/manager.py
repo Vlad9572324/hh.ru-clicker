@@ -2282,6 +2282,7 @@ class BotManager:
                 "llm_fill_questionnaire": CONFIG.llm_fill_questionnaire,
                 "llm_use_cover_letter": CONFIG.llm_use_cover_letter,
                 "llm_use_resume": CONFIG.llm_use_resume,
+                "llm_applicant_gender": CONFIG.llm_applicant_gender,
                 "llm_use_quick_replies": getattr(CONFIG, "llm_use_quick_replies", True),
                 "hh_ai_letter_first_try": getattr(CONFIG, "hh_ai_letter_first_try", True),
                 "related_vacancies_enabled": getattr(CONFIG, "related_vacancies_enabled", True),
