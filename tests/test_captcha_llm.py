@@ -86,7 +86,8 @@ def test_coordinator(vision, monkeypatch, answer, accepted):
     monkeypatch.setattr(captcha_worker, 'recognize_captcha', recognize)
     monkeypatch.setattr(captcha_worker, 'submit_captcha', submit)
     async def run():
-        bot = Mock(push_challenge=AsyncMock(return_value=True), connected=False)
+        bot = Mock(push_challenge=AsyncMock(return_value=True),
+                   send_message=AsyncMock(return_value=None), connected=False)
         coordinator = captcha_worker.CaptchaCoordinator(manager, bot)
         await coordinator.scan()
         await coordinator.scan()
@@ -95,7 +96,7 @@ def test_coordinator(vision, monkeypatch, answer, accepted):
             assert not captcha.current(acc)
             assert cid not in coordinator.pending
             bot.push_challenge.assert_not_called()
-            bot.send_message.assert_not_called()
+            bot.send_message.assert_awaited_once()
             manager.resume_challenge_account.assert_called_once_with('vision-account')
             assert CONFIG.captcha_llm_solved == 1
         else:

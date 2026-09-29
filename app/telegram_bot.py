@@ -114,8 +114,8 @@ class TelegramCaptchaBot:
                         self.pending[r['message_id']] = challenge_id
                         first_result = first_result or r
                         continue
-                except Exception:
-                    logger.exception('Telegram media update failed; fallback to new photo')
+                except Exception as exc:
+                    logger.info('Telegram media update failed (%s); fallback to new photo', type(exc).__name__)
                     self.pending_chats.pop((str(chat_id), challenge_id), None)
             fields = {'chat_id': chat_id, 'caption': caption,
                       'reply_markup': json.dumps({'force_reply': True})}
@@ -125,8 +125,8 @@ class TelegramCaptchaBot:
                     self.pending_chats[(str(chat_id), challenge_id)] = r['message_id']
                     self.pending[r['message_id']] = challenge_id
                     first_result = first_result or r
-            except Exception:
-                logger.exception('Telegram photo delivery failed')
+            except Exception as exc:
+                logger.warning('Telegram photo delivery failed (%s)', type(exc).__name__)
         return first_result
 
     def forget(self, challenge_id):
@@ -308,11 +308,11 @@ class TelegramCaptchaBot:
                             continue
                         await self.on_message(message.get('text'), message.get('chat', {}).get('id'),
                                               message.get('reply_to_message', {}).get('message_id'))
-                    except Exception:
-                        logger.exception('TG answer processing failed; waiting for another human reply')
+                    except Exception as exc:
+                        logger.warning('TG answer processing failed (%s); waiting for another human reply', type(exc).__name__)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 self.connected = False
-                logger.exception('TG polling or answer processing failed')
+                logger.warning('TG polling failed (%s)', type(exc).__name__)
                 await asyncio.sleep(3)

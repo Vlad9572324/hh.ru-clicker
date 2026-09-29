@@ -56,6 +56,23 @@ def install_status_tracking(bot_manager):
     bot_manager._add_log = tracked
 
 
+def _next_apply_seconds(acc) -> float | None:
+    """Time until this account's next allowed apply, from durable pace storage."""
+    try:
+        from app import human_pace
+        with human_pace._pace_lock:
+            data = human_pace._pace_read()
+        key = human_pace._pace_key(acc)
+        record = data.get(key)
+        if record is None:
+            return 0.0
+        next_at = record.get('next_at') if isinstance(record, dict) else float(record)
+        import time as _t
+        return max(0.0, float(next_at) - _t.time())
+    except Exception:
+        return None
+
+
 def build_status_snapshot(bot_manager) -> dict:
     now = datetime.now(_MSK)
     applied = defaultdict(list)
@@ -73,6 +90,7 @@ def build_status_snapshot(bot_manager) -> dict:
         counts = {k: dict(v) for k, v in events.get('accounts', {}).items()} if events.get('day') == now.date() else {}
     accounts = []
     errors = 0
+    challenge_count = 0
     states = list(bot_manager.account_states) + list(getattr(bot_manager, 'temp_states', {}).values())
     for state in states:
         with getattr(state, '_state_lock', nullcontext()):
@@ -85,7 +103,8 @@ def build_status_snapshot(bot_manager) -> dict:
             limit = min(limits) if limits else 200
             reason = getattr(state, 'paused_reason', None)
             if reason == 'challenge':
-                status = '🚫 challenge'
+                status = '🚫 ждёт капчу'
+                challenge_count += 1
             elif getattr(state, 'limit_exceeded', False) or reason == 'limit' or getattr(state, 'status', '') == 'limit' or today >= limit:
                 status = '🔴 лимит'
             elif CONFIG.automation_paused or getattr(state, 'paused', False) or getattr(state, 'hard_stopped', False) or getattr(state, 'status', 'idle') in ('idle', 'stopped'):
@@ -93,24 +112,58 @@ def build_status_snapshot(bot_manager) -> dict:
             else:
                 status = '🟢 работает'
             vacancy = ' / '.join(filter(None, (getattr(state, 'current_vacancy_title', ''), getattr(state, 'current_vacancy_company', ''))))
+            acc = getattr(state, 'acc', None) or {}
+            next_in = _next_apply_seconds(acc) if status == '🟢 работает' and acc else None
             accounts.append(dict(short=state.short, state=status, applied_today=today,
                                  daily_limit=limit, hourly_rate=float(sum(0 <= (now - stamp).total_seconds() < 3600 for stamp in stamps)),
                                  current_vacancy=vacancy or None, last_error=stats.get('last_error'),
-                                 captcha_count=stats.get('captcha_count', 0)))
+                                 captcha_count=stats.get('captcha_count', 0),
+                                 next_apply_sec=next_in))
             errors += stats.get('errors_today', 0)
-    return {'accounts': accounts, 'totals': {
-        'applied_today': sum(a['applied_today'] for a in accounts),
-        'captcha_today': sum(a['captcha_count'] for a in accounts), 'errors_today': errors}}
+    bot_paused = bool(getattr(bot_manager, 'paused', False) or CONFIG.automation_paused)
+    if bot_paused:
+        header = '⏸ Бот на паузе'
+    elif challenge_count:
+        header = f'🚫 Ждём решения капчи ({challenge_count})'
+    elif any(a['state'] == '🟢 работает' for a in accounts):
+        header = '🟢 Бот работает'
+    else:
+        header = '⏸ Нет активных аккаунтов'
+    return {'accounts': accounts, 'header': header,
+            'bot_paused': bot_paused, 'challenge_count': challenge_count,
+            'totals': {
+                'applied_today': sum(a['applied_today'] for a in accounts),
+                'captcha_today': sum(a['captcha_count'] for a in accounts), 'errors_today': errors}}
+
+
+def _format_eta(seconds) -> str:
+    if seconds is None:
+        return '—'
+    seconds = int(round(seconds))
+    if seconds <= 0:
+        return 'сейчас'
+    if seconds < 60:
+        return f'{seconds}с'
+    if seconds < 3600:
+        return f'{seconds // 60}м {seconds % 60:02d}с'
+    return f'{seconds // 3600}ч {(seconds % 3600) // 60:02d}м'
 
 
 def build_status_html(snapshot, previous_snapshot=None) -> str:
-    lines = [f'📊 <b>Свод</b> ({snapshot.get("interval_min", CONFIG.telegram_status_interval_min)} мин)', '']
+    header = snapshot.get('header', '📊 Свод')
+    lines = [f'<b>{escape(header)}</b>',
+             f'📊 Свод ({snapshot.get("interval_min", CONFIG.telegram_status_interval_min)} мин)',
+             '']
     for account in snapshot['accounts']:
         count, limit = account['applied_today'], account['daily_limit']
         percent = f' ({count / limit:.0%})' if limit else ''
         lines.extend([f'{account["state"]} <b>{escape(str(account["short"]))}</b>',
                       f'⏱ Отклики: {count}/{limit}{percent}',
                       f'🎯 Rate: ~{account["hourly_rate"]:.0f}/час'])
+        if account['state'] == '🟢 работает':
+            lines.append(f'⏭ Следующий отклик: через {_format_eta(account.get("next_apply_sec"))}')
+        elif account['state'] == '🚫 ждёт капчу':
+            lines.append('🔐 Нужна капча — /captcha для ручного решения')
         if account.get('current_vacancy'):
             lines.append(f'🏢 Сейчас: <i>{escape(str(account["current_vacancy"])[:240])}</i>')
         lines.append(f'🤖 Капч за день: {account["captcha_count"]}')

@@ -69,7 +69,7 @@ async def handle_callback(bot_manager, data, chat_id, message_id):
                    f"{sum(a['daily_limit'] for a in accounts)} откликов\n"
                    f"Темп: {sum(a['hourly_rate'] for a in accounts):.0f}/час")
         if data == 'status':
-            summary = ('⏸ Пауза' if bot_manager.paused else '▶ Работает') + '\n' + summary
+            summary = snapshot.get('header', '') + '\n' + summary
         return summary[:200], build_main_menu(bot_manager)
     if data == 'pause_toggle':
         bot_manager.toggle_pause()

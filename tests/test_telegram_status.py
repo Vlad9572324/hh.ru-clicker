@@ -36,7 +36,8 @@ def test_snapshot(manager):
     snapshot = status.build_status_snapshot(manager)
     assert snapshot['accounts'] == [dict(short='Мария', state='🟢 работает',
         applied_today=1, daily_limit=50, hourly_rate=1.0,
-        current_vacancy='Python Developer / Yandex', last_error='Ошибка запроса', captcha_count=1)]
+        current_vacancy='Python Developer / Yandex', last_error='Ошибка запроса',
+        captcha_count=1, next_apply_sec=None)]
     assert snapshot['totals'] == dict(applied_today=1, captcha_today=1, errors_today=1)
 
 
@@ -55,7 +56,7 @@ def test_unchanged(manager):
     assert not status.should_send(snapshot, deepcopy(snapshot))
 
 
-@pytest.mark.parametrize('field,value', [('applied_today', 2), ('state', '🚫 challenge'),
+@pytest.mark.parametrize('field,value', [('applied_today', 2), ('state', '🚫 ждёт капчу'),
                                          ('captcha_count', 1), ('last_error', 'error')])
 def test_changed(manager, field, value):
     previous = status.build_status_snapshot(manager)
@@ -78,7 +79,7 @@ def test_rate_alone_does_not_send(manager):
     assert not status.should_send(previous, current)
 
 
-@pytest.mark.parametrize('reason,expected', [('challenge', '🚫 challenge'), ('limit', '🔴 лимит')])
+@pytest.mark.parametrize('reason,expected', [('challenge', '🚫 ждёт капчу'), ('limit', '🔴 лимит')])
 def test_state_priority(manager, reason, expected):
     manager.account_states[0].paused = True
     manager.account_states[0].paused_reason = reason
