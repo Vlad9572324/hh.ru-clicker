@@ -264,6 +264,7 @@ class CaptchaCoordinator:
 async def captcha_orchestrator(bot_manager):
     """Reconfigure polling on settings changes; cancel and close HTTP on shutdown."""
     bot = None
+    coordinator = None
     signature = None
     try:
         while True:
@@ -271,6 +272,9 @@ async def captcha_orchestrator(bot_manager):
             if current != signature:
                 if bot:
                     await bot.stop()
+                if coordinator is not None:
+                    for item in list(coordinator.pending.values()) + list(getattr(coordinator, 'gui_pending', {}).values()):
+                        CaptchaCoordinator._close_session(item.get('session'))
                 bot = TelegramCaptchaBot()
                 bot_manager.telegram_captcha_bot = bot
                 coordinator = CaptchaCoordinator(bot_manager, bot)

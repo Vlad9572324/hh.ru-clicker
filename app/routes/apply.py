@@ -401,6 +401,15 @@ async def api_apply_check(body: dict):
     if acc is None:
         return {"status": "error", "message": "Неверный аккаунт"}
 
+    # This endpoint really applies: stop before the OAuth autologin round-trips too.
+    guard = acc.get("_mutation_guard")
+    state = bot._get_apply_state(acc_idx)
+    if ((callable(guard) and not guard())
+            or (state is not None and (getattr(state, "limit_exceeded", False)
+                                       or getattr(state, "hard_stopped", False)))):
+        return {"status": "cancelled", "vacancy_id": vid,
+                "message": "Отклики сейчас остановлены (пауза, лимит или капча)"}
+
     custom_letter = body.get("letter", "").strip()
     if custom_letter:
         acc["letter"] = custom_letter

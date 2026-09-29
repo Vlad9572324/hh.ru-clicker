@@ -25,7 +25,6 @@ router = APIRouter()
 
 _PREDICT_URL = "https://api.hh.ru/skills_profile/predictions/recommended_skills/resume"
 _PROFILE_URL = "https://api.hh.ru/career_platform/profile"
-_UA = "ru.hh.android/26.28.1"
 _PROFILE_TIMEOUT = 30
 _PREDICT_TIMEOUT = 60  # ML-предсказание может считаться долго
 
@@ -41,11 +40,8 @@ def _norm(name) -> str:
 
 
 def _headers(token: str) -> dict:
-    return {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": _UA,
-        "x-force-app-access": "true",
-    }
+    from app.hh_mobile_transport import token_headers
+    return token_headers(token)
 
 
 def _extract_names(data) -> list:

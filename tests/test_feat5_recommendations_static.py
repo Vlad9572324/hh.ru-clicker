@@ -18,4 +18,4 @@ def test_recommendations_reads_top_level_state_binding():
 def test_recommendations_asset_cachebuster_is_current():
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
 
-    assert 'features/feat5_recommendations.js?v=2' in html
+    assert 'features/feat5_recommendations.js?v=3' in html

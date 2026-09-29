@@ -64,7 +64,7 @@ def test_live_hr(one_account):
     # Проверяем, что к HH ушли правильные заголовки мобильного клиента.
     req = responses.calls[0].request
     assert req.headers["Authorization"] == "Bearer test-token"
-    assert req.headers["User-Agent"] == "ru.hh.android/26.28.1"
+    assert "(UUID: " in req.headers["User-Agent"] and req.headers["X-Device-Uuid"]  # one device per token
     assert req.headers["x-force-app-access"] == "true"
 
 

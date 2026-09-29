@@ -30,7 +30,6 @@ router = APIRouter()
 _HH_API = "https://api.hh.ru"
 _LOGIN_URL_TMPL = "https://hh.ru/?loginkey={key}"
 _HH_HEADERS_BASE = {
-    "User-Agent": "ru.hh.android/26.28.1",
     "x-force-app-access": "true",
     "Accept": "application/json",
 }
@@ -62,7 +61,8 @@ def _extract_loginkey(payload):
 
 
 def _auth_headers(token: str) -> dict:
-    return {**_HH_HEADERS_BASE, "Authorization": f"Bearer {token}"}
+    from app.hh_mobile_transport import token_headers
+    return {**_HH_HEADERS_BASE, **token_headers(token)}
 
 
 def _fetch_hhid(token: str, cache_key: str):

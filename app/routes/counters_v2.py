@@ -35,7 +35,6 @@ from app.oauth import _obtain_oauth_token
 router = APIRouter()
 
 _HH_API = "https://api.hh.ru"
-_UA = "ru.hh.android/26.28.1"
 _UUID_TTL_SECONDS = 60 * 60  # кэш uuid — 60 минут
 
 # Ключи counters/user, которые отдаём фронту. Отсутствующие/не-числовые → null.
@@ -59,11 +58,8 @@ def _err(status_code: int, error: str) -> JSONResponse:
 
 
 def _headers(token: str) -> dict:
-    return {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": _UA,
-        "x-force-app-access": "true",
-    }
+    from app.hh_mobile_transport import token_headers
+    return token_headers(token)
 
 
 def _cache_key(idx: int, acc: dict) -> str:

@@ -35,12 +35,11 @@ import requests
 import websockets
 
 from app.logging_utils import log_debug
+from app.user_agent import mobile_user_agent
 from app.ws_events import parse_event, WsEvent
 
 __all__ = ["HHWebSocketClient", "WsHandshakeError"]
 
-# User-Agent мобильного APK — протокол воспроизводится один в один.
-_MOBILE_UA = "ru.hh.android/26.28.1"
 
 
 class WsHandshakeError(Exception):
@@ -99,7 +98,7 @@ class HHWebSocketClient:
     ):
         self._access_token = access_token
         # Must match the account's REST fingerprint; see oauth._account_headers.
-        self._user_agent = user_agent or _MOBILE_UA
+        self._user_agent = user_agent or mobile_user_agent()
         self._device_uuid = device_uuid
         self._on_event = on_event
         self._on_disconnect = on_disconnect

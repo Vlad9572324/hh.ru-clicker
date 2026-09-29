@@ -76,6 +76,27 @@ def mobile_headers(acc, token: str | None = None) -> dict:
     }
 
 
+def token_headers(token: str) -> dict:
+    """mobile_headers for the account that owns this OAuth token.
+
+    Dashboard helpers only receive the token; they must still present the
+    owner's device, never a second hardcoded one.
+    """
+    from app.user_agent import login_device_identity
+    with oauth._oauth_lock:
+        owner = next((str(k).split("::", 1)[0] for k, v in oauth._oauth_tokens.items()
+                      if isinstance(v, dict) and v.get("access_token") == token), None)
+    acc = None
+    if owner:
+        try:
+            from app.instances import bot
+            states = list(bot.account_states) + list(bot.temp_states.values())
+            acc = next((st.acc for st in states if str(st.acc.get("resume_hash")) == owner), None)
+        except Exception:
+            acc = None
+    return mobile_headers(acc or {"device_identity": login_device_identity()}, token)
+
+
 def mobile_request(acc: dict, method: str, path: str, *, params=None,
                    json_body=None, form=None, timeout: int = 15):
     """Выполнить запрос к api.hh.ru от имени аккаунта.

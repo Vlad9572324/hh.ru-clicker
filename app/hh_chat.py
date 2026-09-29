@@ -472,6 +472,8 @@ def send_negotiation_message(acc: dict, neg_id: str, text: str, topic_id: str = 
                 if _oauth_neg_send(acc, neg_id, text):
                     return True
                 log_debug(f"OAuth /negotiations send neg={neg_id} → False, пробую /common/chats")
+            except (MutationBlocked, OutcomeUnknown):
+                raise
             except Exception as _e:
                 log_debug(f"OAuth /negotiations send neg={neg_id} exception: {_e}")
             # 2) /common/chats/{chat_id}/messages — fallback (предполагает chat_id == neg_id)

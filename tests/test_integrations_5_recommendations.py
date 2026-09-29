@@ -56,7 +56,7 @@ def test_200_two_offers(one_account, with_token):
         # очищает список calls.
         sent = rsps.calls[0].request
         assert sent.headers["Authorization"] == "Bearer tok123"
-        assert sent.headers["User-Agent"] == "ru.hh.android/26.28.1"
+        assert "(UUID: " in sent.headers["User-Agent"] and sent.headers["X-Device-Uuid"]  # one device per token
         assert sent.headers["x-force-app-access"] == "true"
 
     assert r.status_code == 200

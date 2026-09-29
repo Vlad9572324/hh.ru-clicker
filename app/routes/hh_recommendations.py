@@ -25,7 +25,6 @@ HH_OFFERS_URL = "https://api.hh.ru/vacancies/possible_job_offers"
 # Заголовки мобильного приложения HH — обязательный набор для api.hh.ru
 # (тот же набор, что в прототипе proto_ranking_hr_activity.py).
 _HH_HEADERS = {
-    "User-Agent": "ru.hh.android/26.28.1",
     "x-force-app-access": "true",
 }
 
@@ -36,7 +35,8 @@ def _fetch_offers(token: str):
     Возвращает (status_code, parsed_json_or_None).
     Сетевые ошибки пробрасываются наверх как requests.RequestException.
     """
-    headers = {**_HH_HEADERS, "Authorization": f"Bearer {token}"}
+    from app.hh_mobile_transport import token_headers
+    headers = {**_HH_HEADERS, **token_headers(token)}
     r = requests.get(HH_OFFERS_URL, headers=headers, timeout=20,
                      proxies=egress_proxies())
     if r.status_code != 200:

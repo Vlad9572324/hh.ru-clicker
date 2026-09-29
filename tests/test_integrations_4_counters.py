@@ -83,7 +83,7 @@ def test_counters_v2_happy_path(client):
     req = ctr[0].request
     assert "uuid=USER_ID_EXAMPLE" in req.url
     assert req.headers["Authorization"] == "Bearer test-oauth-token"
-    assert req.headers["User-Agent"] == "ru.hh.android/26.28.1"
+    assert "(UUID: " in req.headers["User-Agent"] and req.headers["X-Device-Uuid"]  # one device per token
     assert req.headers["x-force-app-access"] == "true"
 
 

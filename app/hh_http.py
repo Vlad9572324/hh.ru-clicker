@@ -15,6 +15,7 @@
 from __future__ import annotations
 import json
 import os
+import re
 import threading
 import time
 import urllib.parse
@@ -235,6 +236,11 @@ class HHClient:
                 del evicted
             return entry["cffi"], entry["req"]
 
+    # curl failed before any byte reached HH: resolve/connect/TLS handshake.
+    _PRE_DISPATCH = re.compile(
+        r"curl: \((5|6|7|35)\)|Resolving timed out|Connection timed out"
+        r"|Could not resolve|Failed to connect|unexpected keyword argument")
+
     def request(self, method: str, url: str, **kwargs) -> Any:
         # Extract our own kwargs
         diag_tag = kwargs.pop("_diag_tag", "")
@@ -280,6 +286,11 @@ class HHClient:
                 # иначе cross-account cookie confusion сохраняется).
                 _record_diag(method, url, -1, str(e).encode("utf-8"), {},
                              tag="cffi_error", extra={"exc": str(e)})
+                # A read timeout may mean HH already processed the POST; replaying
+                # it would double-apply or double-send a chat message.
+                if method.upper() not in ("GET", "HEAD", "OPTIONS") and not self._PRE_DISPATCH.search(str(e)):
+                    # requests' type: every caller already maps it to "outcome unknown".
+                    raise _requests.exceptions.ConnectionError(f"outcome unknown: {e}") from e
 
         r = sess_req.request(method, url, **kwargs)
         tag = _classify(r.status_code, r.content or b"", dict(r.headers or {}))

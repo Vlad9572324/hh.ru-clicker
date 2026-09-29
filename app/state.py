@@ -18,7 +18,9 @@ class AccountState:
 
     def __init__(self, acc_data: dict):
         self.acc = acc_data
-        self._last_captcha_at = acc_data.setdefault("_last_captcha_at", 0.0)
+        self._last_captcha_at = max(float(acc_data.get("_last_captcha_at") or 0),
+                                    float(acc_data.get("last_captcha_at") or 0))
+        acc_data["_last_captcha_at"] = self._last_captcha_at
         self._human_burst_count = 0
         self._human_burst_target = 0
         self._human_burst_started = 0.0

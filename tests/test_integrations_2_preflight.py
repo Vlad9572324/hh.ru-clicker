@@ -55,7 +55,7 @@ def test_required_fields_block_and_humanize(client):
     # Запрос к HH: OAuth-заголовок, мобильный UA, правильные query-параметры.
     req = responses.calls[0].request
     assert req.headers["Authorization"] == "Bearer tok123"
-    assert req.headers["User-Agent"] == "ru.hh.android/26.28.1"
+    assert "(UUID: " in req.headers["User-Agent"] and req.headers["X-Device-Uuid"]  # one device per token
     assert req.headers["x-force-app-access"] == "true"
     q = parse_qs(urlparse(req.url).query)
     assert q["vacancy_id"] == ["130334718"]

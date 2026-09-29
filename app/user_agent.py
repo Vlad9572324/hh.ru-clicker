@@ -35,6 +35,22 @@ def generate_device_identity() -> dict[str, str]:
     }
 
 
+def login_device_identity() -> dict[str, str]:
+    """Identity of the global device that performs OTP login and token refresh.
+
+    Accounts created before per-account identities existed were logged in from
+    this device, so reusing it keeps every request of their token on one phone.
+    """
+    import re
+    match = re.match(r"ru\.hh\.android/(?P<ver>[^,]+), Device: (?P<model>[^,]+), "
+                     r"Android OS: (?P<os>\S+) \(UUID: (?P<uuid>[0-9a-fA-F-]{36})\)",
+                     _default_mobile_user_agent())
+    if not match:
+        return generate_device_identity()
+    return {"device_uuid": match["uuid"], "model": match["model"],
+            "android_release": match["os"], "app_version_name": match["ver"]}
+
+
 def ensure_device_identity(acc: dict | None) -> dict | None:
     """Return an account identity, lazily adding one for legacy accounts."""
     if not isinstance(acc, dict):

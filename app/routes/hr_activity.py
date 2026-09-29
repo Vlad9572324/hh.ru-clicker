@@ -64,11 +64,8 @@ def _to_int_or_none(v):
 def _fetch_employer_stats(token: str, vid: str):
     """Блокирующий GET к HH. Возвращает (stats_dict, None) или (None, error_str)."""
     url = f"https://api.hh.ru/vacancies/{vid}/employer_stats"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "ru.hh.android/26.28.1",
-        "x-force-app-access": "true",
-    }
+    from app.hh_mobile_transport import token_headers
+    headers = token_headers(token)
     try:
         r = requests.get(url, headers=headers, timeout=HH_TIMEOUT_SEC,
                          proxies=egress_proxies())

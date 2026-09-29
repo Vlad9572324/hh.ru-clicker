@@ -266,6 +266,7 @@ from app.hh_api import (
 from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, get_llm_status_summary
 
 from app.hh_client_factory import get_client
+from app.user_agent import login_device_identity
 
 from app.hh_chat import (
     _build_thread_from_chat_item, _check_chat_locked,
@@ -400,7 +401,9 @@ class BotManager:
                        ("paused", "paused_reason", "hard_stopped", "limit_exceeded")},
                     "pending_apply": dict(state.pending_apply) if state.pending_apply else None,
                     "pending_applies": [dict(item) for item in state.pending_applies],
-                    "network_recovery": dict(state.network_recovery) if getattr(state, "network_recovery", None) else None}
+                    "network_recovery": dict(state.network_recovery) if getattr(state, "network_recovery", None) else None,
+                    # Post-captcha cooldown/rate cut must survive restarts.
+                    "last_captcha_at": float(getattr(state, "_last_captcha_at", 0) or 0)}
         for state in getattr(self, "account_states", []):
             with state._state_lock:
                 state.acc.update(snapshot(state))
@@ -444,7 +447,8 @@ class BotManager:
         """Explicit user activation cannot override a protective stop."""
         if (state.paused and state.paused_reason == "manual"
                 and not state.pending_applies and not state.hard_stopped
-                and not state.limit_exceeded and not state.cookies_expired):
+                and (not state.limit_exceeded or getattr(state, "_limit_is_throttle", False))
+                and not state.cookies_expired):
             state.paused = False
             state.paused_reason = ""
             state.consecutive_errors = 0
@@ -1017,11 +1021,43 @@ class BotManager:
         self.temp_sessions[:] = fresh
         return len(self.temp_sessions)
 
+    LLM_CHAT_DAILY_REPLY_CAP = 3
+
+    def _chat_sends_today(self, acc_short, neg_id, *, add=False) -> int:
+        """Auto-replies sent to one chat today (MSK); seeded once from llm_log.jsonl."""
+        from zoneinfo import ZoneInfo
+        msk = ZoneInfo("Europe/Moscow")
+        today = _today_msk()
+        lock = self.__dict__.setdefault("_chat_sends_lock", threading.Lock())
+        with lock:
+            if getattr(self, "_chat_sends_day", None) != today:
+                counts = {}
+                try:
+                    with open(LLM_LOG_FILE, encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                e = json.loads(line)
+                                when = datetime.fromisoformat(e["time"]).astimezone(msk)
+                            except (ValueError, KeyError, TypeError):
+                                continue
+                            if e.get("send_ok") is True and when.strftime("%Y-%m-%d") == today:
+                                k = (str(e.get("acc")), str(e.get("neg_id")))
+                                counts[k] = counts.get(k, 0) + 1
+                except OSError:
+                    pass
+                self._chat_sends, self._chat_sends_day = counts, today
+            k = (str(acc_short), str(neg_id))
+            if add:
+                self._chat_sends[k] = self._chat_sends.get(k, 0) + 1
+            return self._chat_sends.get(k, 0)
+
     def _persist_llm_log(self, entry: dict):
         """Append-only JSONL write-through for LLM reply events (async via _schedule_save).
         Сериализуем через _llm_log_write_lock — иначе concurrent appends могут интерливить
         большие JSON-строки (>PIPE_BUF на Linux) и корраптить JSONL (kimi-search-1 #5).
         """
+        if entry.get("send_ok") is True:
+            self._chat_sends_today(entry.get("acc"), entry.get("neg_id"), add=True)
         def _write():
             try:
                 line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
@@ -1125,6 +1161,9 @@ class BotManager:
                 "pending_applies": ts.get("pending_applies"),
                 "network_recovery": ts.get("network_recovery"),
                 "all_resumes": ts.get("all_resumes", []),
+                # Persisted, or every restart would present the token from a new random phone.
+                "device_identity": ts.setdefault("device_identity", login_device_identity()),
+                "last_captcha_at": ts.get("last_captcha_at", 0.0),
             }
             state = AccountState(acc)
             if resume_manual:
@@ -1573,7 +1612,8 @@ class BotManager:
                 resumed = self._resume_manual(state)
                 if (not resumed and state.paused_reason == "auto_errors"
                         and not state.pending_applies and not state.hard_stopped
-                        and not state.limit_exceeded and not state.cookies_expired):
+                        and (not state.limit_exceeded or getattr(state, "_limit_is_throttle", False))
+                        and not state.cookies_expired):
                     state.paused = False
                     state.paused_reason = ""
                     state.consecutive_errors = 0
@@ -2350,6 +2390,13 @@ class BotManager:
                 state.status_detail = "Перезапущен после ошибки"
                 self._add_log(state.short, state.color, "\U0001f504 Worker перезапущен", "info")
 
+    def _worker_sleep(self, state, seconds):
+        """Sleep in 1s slices so stop/delete are honoured (time.sleep keeps test doubles valid)."""
+        for _ in range(int(seconds)):
+            if self._stop_event.is_set() or state._deleted:
+                return
+            time.sleep(1)
+
     def _wait_human_pace(self, state):
         """Reserve a durable slot before sending; cancellation never clears it."""
         while CONFIG.human_mode_enabled:
@@ -2642,6 +2689,8 @@ class BotManager:
                         state.resume_touch_status = "⏳ Не удалось проверить доступность"
 
             # === ПРОВЕРКА ЛИМИТА ===
+            if state.limit_exceeded and self._maybe_roll_daily_counter(state):
+                state._limit_is_throttle = False
             if state.limit_exceeded:
                 # If no reset time set, schedule a check soon
                 if not state.limit_reset_time:
@@ -2656,7 +2705,10 @@ class BotManager:
 
                     with state._state_lock:
                         limit_check_before = self._limit_check_guard(state)
-                    if get_client(acc).check_limit() is False and self._clear_checked_limit(state, limit_check_before):
+                    # A 429 throttle expires by time; check_limit() never proves "not limited".
+                    throttled = getattr(state, "_limit_is_throttle", False)
+                    if (throttled or get_client(acc).check_limit() is False) and self._clear_checked_limit(state, limit_check_before):
+                        state._limit_is_throttle = False
                         self._add_log(
                             state.short, state.color, "✅ Лимит сброшен! Продолжаю работу", "success"
                         )
@@ -2672,7 +2724,7 @@ class BotManager:
                         set_activity(state, "limit_wait", "Лимит ещё не подтверждён как снятый; ожидает проверки",
                             "Проверит доступность откликов после ожидания",
                             wait_until=state.limit_reset_time)
-                        time.sleep(60)
+                        self._worker_sleep(state, 60)
                         continue
                 else:
                     state.status = "limit"
@@ -2681,7 +2733,7 @@ class BotManager:
                     set_activity(state, "limit_wait", "Ожидает запланированной проверки лимита HH",
                         "Проверит доступность откликов, если нет паузы",
                         wait_until=state.limit_reset_time)
-                    time.sleep(30)
+                    self._worker_sleep(state, 30)
                     continue
 
             # === СБОР ВАКАНСИЙ (ПАРАЛЛЕЛЬНО) ===
@@ -2755,7 +2807,7 @@ class BotManager:
                 set_activity(state, "recover_error", "Не удалось завершить сбор вакансий; ожидает повторного цикла",
                     "Повторит поиск, если нет защитной остановки",
                     wait_until=datetime.now(timezone.utc) + timedelta(seconds=60))
-                time.sleep(60)
+                self._worker_sleep(state, 60)
                 continue
 
             all_vacancies = []
@@ -2879,7 +2931,7 @@ class BotManager:
                     "warning",
                 )
                 finish_cycle(state)
-                time.sleep(120)
+                self._worker_sleep(state, 120)
                 continue
 
             # Фильтрация
@@ -3093,7 +3145,7 @@ class BotManager:
                     f"⚠️ Все вакансии уже обработаны ({already_count} откликов, {test_count} тестов), пауза 2 мин",
                     "warning",
                 )
-                time.sleep(120)
+                self._worker_sleep(state, 120)
                 continue
 
             # Hot leads priority: fetch possible_job_offers and put matching vacancies first
@@ -3693,6 +3745,7 @@ class BotManager:
                             wait = max(int(info.get("retry_after_seconds") or 0),
                                        CONFIG.limit_check_interval * 60)
                             state.limit_reset_time = datetime.now() + timedelta(seconds=wait)
+                            state._limit_is_throttle = True
                             state.status = "limit"
                             state.status_detail = f"HH: слишком часто (429). Проверка в {state.limit_reset_time.strftime('%H:%M')}"
                             self._add_log(state.short, state.color,
@@ -3835,8 +3888,10 @@ class BotManager:
                     "Ожидает свежие вакансии: действует резерв откликов" if reserve_wait else "Цикл обработки завершён; ожидает следующего поиска",
                     "Снова загрузит вакансии и проверит новые предложения",
                     wait_until=datetime.now(timezone.utc) + timedelta(seconds=cycle_pause))
+                # Not _can_mutate: a blocked-but-unpaused account (e.g. captcha record)
+                # would skip the wait and re-run the whole search every loop.
                 human_pace.interruptible_wait(self._stop_event, cycle_pause,
-                    lambda: self._can_mutate(state))
+                    lambda: not state._deleted and not state.paused and not self.paused)
 
     def _hh_limit_tracker_worker(self):
         """Каждые 30 мин дёргает GET /negotiations через OAuth, считает реальное
@@ -4501,6 +4556,19 @@ class BotManager:
                         self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] уже отправлено другим аккаунтом, пропуск", "info")
                         state.llm_replied_msgs[key] = None
                         continue
+                from app.hr_rejection import is_stop_request
+                if is_stop_request(employer_msg):
+                    log_debug(f"LLM [{state.short}] {neg_id}: HR просит не писать — автоответ не отправляем")
+                    self._add_log(state.short, state.color,
+                        f"\U0001f916 [{employer_short}] HR просит больше не писать — автоответ отключён, проверьте чат", "warning", neg_id=neg_id)
+                    state.llm_replied_msgs[key] = None
+                    continue
+                if self._chat_sends_today(state.short, neg_id) >= self.LLM_CHAT_DAILY_REPLY_CAP:
+                    log_debug(f"LLM [{state.short}] {neg_id}: дневной лимит автоответов в чате исчерпан")
+                    self._add_log(state.short, state.color,
+                        f"\U0001f916 [{employer_short}] уже {self.LLM_CHAT_DAILY_REPLY_CAP} автоответа сегодня — дальше отвечайте вручную", "warning", neg_id=neg_id)
+                    state.llm_replied_msgs[key] = None
+                    continue
 
                 progress = f"[{i+1}/{min(len(candidates),15)}]"
                 self._add_log(state.short, state.color,
@@ -4960,6 +5028,10 @@ class BotManager:
                 state.llm_pending_chats = max(0, state.llm_pending_chats - 1)
 
         state.llm_replied_count += replied
+        if not replied:
+            # Leftover candidates of a cycle that sent nothing are skip-only chats;
+            # a fast re-cycle would just re-poll /chats every few seconds.
+            state.llm_pending_chats = 0
         if replied:
             state.llm_status = f"✅ {replied} ответов отправлено"
             log_debug(f"LLM auto-reply [{state.short}]: {replied} ответов отправлено")
@@ -5134,7 +5206,7 @@ class BotManager:
             # чтобы дать HH подышать, но не полный 2-минутный wait.
             pending = getattr(state, "llm_pending_chats", 0) or 0
             if pending > 15:
-                if self._stop_event.wait(15):  # короткая пауза между back-to-back
+                if self._stop_event.wait(60):  # короткая пауза между back-to-back
                     return
             else:
                 if self._stop_event.wait(max(CONFIG.llm_check_interval * 60, 120)):

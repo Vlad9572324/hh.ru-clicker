@@ -24,7 +24,6 @@ from app.oauth import _obtain_oauth_token
 router = APIRouter()
 
 HH_API_BASE = "https://api.hh.ru"
-HH_UA = "ru.hh.android/26.28.1"
 
 # Человекочитаемые расшифровки кодов required_additional_data (из прототипа)
 FIELD_RU = {
@@ -67,6 +66,7 @@ def _extract_vacancy_id(raw: str) -> str:
 
 
 def _fetch_data_inconsistency(token: str, vacancy_id: str, resume_id: str):
+    from app.hh_mobile_transport import token_headers
     """Синхронный GET к мобильному API HH. Возвращает (status_code|None, json|text)."""
     try:
         r = requests.get(
@@ -76,11 +76,7 @@ def _fetch_data_inconsistency(token: str, vacancy_id: str, resume_id: str):
                 "resume_id": resume_id,
                 "flow": "vacancy_response",
             },
-            headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": HH_UA,
-                "x-force-app-access": "true",
-            },
+            headers=token_headers(token),
             timeout=15,
             proxies=egress_proxies(),
         )

@@ -320,8 +320,14 @@
     setStatus('🚀 auto-apply: отправляю отклики…', 'info');
 
     var chain = Promise.resolve();
+    var stopped = false;
+    // Human mode paces bulk applies like the worker does; a 0.5s burst invites captcha.
+    var appState = (typeof State !== 'undefined') ? State : window.State;
+    var cfg = appState && appState.lastSnapshot && appState.lastSnapshot.config;
+    var human = !!(cfg && cfg.human_mode_enabled);
     state.offers.forEach(function (off, i) {
       chain = chain.then(function () {
+        if (stopped) return;
         var cell = statusCellFor(off.vacancy_id);
         if (cell) { cell.textContent = '⏳…'; cell.className = 'feat5-apply-status feat5-st-pending'; }
         return fetch('/api/apply/check', {
@@ -336,6 +342,7 @@
           .then(function (res) { return res.json().catch(function () { return {}; }); })
           .then(function (data) {
             var st = (data && data.status) ? data.status : 'error';
+            if (st === 'limit' || st === 'cancelled' || st === 'challenge') stopped = true;
             if (!(st in counts)) st = 'error';
             counts[st] += 1;
             var r = applyStatusRender(data && data.status);
@@ -350,7 +357,7 @@
             done += 1;
             if (progress) progress.textContent = done + '/' + total;
             // пауза между запросами, чтобы не спамить HH
-            if (i < total - 1) return sleep(APPLY_DELAY_MS);
+            if (i < total - 1 && !stopped) return sleep(human ? 15000 + Math.random() * 30000 : APPLY_DELAY_MS);
           });
       });
     });

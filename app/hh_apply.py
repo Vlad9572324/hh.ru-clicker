@@ -397,6 +397,13 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 html = await r.text()
                 status_code = r.status
 
+            from app.captcha import capture
+            try:
+                form_payload = json.loads(html)
+            except ValueError:
+                form_payload = None
+            if capture(acc, status_code, form_payload) is not None:
+                return "challenge", {"error_type": "captcha_required"}
             # Auth check: 401/403/login-page → не считать "test" (валидный отклик),
             # а отдать auth_error чтобы воркер обновил куки/спаузил аккаунт.
             if status_code in (401, 403) or _is_login_page(html):
@@ -535,6 +542,14 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 txt = await r2.text()
 
             log_debug(f"Questionnaire submit {vid}: HTTP {status} location={location}")
+
+            from app.captcha import capture
+            try:
+                challenge_payload = json.loads(txt)
+            except ValueError:
+                challenge_payload = None
+            if capture(acc, status, challenge_payload) is not None:
+                return "challenge", {"error_type": "captcha_required"}
 
             if status in (401, 403) or _is_login_page(txt) or '/account/login' in location:
                 return 'auth_error', {}

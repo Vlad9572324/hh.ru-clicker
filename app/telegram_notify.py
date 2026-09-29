@@ -22,7 +22,16 @@ _MAX_EVENTS = 2000
 
 
 def _credentials() -> tuple[str, str]:
-    """Read credentials from the process environment or ignored local file."""
+    """Read credentials from live config, the process environment or ignored local file."""
+    # Same source as the captcha bot, so a dashboard edit moves both together.
+    try:
+        from app.config import CONFIG
+        token = str(CONFIG.telegram_bot_token or "").strip()
+        chat_id = str(CONFIG.telegram_chat_id or "").strip()
+        if token and chat_id:
+            return token, chat_id
+    except Exception:
+        pass
     token = os.environ.get("HH_TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("HH_TELEGRAM_CHAT_ID", "").strip()
     if token and chat_id:

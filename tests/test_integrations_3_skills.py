@@ -61,7 +61,7 @@ def test_skills_recommend_success_gap(client):
     # Заголовки mobile-клиента + Bearer на predict-запросе.
     predict_call = responses.calls[0]
     assert predict_call.request.headers["Authorization"] == "Bearer test-token"
-    assert predict_call.request.headers["User-Agent"] == "ru.hh.android/26.28.1"
+    assert "(UUID: " in predict_call.request.headers["User-Agent"] and predict_call.request.headers["X-Device-Uuid"]  # one device per token
     assert predict_call.request.headers["x-force-app-access"] == "true"
 
 
