@@ -222,7 +222,7 @@ async def _captcha_image_locked(idx: int):
                                   failurl=url, url=url,
                                   created=time.monotonic(), submitted=False,
                                   fails=0, captcha_key=key, session=session,
-                                  challenge_url=url)
+                                  challenge_url=url, image=image)
     return _Resp(content=image, media_type='image/png',
                  headers={'Cache-Control': 'no-store', 'X-Captcha-Id': cid, 'X-Captcha-Key': key})
 
@@ -288,6 +288,9 @@ async def _captcha_solve_locked(idx: int, request: Request):
         ok, reason = False, 'unconfirmed_transport'
     from app.captcha_journal import record as journal
     journal('solve', state.acc, path='dashboard', ok=ok, reason=reason or None, id=cid)
+    if ok:
+        from app.captcha_journal import save_sample
+        save_sample(item.get('image'), text)
     if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
         return {'ok': False, 'refresh_needed': True,
                 'error': 'Проверка изменилась. Результат старой проверки не используется.'}

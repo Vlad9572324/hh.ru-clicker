@@ -9,6 +9,8 @@ def test_journal_records_and_summarizes(tmp_path, monkeypatch):
     monkeypatch.setattr(captcha_journal, "_applies_around", lambda name, now: (2, 14))
     acc = {"short": "A", "name": "A"}
     captcha_journal.record("challenge", acc, id="c1")
+    captcha_journal.save_sample(b"png-bytes", "Ab 12!")
+    assert [p.name.split("_", 1)[1] for p in (tmp_path / "captcha_samples").glob("*.png")] == ["Ab12.png"]
     captcha_journal.record("solve", acc, path="telegram", ok=True, id="c1")
     captcha_journal.record("solve", acc, path="llm", ok=False, reason="isBot", id="c1")
     lines = [json.loads(l) for l in (tmp_path / "captcha_events.jsonl").read_text().splitlines()]

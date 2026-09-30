@@ -188,7 +188,7 @@ class ManualCaptchaFlow:
                     'reply_markup': json.dumps({'force_reply': True})}, image)
                 token = secrets.token_hex(12)
                 item = self.items[token] = dict(cid=cid, chat=str(chat), mid=photo['message_id'],
-                    session=session, key=key, state=challenge_state, url=url,
+                    session=session, key=key, state=challenge_state, url=url, image=image,
                     success_url=success_url,
                     created=time.monotonic(), status='waiting')
                 # The photo is already usable. Losing this optional help message
@@ -242,6 +242,9 @@ class ManualCaptchaFlow:
                 ok, reason = False, 'unconfirmed_transport'
             from app.captcha_journal import record as journal
             journal('solve', state.acc, path='tg_manual', ok=ok, reason=reason or None, id=item['cid'])
+            if ok:
+                from app.captcha_journal import save_sample
+                save_sample(item.get('image'), text)
             if self.find(item['cid'])[1] is not state:
                 self._retire(token)
                 await self.message(chat, 'Проверка аккаунта изменилась во время отправки. '

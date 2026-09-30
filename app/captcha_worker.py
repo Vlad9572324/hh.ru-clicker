@@ -168,6 +168,7 @@ class CaptchaCoordinator:
             except Exception:
                 pass
         item['captcha_key'] = key
+        item['image'] = image
         item['session'] = session
         try:
             self.manager._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
@@ -212,6 +213,8 @@ class CaptchaCoordinator:
                 submit_captcha, item['session'], text, item['captcha_key'], item['captcha_state'],
                 item['backurl'], item['failurl'])
             captcha_journal.record('solve', acc, path='telegram', ok=ok, reason=reason or None, id=cid)
+            if ok:
+                captcha_journal.save_sample(item.get('image'), text)
             if ok:
                 # HH подтвердил через 302 на backurl → снимаем challenge и
                 # будим worker'а. GUI-panel скроется через syncAccountCard.
