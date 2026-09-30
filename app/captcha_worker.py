@@ -127,7 +127,8 @@ class CaptchaCoordinator:
                         item['backurl'], item['failurl'])
                 except Exception:
                     ok, reason = False, 'exception'
-                captcha_journal.record('solve', acc, path='llm', ok=ok, reason=reason or None, id=cid)
+                captcha_journal.record('solve', acc, path='llm', ok=ok, reason=reason or None, id=cid,
+                                       answer=None if ok else answer)
                 if ok:
                     captcha.clear(acc, cid)
                     CONFIG.captcha_llm_solved += 1

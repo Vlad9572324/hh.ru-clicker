@@ -52,7 +52,7 @@ _SAMPLES_MAX = 500
 def save_sample(image, answer):
     """Keep human-solved captchas (image + accepted answer) to benchmark auto-solvers offline."""
     try:
-        text = "".join(ch for ch in str(answer or "") if ch.isalnum())[:16]
+        text = "-".join("".join(ch for ch in word if ch.isalnum()) for word in str(answer or "").split())[:40]
         if not image or not text:
             return
         folder = storage.DATA_DIR / "captcha_samples"

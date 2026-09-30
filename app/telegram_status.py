@@ -107,9 +107,13 @@ def build_status_snapshot(bot_manager) -> dict:
                 challenge_count += 1
             elif getattr(state, 'limit_exceeded', False) or reason == 'limit' or getattr(state, 'status', '') == 'limit' or today >= limit:
                 status = '🔴 лимит'
-            elif CONFIG.automation_paused or getattr(state, 'paused', False) or getattr(state, 'hard_stopped', False) or getattr(state, 'status', 'idle') in ('idle', 'stopped'):
+            elif CONFIG.automation_paused or getattr(state, 'paused', False) or getattr(state, 'hard_stopped', False):
                 status = '⏸ пауза'
+            elif getattr(state, '_workers', None) is not None and not any(t.is_alive() for t in state._workers):
+                status = '⏹ остановлен'
             else:
+                # "idle" also covers normal waits (post-captcha cooldown, active hours):
+                # the account is running, the detail line says what it waits for.
                 status = '🟢 работает'
             vacancy = ' / '.join(filter(None, (getattr(state, 'current_vacancy_title', ''), getattr(state, 'current_vacancy_company', ''))))
             acc = getattr(state, 'acc', None) or {}
@@ -118,7 +122,8 @@ def build_status_snapshot(bot_manager) -> dict:
                                  daily_limit=limit, hourly_rate=float(sum(0 <= (now - stamp).total_seconds() < 3600 for stamp in stamps)),
                                  current_vacancy=vacancy or None, last_error=stats.get('last_error'),
                                  captcha_count=stats.get('captcha_count', 0),
-                                 next_apply_sec=next_in))
+                                 next_apply_sec=next_in,
+                                 detail=(getattr(state, 'status_detail', '') or None) if status == '🟢 работает' else None))
             errors += stats.get('errors_today', 0)
     bot_paused = bool(getattr(bot_manager, 'paused', False) or CONFIG.automation_paused)
     if bot_paused:
@@ -161,6 +166,8 @@ def build_status_html(snapshot, previous_snapshot=None) -> str:
                       f'⏱ Отклики: {count}/{limit}{percent}',
                       f'🎯 Rate: ~{account["hourly_rate"]:.0f}/час'])
         if account['state'] == '🟢 работает':
+            if account.get('detail'):
+                lines.append(f'⏳ {escape(str(account["detail"])[:160])}')
             lines.append(f'⏭ Следующий отклик: через {_format_eta(account.get("next_apply_sec"))}')
         elif account['state'] == '🚫 ждёт капчу':
             lines.append('🔐 Нужна капча — /captcha для ручного решения')

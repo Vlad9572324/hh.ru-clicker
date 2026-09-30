@@ -37,7 +37,7 @@ def test_snapshot(manager):
     assert snapshot['accounts'] == [dict(short='Мария', state='🟢 работает',
         applied_today=1, daily_limit=50, hourly_rate=1.0,
         current_vacancy='Python Developer / Yandex', last_error='Ошибка запроса',
-        captcha_count=1, next_apply_sec=None)]
+        captcha_count=1, next_apply_sec=None, detail=None)]
     assert snapshot['totals'] == dict(applied_today=1, captcha_today=1, errors_today=1)
 
 
@@ -117,3 +117,12 @@ def test_counters_survive_restart(manager):
     restarted = SimpleNamespace(account_states=manager.account_states, temp_states={}, _add_log=Mock())
     status.install_status_tracking(restarted)
     assert status.build_status_snapshot(restarted)['totals']['captcha_today'] == 1
+
+
+def test_idle_wait_is_running_not_paused(manager):
+    s = manager.account_states[0]
+    s.status, s.status_detail, s.paused = 'idle', 'Пауза после капчи: ещё 14 мин', False
+    snap = status.build_status_snapshot(manager)
+    assert snap['accounts'][0]['state'] == '🟢 работает'
+    assert snap['header'] == '🟢 Бот работает'
+    assert 'Пауза после капчи' in status.build_status_html(snap)
