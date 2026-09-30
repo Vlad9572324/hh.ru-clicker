@@ -3513,7 +3513,13 @@ class BotManager:
                             set_activity(state, "apply", "Отправляет отклик и ожидает ответа HH",
                                 "Учтёт ответ HH; при неизвестном результате остановится для сверки",
                                 progress=(min(i + batch.index(vid), len(filtered)), len(filtered)), operation=(i, vid))
-                            result = _oauth_apply(attempt_accounts[vid], vid, acc.get("letter", ""))
+                            if state.vacancy_meta.get(vid, {}).get("has_test") is True:
+                                # Like the app: a test vacancy opens its questionnaire directly.
+                                # A plain POST first only earns "Must process test first" on
+                                # the very endpoint where HH hands out captchas.
+                                result = ("test", {})
+                            else:
+                                result = _oauth_apply(attempt_accounts[vid], vid, acc.get("letter", ""))
                             results.append(result)
                             if isinstance(result, tuple) and result[0] == 'sent':
                                 state._unaccounted_apply_successes += 1

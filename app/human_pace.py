@@ -1,6 +1,8 @@
-"""Interruptible per-account pacing. Hours use the worker's local timezone."""
+"""Interruptible per-account pacing. Hours are Moscow time: HH and its users live in MSK,
+while the container clock is UTC (07-24 UTC used to mean 10:00-03:00 MSK)."""
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.utils import parsedate_to_datetime
 import random
 import re
@@ -17,6 +19,7 @@ from app.user_agent import webview_user_agent
 
 # Independent generator: never reseed the process-wide random module.
 _rng = random.Random()
+_MSK = ZoneInfo('Europe/Moscow')
 
 # About 42 attempts across the default 17-hour weekday window, before pauses.
 TARGET_APPLIES_PER_HOUR = 2.5
@@ -127,10 +130,17 @@ def warm_up_read_vacancy(acc, vacancy_id) -> None:
     if not jar_key:
         return  # Never put an unidentified account's cookies in a shared jar.
 
+    mobile = acc.get('use_oauth') or str(acc.get('mode') or '').lower() in ('oauth', 'mobile')
+
     def read():
         response = None
         try:
-            if allowed():
+            if allowed() and mobile:
+                # What the Android app does when a vacancy card is opened; a desktop
+                # web page hit from a mobile-only token is a second, mismatched client.
+                from app.hh_mobile_transport import mobile_request
+                mobile_request(acc, 'GET', f'/vacancies/{vacancy_id}', timeout=5)
+            elif allowed():
                 response = HH.get(
                     f'https://hh.ru/vacancy/{vacancy_id}',
                     headers={'User-Agent': webview_user_agent(), 'Accept': 'text/html'},
@@ -212,7 +222,7 @@ def is_active_hour(hours=None, now=None) -> bool:
         start, end = parse_active_hours(CONFIG.human_active_hours if hours is None else hours)
     except (ValueError, TypeError):
         return False  # Invalid runtime configuration must not enable sending.
-    hour = (now or datetime.now()).hour
+    hour = (now or datetime.now(_MSK)).hour
     return start <= hour < end if start < end else hour >= start or hour < end
 
 
@@ -234,7 +244,7 @@ def sleep_until_active_hour(state, stop_event, allowed=lambda: True) -> None:
     while CONFIG.human_mode_enabled and not stop_event.is_set() and not getattr(state, '_deleted', False):
         if getattr(state, 'paused', False) or not allowed():
             return
-        now = datetime.now()
+        now = datetime.now(_MSK)
         if is_active_hour(now=now):
             return
         try:
@@ -243,7 +253,7 @@ def sleep_until_active_hour(state, stop_event, allowed=lambda: True) -> None:
             if next_start <= now:
                 next_start += timedelta(days=1)
             remaining = next_start.timestamp() - now.timestamp()
-            state.status_detail = f'Активное окно с {next_start:%H:%M} (локальное время сервера)'
+            state.status_detail = f'Активное окно с {next_start:%H:%M} (МСК)'
         except (ValueError, TypeError):
             remaining = 60
             state.status_detail = 'Некорректные активные часы: нужен формат HH-HH'
@@ -261,7 +271,7 @@ def adaptive_backoff_multiplier(state) -> float:
 
 
 def weekend_variance() -> float:
-    return 0.7 if datetime.now().weekday() >= 5 else 1.0
+    return 0.7 if datetime.now(_MSK).weekday() >= 5 else 1.0
 
 
 def delay_multiplier(state) -> float:

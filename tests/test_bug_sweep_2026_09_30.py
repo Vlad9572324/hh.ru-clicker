@@ -156,3 +156,44 @@ def test_list_settings_reject_crashing_items():
     assert not v("llm_profiles", None)
     assert not v("url_pool", {"url": "https://hh.ru/x", "pages": ""})
     assert v("url_pool", "https://hh.ru/x") and v("llm_profiles", {"name": "a", "api_key": "k"})
+
+
+def test_active_hours_are_moscow_time(monkeypatch):
+    from datetime import datetime, timezone
+    from app import human_pace as pace
+    seen = {}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            seen["tz"] = tz
+            # 21:30 UTC == 00:30 MSK: outside 07-24 MSK even though 21 is inside 07-24 UTC.
+            return datetime(2026, 9, 30, 21, 30, tzinfo=timezone.utc).astimezone(tz) if tz else datetime(2026, 9, 30, 21, 30)
+    monkeypatch.setattr(pace, "datetime", Clock)
+    monkeypatch.setattr(pace.CONFIG, "human_active_hours", "07-24")
+    assert pace.is_active_hour() is False
+    assert str(seen["tz"]) == "Europe/Moscow"
+
+
+def test_oauth_warm_up_reads_vacancy_like_the_app(monkeypatch):
+    from app import human_pace as pace, hh_mobile_transport
+    calls = []
+    monkeypatch.setattr(pace, "_rng", SimpleNamespace(random=lambda: 0.0, uniform=lambda a, b: 0))
+    monkeypatch.setattr(hh_mobile_transport, "mobile_request", lambda acc, m, path, **k: calls.append((m, path)))
+    web = Mock()
+    monkeypatch.setattr(pace.HH, "get", web)
+    acc = {"user_id": "u", "resume_hash": "r", "use_oauth": True, "_human_wait": lambda s: None}
+    pace.warm_up_read_vacancy(acc, "123")
+    import time as _t
+    for _ in range(50):
+        if calls:
+            break
+        _t.sleep(0.01)
+    assert calls == [("GET", "/vacancies/123")]
+    web.assert_not_called()
+
+
+def test_captcha_solver_presents_android_webview():
+    from app.captcha_solver import _make_session
+    ua = _make_session().headers["User-Agent"]
+    assert "Android" in ua and "; wv)" in ua and "Windows" not in ua

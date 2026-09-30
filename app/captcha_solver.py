@@ -21,8 +21,11 @@ from urllib.parse import parse_qs, urlsplit, urljoin, urlencode
 
 from app.hh_http import egress_proxies
 
-_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-       '(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36')
+# The Android app opens captcha_url in its WebView. A desktop Windows browser
+# solving a captcha issued to a mobile token is a second, mismatched client.
+# Reduced UA format, as modern Chrome/WebView send it.
+_UA = ('Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 '
+       '(KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36')
 
 
 def _make_session():
