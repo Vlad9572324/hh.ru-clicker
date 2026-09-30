@@ -4,7 +4,7 @@ import logging
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from app import captcha
+from app import captcha, captcha_journal
 from app.config import CONFIG
 from app.captcha_llm import recognize_captcha
 from app.captcha_solver import fetch_captcha_image, submit_captcha
@@ -116,11 +116,12 @@ class CaptchaCoordinator:
                 answer = None
             if answer:
                 try:
-                    ok, _ = await asyncio.to_thread(
+                    ok, reason = await asyncio.to_thread(
                         submit_captcha, session, answer, key, item['captcha_state'],
                         item['backurl'], item['failurl'])
                 except Exception:
-                    ok = False
+                    ok, reason = False, 'exception'
+                captcha_journal.record('solve', acc, path='llm', ok=ok, reason=reason or None, id=cid)
                 if ok:
                     captcha.clear(acc, cid)
                     CONFIG.captcha_llm_solved += 1
@@ -210,6 +211,7 @@ class CaptchaCoordinator:
             ok, reason = await asyncio.to_thread(
                 submit_captcha, item['session'], text, item['captcha_key'], item['captcha_state'],
                 item['backurl'], item['failurl'])
+            captcha_journal.record('solve', acc, path='telegram', ok=ok, reason=reason or None, id=cid)
             if ok:
                 # HH подтвердил через 302 на backurl → снимаем challenge и
                 # будим worker'а. GUI-panel скроется через syncAccountCard.

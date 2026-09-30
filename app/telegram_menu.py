@@ -25,6 +25,7 @@ BOT_COMMANDS = [
     {'command': 'start', 'description': 'Подписаться и открыть меню'},
     {'command': 'stop', 'description': 'Отписаться'},
     {'command': 'status', 'description': 'Показать статус бота'},
+    {'command': 'captcha_stats', 'description': 'Журнал капч за неделю'},
     {'command': 'menu', 'description': 'Открыть меню'},
     {'command': 'pause', 'description': 'Приостановить бота'},
     {'command': 'resume', 'description': 'Продолжить бота'},

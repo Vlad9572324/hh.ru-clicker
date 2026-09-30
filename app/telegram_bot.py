@@ -299,6 +299,10 @@ class TelegramCaptchaBot:
         if command == '/captcha':
             await self.manual_flow().menu(cid_s)
             return
+        if command == '/captcha_stats':
+            from app.captcha_journal import summary_text
+            await self._call('sendMessage', {'chat_id': cid_s, 'text': summary_text(7)})
+            return
         if command in ('/menu', '/status', '/pause', '/resume'):
             from app import telegram_menu
             from app.instances import bot as _bot_manager

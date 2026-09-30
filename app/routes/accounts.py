@@ -286,6 +286,8 @@ async def _captcha_solve_locked(idx: int, request: Request):
             raise
     except Exception:
         ok, reason = False, 'unconfirmed_transport'
+    from app.captcha_journal import record as journal
+    journal('solve', state.acc, path='dashboard', ok=ok, reason=reason or None, id=cid)
     if getattr(state, '_deleted', False) or captcha.current(state.acc).get('id') != cid:
         return {'ok': False, 'refresh_needed': True,
                 'error': 'Проверка изменилась. Результат старой проверки не используется.'}
@@ -304,6 +306,12 @@ async def _captcha_solve_locked(idx: int, request: Request):
                'Ошибка связи с HH. Результат не подтверждён.')
     return {'ok': False, 'error': message + ' Пауза сохранена.',
             'refresh_needed': reason != 'http_429'}
+
+
+@router.get('/api/captcha/journal')
+async def api_captcha_journal(days: int = 7):
+    from app.captcha_journal import summary
+    return summary(max(1, min(days, 60)))
 
 
 @router.post('/api/account/{idx}/captcha/refresh')
@@ -382,6 +390,8 @@ async def api_account_captcha_continue(idx: int, request: Request):
         return {'ok': False, 'error': 'Ошибка сохранения. Отправки остаются остановленными.'}
     finally:
         state._auth_recovery_pending = False
+    from app.captcha_journal import record as journal
+    journal('resume', state.acc, path='confirm', id=record.get('id'))
     try:
         tg = getattr(bot, 'telegram_captcha_bot', None)
         if tg is not None:

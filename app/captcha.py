@@ -92,8 +92,11 @@ def hold(acc, details):
                          'captcha_url': safe_url(details.get('captcha_url')),
                          'fallback_url': safe_url(details.get('fallback_url'))}
         _atomic_write_json(PATH, data)
+        challenge_id = data[key]['id']
     # UI лог: показать что HH запросил капчу для этого аккаунта (только на первый).
     if new_challenge:
+        from app.captcha_journal import record
+        record('challenge', acc, id=challenge_id, has_url=bool(safe_url(details.get('captcha_url'))))
         try:
             from app.instances import bot as _bot
             _bot._add_log(acc.get('short', ''), acc.get('color', 'yellow'),

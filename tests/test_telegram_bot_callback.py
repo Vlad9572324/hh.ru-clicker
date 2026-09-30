@@ -135,7 +135,7 @@ def test_start_menu_and_registration(bot, monkeypatch):
     assert 'reply_markup' in calls[1].args[1] and 'reply_markup' in calls[2].args[1]
     assert calls[3].args[0] == 'setMyCommands'
     commands = json.loads(calls[3].args[1]['commands'])
-    assert len(commands) == 7
+    assert len(commands) == 8
     assert any(command['command'] == 'captcha' for command in commands)
 
 

@@ -240,6 +240,8 @@ class ManualCaptchaFlow:
                         item['session'], item['url'], item['success_url'])
             except Exception:
                 ok, reason = False, 'unconfirmed_transport'
+            from app.captcha_journal import record as journal
+            journal('solve', state.acc, path='tg_manual', ok=ok, reason=reason or None, id=item['cid'])
             if self.find(item['cid'])[1] is not state:
                 self._retire(token)
                 await self.message(chat, 'Проверка аккаунта изменилась во время отправки. '
