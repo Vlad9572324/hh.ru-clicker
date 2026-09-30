@@ -4021,6 +4021,10 @@ function buildCardHTML(acc) {
       <button class="btn-sm" id="acc-auth-check-btn-${acc.idx}" onclick="recheckAccountAuth(${acc.idx})">Проверить вход и продолжить</button>
       <div id="acc-auth-check-result-${acc.idx}" role="status"></div>
     </div>
+    <div class="acc-protective" id="acc-protective-${acc.idx}" hidden style="margin:7px 0">
+      <button class="btn-sm" id="acc-protective-btn-${acc.idx}" onclick="confirmProtectiveResume(${acc.idx})">Проверил в HH — продолжить</button>
+      <div id="acc-protective-result-${acc.idx}" role="status" style="font-size:11px;margin-top:5px"></div>
+    </div>
     <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
       <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — введите капчу HH</div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
@@ -4724,6 +4728,47 @@ function renderAuthCheck(acc) {
   if (result) result.textContent = blocked || entry?.message || '';
 }
 
+// Pauses with no automatic exit: an explicit human confirmation lifts them.
+function protectiveResumeReason(acc) {
+  if (!acc?.paused) return '';
+  const r = acc.paused_reason;
+  if (r === 'hh_rate_limit' || r === 'message_outcome_unknown') return r;
+  if (r === 'challenge' && acc.captcha_record === false) return r;
+  return '';
+}
+
+function renderProtectiveResume(acc) {
+  const region = document.getElementById('acc-protective-' + acc.idx);
+  if (!region) return;
+  const reason = protectiveResumeReason(acc);
+  region.hidden = !reason;
+  const button = document.getElementById('acc-protective-btn-' + acc.idx);
+  if (button) {
+    button.title = reason === 'message_outcome_unknown'
+      ? 'Откройте чат в HH и убедитесь, что сообщение не нужно отправлять повторно'
+      : 'Убедитесь в HH, что ограничение снято';
+  }
+}
+
+async function confirmProtectiveResume(idx) {
+  const acc = State.lastSnapshot?.accounts?.find(a => a.idx === idx);
+  const reason = protectiveResumeReason(acc);
+  if (!reason) return;
+  const hint = reason === 'message_outcome_unknown'
+    ? 'Вы проверили чат в HH и сообщение не нужно отправлять повторно?'
+    : 'Вы проверили в HH, что ограничение снято?';
+  if (!confirm(hint)) return;
+  const result = document.getElementById('acc-protective-result-' + idx);
+  try {
+    const r = await fetch(`/api/account/${idx}/protective/continue`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({confirmed: true, reason})});
+    const d = await r.json();
+    if (result) result.textContent = (d.ok ? d.message : d.error) || '';
+  } catch (_) {
+    if (result) result.textContent = 'Не удалось связаться с панелью.';
+  }
+}
+
 async function recheckAccountAuth(idx) {
   const acc = State.lastSnapshot?.accounts?.find(a => a.idx === idx);
   if (!acc || !accountNeedsAuthCheck(acc)) return false;
@@ -5046,6 +5091,7 @@ function updateCard(card, acc) {
   }
   renderApplicationCheck(acc);
   renderAuthCheck(acc);
+  renderProtectiveResume(acc);
 
   // Meta
   const meta = document.getElementById('acc-meta-' + acc.idx);

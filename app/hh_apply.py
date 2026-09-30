@@ -436,7 +436,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                 llm_ans = await _aio2.get_event_loop().run_in_executor(
                     None,
                     lambda: generate_llm_questionnaire_answers(
-                        rich_qs, vacancy_title, company, resume_text=resume_text, account_key=f"questionnaire:{vid}"
+                        rich_qs, vacancy_title, company, resume_text=resume_text, account_key=f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}"
                     ),
                 )
                 if llm_ans:
@@ -491,7 +491,7 @@ async def fill_and_submit_questionnaire(acc: dict, vid: str,
                         field_answers[f] = validated_ans[f]
                     log_debug(f"Questionnaire {vid}: LLM заполнил {len(overridden)}/{len(field_answers)} полей: {overridden}")
                 else:
-                    llm_status = get_llm_last_status(f"questionnaire:{vid}", "questionnaire")
+                    llm_status = get_llm_last_status(f"questionnaire:{acc.get('resume_hash') or acc.get('short') or vid}", "questionnaire")
                     provider = llm_status.get("provider") or "unknown"
                     status = llm_status.get("status") or "empty"
                     if provider == "openclaw" and status == "timeout":

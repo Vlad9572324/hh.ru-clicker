@@ -283,6 +283,14 @@ async def api_reconcile_application(idx: int):
             clear_check()
 
 
+@router.post("/api/account/{idx}/protective/continue")
+async def api_account_protective_continue(idx: int, body: dict):
+    if not isinstance(body, dict) or body.get("confirmed") is not True or not isinstance(body.get("reason"), str):
+        return {"ok": False, "error": "Подтвердите, что проверили состояние в HH"}
+    ok, message = await asyncio.to_thread(bot.confirm_protective_resume, idx, body["reason"])
+    return {"ok": ok, ("message" if ok else "error"): message}
+
+
 @router.post("/api/account/{idx}/recheck-auth")
 async def api_recheck_auth(idx: int):
     """Fresh OAuth + WebView GET proof, followed by a guarded local resume.

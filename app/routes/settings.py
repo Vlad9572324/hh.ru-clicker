@@ -11,7 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.config import CONFIG, accounts_data, _CONFIG_KEYS, save_config, save_accounts
+from app.config import CONFIG, accounts_data, _CONFIG_KEYS, save_config, save_accounts, valid_list_item
 from app.storage import load_browser_sessions, save_browser_sessions, DATA_DIR
 from app.logging_utils import log_debug
 
@@ -145,6 +145,9 @@ async def api_raw_config_set(request: Request, force: int = 0):
             if not isinstance(value, list):
                 errors[key] = "expected list"
                 continue
+            if not all(valid_list_item(key, item) for item in value):
+                errors[key] = "invalid list item"
+                continue
             current = getattr(CONFIG, key, None) or []
             if not force and not value and current:
                 preserved.append(key)
@@ -172,7 +175,9 @@ async def api_raw_accounts_get():
     """Вернуть accounts без значений cookies (только ключи)."""
     safe = []
     for acc in accounts_data:
-        a = {k: v for k, v in acc.items() if k != "cookies"}
+        # accounts_data holds live state.acc dicts: skip runtime/private keys
+        # (lambdas, locks, raw cookie lines).
+        a = {k: v for k, v in acc.items() if k != "cookies" and not str(k).startswith("_")}
         a["cookies"] = {k: "***" for k in acc.get("cookies", {})}
         safe.append(a)
     return safe
@@ -257,7 +262,7 @@ async def api_raw_accounts_set(request: Request):
             # Держим state._state_lock на всю последовательность (kimi-r14-1 #5).
             with state._state_lock:
                 cookies_lock = state.acc.get("_cookies_lock")
-                keep_keys = set(new_acc.keys()) | {"_cookies_lock"}
+                keep_keys = set(new_acc.keys()) | {k for k in state.acc if str(k).startswith("_")}
                 for k in list(state.acc.keys()):
                     if k not in keep_keys:
                         state.acc.pop(k, None)
@@ -368,6 +373,8 @@ def _backup_payload_error(name, payload):
         for key, value in payload.items():
             if key in _RAW_LIST_KEYS and not isinstance(value, list):
                 return f"Поле {key} должно быть массивом"
+            if key in _RAW_LIST_KEYS and not all(valid_list_item(key, item) for item in value):
+                return f"Неверный элемент в {key}"
             if key == "mobile_auth" and not isinstance(value, dict):
                 return "Поле mobile_auth должно быть объектом"
             if key in _RAW_LLM_KEYS | _RAW_EXTRA_KEYS | set(_CONFIG_KEYS):
@@ -442,6 +449,8 @@ async def api_backup_restore(request: Request, force: int = 0):
         _load_config()
         _load_accounts()
         _bot.temp_sessions[:] = load_browser_sessions()
+        from app.oauth import reload_oauth_tokens_from_disk
+        reload_oauth_tokens_from_disk()
     except Exception as e:
         log_debug(f"backup restore: live-reload error: {e}")
 
@@ -450,7 +459,9 @@ async def api_backup_restore(request: Request, force: int = 0):
         "restored": restored,
         "preserved": preserved_all,
         "errors": errors,
-        "warning": "Аккаунты/cookies применены. Для новых аккаунтов нужен перезапуск бота.",
+        # Workers/states are not rebuilt here; editing accounts before a restart
+        # would index into the restored list with stale states.
+        "warning": "Файлы восстановлены. Перезапустите бота — до перезапуска аккаунты остановлены, не редактируйте их.",
     }
 
 
@@ -483,7 +494,7 @@ async def api_backup_wipe():
         _defaults = _ConfigCls()
         _SENSITIVE = (
             "llm_api_key", "llm_base_url", "llm_model", "llm_profiles",
-            "llm_system_prompt", "hh_proxy_url",
+            "llm_system_prompt", "hh_proxy_url", "telegram_bot_token", "telegram_chat_id",
         )
         for _f in _SENSITIVE:
             if hasattr(_defaults, _f):
@@ -491,6 +502,8 @@ async def api_backup_wipe():
         _CONFIG.llm_enabled = False
         _CONFIG.llm_auto_send = False
         _save_config()  # запишем чистый файл
+        from app.oauth import reload_oauth_tokens_from_disk
+        reload_oauth_tokens_from_disk(clear=True)
     except Exception as e:
         log_debug(f"backup wipe: in-memory clear error: {e}")
     return {

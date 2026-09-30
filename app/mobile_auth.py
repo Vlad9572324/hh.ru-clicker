@@ -624,6 +624,13 @@ def upsert_browser_sessions(cookies: dict[str, str], me: dict, resumes: list[dic
                     known[str(old.get("hash"))] = old
             existing.update({"user_id": user_id, "cookies": dict(cookies), "all_resumes": list(known.values()),
                              "use_oauth": True, "mode": "mobile"})
+            # The running worker holds its own acc dict built at activation.
+            live_idx = next((i for i, s in enumerate(sessions) if s is existing), None)
+            live = bot.temp_states.get(live_idx) if live_idx is not None else None
+            if live is not None:
+                with live._state_lock:
+                    live.acc["cookies"] = dict(cookies)
+                    live.acc["user_id"] = user_id
             if not isinstance(existing.get("device_identity"), dict):
                 existing["device_identity"] = generate_device_identity()
             if not active:

@@ -130,6 +130,9 @@ def _is_403_auth_related(r) -> bool:
         return False
 
 
+_refresh_failed_until: dict = {}
+
+
 def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
     """Удалить кэшированный токен (на 401/403 от API). После вызова следующий
     `_obtain_oauth_token` сделает свежий refresh или authorize.
@@ -140,20 +143,31 @@ def invalidate_oauth_token(resume_hash: str, acc: dict = None) -> None:
     if not resume_hash:
         return
     removed = False
+
+    def expire(key):
+        # Keep refresh_token: a rejected access token is recoverable by refresh;
+        # deleting the family forced a fresh login whenever cookies were dead.
+        rec = _oauth_tokens.get(key)
+        if isinstance(rec, dict) and rec.get("refresh_token"):
+            rec["expires_at"] = 0
+            rec["_expires_monotonic"] = 0
+        else:
+            _oauth_tokens.pop(key, None)
+
     with _oauth_lock:
         if resume_hash in _oauth_tokens:
-            _oauth_tokens.pop(resume_hash, None)
+            expire(resume_hash)
             removed = True
         if acc:
             comp = _token_key(acc)
             if comp in _oauth_tokens:
-                _oauth_tokens.pop(comp, None)
+                expire(comp)
                 removed = True
         else:
             prefix = f"{resume_hash}::"
             for k in list(_oauth_tokens.keys()):
                 if k.startswith(prefix):
-                    _oauth_tokens.pop(k, None)
+                    expire(k)
                     removed = True
     if removed:
         _save_oauth_tokens()
@@ -176,6 +190,19 @@ def _load_oauth_tokens():
             log_debug(f"OAuth: loaded {len(_oauth_tokens)} tokens from disk")
     except (OSError, ValueError) as e:
         log_debug(f"OAuth: failed to load tokens: {e}")
+
+
+def reload_oauth_tokens_from_disk(*, clear: bool = False) -> None:
+    """Backup restore/wipe replace the file; memory must follow, or the next
+    refresh/save writes the old token family back to disk."""
+    global _oauth_tokens
+    with _oauth_lock:
+        if clear:
+            _oauth_tokens = {}
+        else:
+            _load_oauth_tokens()
+    if clear:
+        _save_oauth_tokens()
 
 
 def _save_oauth_tokens() -> bool:
@@ -273,6 +300,11 @@ def import_mobile_tokens(tokens: dict, resumes: list[dict], me: dict | None = No
     with _oauth_lock:
         for key in keys:
             _oauth_tokens[key] = dict(clean)
+            # A running worker reads the composite record first; a stale one
+            # would shadow the freshly imported family after a re-login.
+            for existing in list(_oauth_tokens):
+                if existing.startswith(f"{key}::"):
+                    _oauth_tokens[existing] = dict(clean)
     # Save outside _oauth_lock: _save_oauth_tokens takes the same lock for its snapshot.
     if not _save_oauth_tokens():
         raise MobileAuthError(
@@ -481,13 +513,20 @@ def _obtain_oauth_token(acc: dict) -> str:
 
         ua = _mobile_user_agent()
 
-        # Try refresh first
+        # Try refresh first (not again within 10 min of a failure: every API call
+        # lands here once the access token is expired).
+        family = _refresh_lock_key(cached, resume_hash)
+        if refresh and time.time() < _refresh_failed_until.get(family, 0):
+            refresh = ""
         if refresh:
             refresh_id, refresh_secret, refresh_ua = _refresh_identity(cached, ua)
             token_data = _do_refresh(refresh, refresh_id, refresh_secret, refresh_ua, resume_hash)
             if token_data is None and cached.get("source") != "mobile_otp" and _HH_OAUTH_CLIENT_ID_2 and _HH_OAUTH_CLIENT_SECRET_2:
                 token_data = _do_refresh(refresh, _HH_OAUTH_CLIENT_ID_2, _HH_OAUTH_CLIENT_SECRET_2, ua, resume_hash)
+            if not token_data:
+                _refresh_failed_until[family] = time.time() + 600
             if token_data:
+                _refresh_failed_until.pop(family, None)
                 access_token = token_data["access_token"]
                 new_refresh = token_data["refresh_token"]
                 expires_in = token_data["expires_in"]

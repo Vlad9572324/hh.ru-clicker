@@ -19,7 +19,7 @@ from app.config import accounts_data, save_accounts, hh_base
 from app.storage import save_browser_sessions
 from app.oauth import (
     _obtain_oauth_token, _oauth_touch_resume,
-    _oauth_tokens, _oauth_lock,
+    _oauth_tokens, _oauth_lock, _token_key,
 )
 from app.llm import generate_llm_questionnaire_answers
 from app.questionnaire import get_questionnaire_answer, _parse_questionnaire_rich
@@ -1004,7 +1004,7 @@ async def api_test_llm_questionnaire(idx: int, vacancy_id: str = ""):
         r = HH.get(
             f"{hh_base()}/applicant/vacancy_response?vacancyId={vacancy_id}&withoutTest=no",
             headers={"User-Agent": ua, "Accept": "text/html"},
-            cookies=acc.get("cookies", {}), timeout=15)
+            cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None, timeout=15)
         rich = _parse_questionnaire_rich(r.text)
         resume_data = get_client(acc).fetch_resume() if CONFIG.llm_use_resume else {}
         resume_text = (resume_data.get("text", "") if isinstance(resume_data, dict)
@@ -1105,7 +1105,7 @@ async def api_hot_leads(idx: int):
                 "X-Xsrftoken": acc.get("cookies", {}).get("_xsrf", ""),
                 "Referer": hh_base() + "/applicant/negotiations",
             },
-            cookies=acc.get("cookies", {}), timeout=15,
+            cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code != 200:
             return {"offers": [], "error": f"HTTP {r.status_code}"}
@@ -1136,7 +1136,7 @@ async def api_remindable(idx: int):
         r = HH.get(
             hh_base() + "/applicant/negotiations",
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml"},
-            cookies=acc.get("cookies", {}), timeout=15,
+            cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code != 200 or _is_login_page(r.text):
             return {"error": "auth_error", "remindable": []}
@@ -1197,7 +1197,7 @@ async def api_clone_resume(idx: int, request: Request):
                 "Origin": "https://hh.ru",
                 "Referer": hh_base() + "/applicant/resumes",
             },
-            cookies=acc.get("cookies", {}),
+            cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None,
             data=f"resume={resume_hash}&_xsrf={xsrf}",
             timeout=15,
         )
@@ -1214,7 +1214,7 @@ async def api_clone_resume(idx: int, request: Request):
             ua = webview_user_agent()
             r_orig = HH.get(f"{hh_base()}/resume/{resume_hash}",
                 headers={"User-Agent": ua, "Accept": "text/html"},
-                cookies=acc.get("cookies", {}), timeout=15)
+                cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None, timeout=15)
             orig_data = {}
             m_ssr = re.search(r'<template[^>]*id="HH-Lux-InitialState"[^>]*>([\s\S]*?)</template>', r_orig.text)
             if m_ssr:
@@ -1315,7 +1315,7 @@ async def api_all_resumes(idx: int):
         r = HH.get(
             hh_base() + "/applicant/resumes",
             headers={"User-Agent": ua, "Accept": "text/html", "Referer": hh_base() + "/"},
-            cookies=acc.get("cookies", {}), timeout=15,
+            cookies=acc.get("cookies", {}), cookie_jar_key=_token_key(acc) or None, timeout=15,
         )
         if r.status_code in (401, 403) or _is_login_page(r.text):
             return {"resumes": [], "error": "auth_error"}

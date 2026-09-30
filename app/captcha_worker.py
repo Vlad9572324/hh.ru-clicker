@@ -71,6 +71,11 @@ class CaptchaCoordinator:
                 query = parse_qs(urlsplit(captcha.browser_url(record)).query)
                 if not query.get('state'):
                     await self.bot.send_message('Капчу HH нужно решить вручную: ' + captcha.browser_url(record))
+                    try:
+                        await self.bot.send_browser_option(
+                            cid, acc.get('short') or acc.get('name') or 'HH', captcha.browser_url(record))
+                    except Exception:
+                        pass
                     self._seen.add(cid)
                     continue
                 item = dict(acc_key=key, captcha_state=query['state'][0],

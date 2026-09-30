@@ -277,6 +277,23 @@ def _url_entry(item) -> dict:
     return {"url": item.get("url", "").strip(), "pages": int(item.get("pages", CONFIG.pages_per_url))}
 
 
+def valid_list_item(key: str, item) -> bool:
+    """Element check for list settings whose bad items crash snapshot/collection."""
+    if key == "llm_profiles":
+        return isinstance(item, dict) and all(
+            isinstance(item.get(f), str) for f in ("name", "api_key", "base_url", "model") if f in item)
+    if key == "url_pool":
+        if isinstance(item, str):
+            return True
+        try:
+            return isinstance(item, dict) and isinstance(item.get("url", ""), str) and int(item.get("pages", 1)) >= 1
+        except (TypeError, ValueError):
+            return False
+    if key in ("allowed_schedules", "title_include_keywords", "title_exclude_keywords"):
+        return isinstance(item, str)
+    return True
+
+
 def _url_pages_map() -> dict:
     """Возвращает {url_str: pages} из CONFIG.url_pool."""
     global _url_pages_map_cache
@@ -457,7 +474,7 @@ def load_config():
         if "letter_templates" in data and isinstance(data["letter_templates"], list):
             CONFIG.letter_templates = data["letter_templates"]
         if "url_pool" in data and isinstance(data["url_pool"], list):
-            CONFIG.url_pool = data["url_pool"]
+            CONFIG.url_pool = [u for u in data["url_pool"] if valid_list_item("url_pool", u)]
             # load_config вызывается при старте уже после импортов. Не оставляем
             # map, построенный ранее из class defaults/старого значения.
             _url_pages_map_cache = None
@@ -491,7 +508,7 @@ def load_config():
             # Мусорное значение → "web" (не "auto": с Phase 2 auto сможет выбирать mobile).
             CONFIG.default_client_mode = _mode if _mode in ("web", "mobile", "oauth", "auto") else "web"
         if "llm_profiles" in data and isinstance(data["llm_profiles"], list):
-            CONFIG.llm_profiles = data["llm_profiles"]
+            CONFIG.llm_profiles = [p for p in data["llm_profiles"] if valid_list_item("llm_profiles", p)]
         if "llm_profile_mode" in data and isinstance(data["llm_profile_mode"], str):
             CONFIG.llm_profile_mode = data["llm_profile_mode"]
         if "llm_openclaw_enabled" in data:

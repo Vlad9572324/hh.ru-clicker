@@ -229,6 +229,7 @@ def test_attempt_guard_rechecks_remote_it_scope_after_setting_changes(pipeline, 
     env = execute([assignment, guard_loop], dict(vars(module), self=bot, state=state,
                   batch=['v'], acc=state.acc))
     guard = env['attempt_accounts']['v']['_mutation_guard']
+    monkeypatch.setattr(module.human_pace, 'is_active_hour', lambda *a, **k: True)  # not wall-clock dependent
     monkeypatch.setattr(module.CONFIG, 'remote_it_only', False)
     assert guard()
     monkeypatch.setattr(module.CONFIG, 'remote_it_only', True)

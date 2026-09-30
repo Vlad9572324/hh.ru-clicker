@@ -246,6 +246,14 @@ class AccountState:
         if self.pending_applies or acc_data.get("paused_reason") == "outcome_unknown":
             self.paused = True
             self.paused_reason = "outcome_unknown"
+        # A limit stop persisted on an earlier MSK day: the midnight rollover
+        # never fires for it because daily_date starts as today.
+        if acc_data.get("pause_date") and acc_data.get("pause_date") != self.daily_date:
+            self.hard_stopped = False
+            self.limit_exceeded = False
+            if self.paused and self.paused_reason == "limit" and not self.pending_applies:
+                self.paused = False
+                self.paused_reason = ""
         # Restored pauses have no known start time unless the pending receipt
         # carries one. A later real transition is timestamped by note_pause.
         self._activity_pause_key = (self.paused, self.paused_reason, self.hard_stopped, self.limit_exceeded)

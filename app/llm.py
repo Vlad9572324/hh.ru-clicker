@@ -59,42 +59,6 @@ _INVALID_REPLY_PATTERNS = (
     r"от\s+имени\s+соискателя",
 )
 
-_QUESTION_MARKERS = (
-    "?",
-    "когда",
-    "котор",
-    "как",
-    "какой",
-    "какая",
-    "какие",
-    "почему",
-    "where",
-    "when",
-    "what",
-    "which",
-    "why",
-    "how",
-)
-
-_ANSWER_MARKERS = (
-    "спасибо",
-    "готов",
-    "готова",
-    "интерес",
-    "удобно",
-    "смогу",
-    "нахожусь",
-    "опыт",
-    "thank",
-    "ready",
-    "available",
-    "interested",
-    "experience",
-    "can ",
-    "i am",
-    "i have",
-)
-
 _OPENCLAW_PROMPT_MAX_CHARS = 12000
 _OPENCLAW_SYSTEM_MAX_CHARS = 2400
 _OPENCLAW_MESSAGE_MAX_CHARS = 900
@@ -293,7 +257,7 @@ def _looks_like_invalid_reply(text: str) -> bool:
 
 def _looks_like_direct_answer(conversation: list, text: str) -> bool:
     reply = re.sub(r"\s+", " ", (text or "").strip().lower())
-    if len(reply) < 12:
+    if len(reply) < 2:
         return False
     last_employer = ""
     for msg in reversed(conversation or []):
@@ -302,9 +266,6 @@ def _looks_like_direct_answer(conversation: list, text: str) -> bool:
             break
     if not last_employer:
         return True
-    asks_question = any(marker in last_employer for marker in _QUESTION_MARKERS)
-    if asks_question and not any(marker in reply for marker in _ANSWER_MARKERS):
-        return False
     if "резюме" in reply and "резюме" not in last_employer:
         return False
     if "сообщени" in reply and "сообщени" not in last_employer:

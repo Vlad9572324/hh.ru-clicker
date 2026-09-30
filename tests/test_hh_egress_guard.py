@@ -230,6 +230,8 @@ def _patch_hh_transport(monkeypatch, response=None) -> _RecordingSession:
     rec = _RecordingSession(response=response)
     monkeypatch.setattr(HH, "_session_cffi", rec)
     monkeypatch.setattr(HH, "_session_req", rec)
+    # Account-bound calls use per-account jars (cookie_jar_key) — record those too.
+    monkeypatch.setattr(HH, "_get_session", lambda key=None: (rec, rec))
     return rec
 
 

@@ -88,3 +88,71 @@ def test_manual_resume_allowed_during_429_throttle():
     assert manager_mod.BotManager._resume_manual(state)
     state.paused, state.paused_reason, state._limit_is_throttle = True, "manual", False
     assert not manager_mod.BotManager._resume_manual(state)
+
+
+def _state(**kw):
+    import threading
+    base = dict(paused=True, paused_reason="hh_rate_limit", pending_apply=None, pending_applies=[],
+                hard_stopped=False, cookies_expired=False, limit_exceeded=False, _deleted=False,
+                consecutive_errors=3, acc={"user_id": "u1"}, short="A", color="c",
+                _state_lock=threading.RLock(), status="", status_detail="")
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize("reason", ["hh_rate_limit", "message_outcome_unknown", "challenge"])
+def test_protective_pause_has_explicit_human_exit(monkeypatch, reason):
+    state = _state(paused_reason=reason)
+    bot = SimpleNamespace(_get_apply_state=lambda idx: state, _persist_pauses=lambda **k: None,
+                          _add_log=lambda *a, **k: None, HUMAN_CONFIRMABLE_PAUSES=manager_mod.BotManager.HUMAN_CONFIRMABLE_PAUSES)
+    monkeypatch.setattr(manager_mod, "captcha_active", lambda acc: False)
+    ok, _ = manager_mod.BotManager.confirm_protective_resume(bot, 0, reason)
+    assert ok and not state.paused and state.paused_reason == ""
+
+
+def test_protective_exit_refuses_live_captcha_and_other_reasons(monkeypatch):
+    bot_kw = dict(_persist_pauses=lambda **k: None, _add_log=lambda *a, **k: None,
+                  HUMAN_CONFIRMABLE_PAUSES=manager_mod.BotManager.HUMAN_CONFIRMABLE_PAUSES)
+    monkeypatch.setattr(manager_mod, "captcha_active", lambda acc: True)
+    state = _state(paused_reason="challenge")
+    bot = SimpleNamespace(_get_apply_state=lambda idx: state, **bot_kw)
+    assert not manager_mod.BotManager.confirm_protective_resume(bot, 0, "challenge")[0]
+    state = _state(paused_reason="auth")
+    bot = SimpleNamespace(_get_apply_state=lambda idx: state, **bot_kw)
+    assert not manager_mod.BotManager.confirm_protective_resume(bot, 0, "auth")[0]
+    assert state.paused
+
+
+def test_chat_allowed_during_daily_limit_only(monkeypatch):
+    monkeypatch.setattr(manager_mod, "human_pace", SimpleNamespace(captcha_cooldown_remaining=lambda s: 0))
+    monkeypatch.setattr("app.captcha.active", lambda acc: False)
+    bot = SimpleNamespace(_stop_event=None, paused=False)
+    limit = _state(paused_reason="limit", hard_stopped=True, llm_enabled=True)
+    manual = _state(paused_reason="manual", llm_enabled=True)
+    can = manager_mod.BotManager._can_mutate
+    assert can(bot, limit, chat=True) and not can(bot, limit)
+    assert not can(bot, manual, chat=True)
+
+
+def test_resume_plain_text_drops_contacts():
+    raw = json.dumps({"title": "QA", "contact": [{"value": "+79990001122"}], "photo": {"medium": "https://x"},
+                      "experience": [{"position": "QA", "company": "MTS", "start": "2024-01-01",
+                                      "end": None, "description": "tests"}], "skill_set": ["Python"]})
+    text = manager_mod._resume_plain_text(raw)
+    assert "QA" in text and "MTS" in text and "Python" in text
+    assert "+7999" not in text and "https://" not in text
+
+
+def test_invalidate_keeps_refresh_token(monkeypatch):
+    tokens = {"rh": {"access_token": "a", "refresh_token": "r", "expires_at": 9e9}}
+    monkeypatch.setattr(oauth, "_oauth_tokens", tokens)
+    monkeypatch.setattr(oauth, "_save_oauth_tokens", lambda: True)
+    oauth.invalidate_oauth_token("rh")
+    assert tokens["rh"]["refresh_token"] == "r" and tokens["rh"]["expires_at"] == 0
+
+
+def test_list_settings_reject_crashing_items():
+    from app.config import valid_list_item as v
+    assert not v("llm_profiles", None)
+    assert not v("url_pool", {"url": "https://hh.ru/x", "pages": ""})
+    assert v("url_pool", "https://hh.ru/x") and v("llm_profiles", {"name": "a", "api_key": "k"})

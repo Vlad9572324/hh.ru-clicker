@@ -205,6 +205,47 @@ def _protect_fresh_batch(batch: list, vacancy_meta: dict, *, hours: int,
     return selected, deferred
 
 
+def _resume_plain_text(raw) -> str:
+    """Mobile API gives resume JSON; keep what an employer reads, drop contacts/URLs/ids."""
+    if isinstance(raw, dict) and "text" in raw:
+        return str(raw.get("text") or "")
+    data = raw
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return raw
+    if not isinstance(data, dict):
+        return ""
+    name = lambda v: (v or {}).get("name", "") if isinstance(v, dict) else str(v or "")
+    lines = [f"Должность: {data.get('title') or ''}"]
+    salary = data.get("salary") or {}
+    if isinstance(salary, dict) and salary.get("amount"):
+        lines.append(f"Зарплатные ожидания: {salary['amount']} {salary.get('currency') or ''}".strip())
+    if data.get("area"):
+        lines.append(f"Город: {name(data['area'])}")
+    months = (data.get("total_experience") or {}).get("months") if isinstance(data.get("total_experience"), dict) else None
+    if months:
+        lines.append(f"Общий опыт: {months // 12} л. {months % 12} мес.")
+    for job in (data.get("experience") or [])[:8]:
+        if isinstance(job, dict):
+            period = f"{job.get('start') or ''}–{job.get('end') or 'н.в.'}"
+            lines.append(f"- {job.get('position') or ''}, {job.get('company') or ''} ({period}): "
+                         f"{(job.get('description') or '').strip()[:700]}")
+    if data.get("skill_set"):
+        lines.append("Навыки: " + ", ".join(str(x) for x in data["skill_set"][:40]))
+    if data.get("skills"):
+        lines.append("О себе: " + str(data["skills"]).strip()[:1500])
+    edu = data.get("education") or {}
+    for e in (edu.get("primary") or [])[:4] if isinstance(edu, dict) else []:
+        if isinstance(e, dict):
+            lines.append(f"Образование: {e.get('name') or ''}, {e.get('result') or ''} {e.get('year') or ''}".strip())
+    langs = [f"{name(l)} ({name(l.get('level'))})" for l in (data.get("language") or []) if isinstance(l, dict)]
+    if langs:
+        lines.append("Языки: " + ", ".join(langs))
+    return "\n".join(line for line in lines if line.strip(": -"))
+
+
 def _today_msk() -> str:
     """Дата по Москве. HH работает в MSK; используем её как «день» бота
     чтобы midnight rollover не зависел от TZ контейнера (Docker = UTC по дефолту).
@@ -267,14 +308,11 @@ from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, 
 
 from app.hh_client_factory import get_client
 from app.user_agent import login_device_identity
+from app.captcha import active as captcha_active
 
 from app.hh_chat import (
     _build_thread_from_chat_item, _check_chat_locked,
     ChatikWSClient,
-)
-
-from app.hh_resume import (
-    _resume_cache, _RESUME_CACHE_TTL,
 )
 
 from app.state import AccountState
@@ -351,12 +389,16 @@ class BotManager:
         # Сериализация append к data/llm_log.jsonl (kimi-search-1 #5).
         self._llm_log_write_lock = threading.Lock()
 
-    def _can_mutate(self, state, *, llm=False):
+    def _can_mutate(self, state, *, llm=False, chat=False):
         from app.captcha import active as captcha_active
         stop = getattr(self, "_stop_event", None)
+        # The daily apply quota does not apply to answering HR in existing chats.
+        chat = chat or llm
+        limit_only = chat and getattr(state, "paused_reason", "") == "limit"
         return not (
             (stop is not None and stop.is_set()) or getattr(self, "paused", False)
-            or state.paused or state._deleted or getattr(state, "hard_stopped", False)
+            or (state.paused and not limit_only) or state._deleted
+            or (getattr(state, "hard_stopped", False) and not chat)
             or getattr(state, "pending_apply", None)
             or getattr(state, "_auth_recovery_pending", False)
             or human_pace.captcha_cooldown_remaining(state) > 0
@@ -403,7 +445,8 @@ class BotManager:
                     "pending_applies": [dict(item) for item in state.pending_applies],
                     "network_recovery": dict(state.network_recovery) if getattr(state, "network_recovery", None) else None,
                     # Post-captcha cooldown/rate cut must survive restarts.
-                    "last_captcha_at": float(getattr(state, "_last_captcha_at", 0) or 0)}
+                    "last_captcha_at": float(getattr(state, "_last_captcha_at", 0) or 0),
+                    "pause_date": _today_msk()}
         for state in getattr(self, "account_states", []):
             with state._state_lock:
                 state.acc.update(snapshot(state))
@@ -1164,6 +1207,7 @@ class BotManager:
                 # Persisted, or every restart would present the token from a new random phone.
                 "device_identity": ts.setdefault("device_identity", login_device_identity()),
                 "last_captcha_at": ts.get("last_captcha_at", 0.0),
+                "pause_date": ts.get("pause_date"),
             }
             state = AccountState(acc)
             if resume_manual:
@@ -1808,8 +1852,12 @@ class BotManager:
                 # A new day resets limits, not unknown outcomes or connectivity
                 # failures. Those require reconciliation / explicit retry.
                 if state.paused and state.paused_reason == "limit" and not state.pending_apply:
-                    state.paused = False
-                    state.paused_reason = ""
+                    if captcha_active(state.acc):
+                        # A captcha that arrived during the limit stop outlives midnight.
+                        state.paused_reason = "challenge"
+                    else:
+                        state.paused = False
+                        state.paused_reason = ""
                     # Также сбрасываем счётчик ошибок — иначе следующая ошибка
                     # сразу re-pause'нет аккаунт (consistency с toggle_account_pause).
                     state.consecutive_errors = 0
@@ -1891,6 +1939,54 @@ class BotManager:
         return any(item['acc_key'] in keys and item['captcha_key']
                    for item in list(coordinator.pending.values()))
 
+    _LLM_RESUME_TTL = 3600
+
+    def _resume_for_llm(self, state) -> tuple[str, bool]:
+        """Plain-text resume for the LLM prompt, cached per resume; errors never fail the chat."""
+        rh = str(state.acc.get("resume_hash") or "")
+        cache = self.__dict__.setdefault("_llm_resume_cache", {})
+        hit = cache.get(rh)
+        if hit and time.time() - hit[1] < self._LLM_RESUME_TTL:
+            return hit[0], True
+        try:
+            raw = get_client(state.acc).fetch_resume()
+        except Exception as e:
+            log_debug(f"LLM resume fetch [{state.short}]: {type(e).__name__}")
+            return (hit[0], True) if hit else ("", False)
+        text = _resume_plain_text(raw)
+        if text:
+            cache[rh] = (text, time.time())
+        return text, False
+
+    # Pauses with no automatic exit; the plain pause toggle deliberately cannot lift them.
+    HUMAN_CONFIRMABLE_PAUSES = ("hh_rate_limit", "message_outcome_unknown", "challenge")
+
+    def confirm_protective_resume(self, idx: int, reason: str) -> tuple[bool, str]:
+        """Explicit 'I checked HH myself' for pauses that have no verified exit path."""
+        state = self._get_apply_state(idx)
+        if state is None:
+            return False, "Аккаунт не найден"
+        with state._state_lock:
+            if not state.paused or state.paused_reason != reason or reason not in self.HUMAN_CONFIRMABLE_PAUSES:
+                return False, "Состояние аккаунта изменилось. Обновите страницу."
+            if reason == "challenge" and captcha_active(state.acc):
+                return False, "Есть активная проверка HH — пройдите её в блоке капчи."
+            if (state.pending_apply or state.pending_applies or state.hard_stopped or state.cookies_expired
+                    or (state.limit_exceeded and not getattr(state, "_limit_is_throttle", False))
+                    or getattr(state, "_auth_recovery_pending", False) or state._deleted):
+                return False, "Действует другая защитная пауза — она не снимается этим подтверждением."
+            state.paused = False
+            state.paused_reason = ""
+            state.consecutive_errors = 0
+            state.status = "idle"
+            state.status_detail = "Продолжено после ручной проверки"
+        self._persist_pauses(wait=True)
+        event = getattr(state, "_captcha_wake", None)
+        if event is not None:
+            event.set()
+        self._add_log(state.short, state.color, f"▶️ Продолжено после ручной проверки ({reason})", "success")
+        return True, "Продолжено. Если HH снова ограничит запросы, отправки остановятся."
+
     def resume_challenge_account(self, user_id: str):
         """Resume resolved challenges while preserving other protective pauses."""
         from app import captcha
@@ -1966,6 +2062,7 @@ class BotManager:
                 "short": s.short,
                 "resume_hash": s.acc.get("resume_hash", ""),
                 "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
+                "captcha_record": captcha_active(s.acc),
                 "all_resumes": s.acc.get("all_resumes", []),
                 "color": s.color,
                 "status": _status,
@@ -2101,6 +2198,7 @@ class BotManager:
                     "bot_active": True,
                     "resume_hash": s.acc.get("resume_hash", ""),
                     "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
+                    "captcha_record": captcha_active(s.acc),
                     "all_resumes": ts.get("all_resumes", []),
                     "letter": s.acc.get("letter", ""),
                     "urls": s.acc.get("urls", []),
@@ -3256,6 +3354,7 @@ class BotManager:
                     state.status_detail = f"Дневной лимит: {state.daily_sent}/{CONFIG.daily_apply_limit}. Сброс завтра в 00:00"
                     self._add_log(state.short, state.color,
                         f"\U0001f6d1 Дневной лимит {CONFIG.daily_apply_limit} откликов. Пауза до завтра 00:00.", "error")
+                    self._persist_pauses()
                     break
                 # Pre-flight HH-лимит: если фактический счётчик от HH достиг порога —
                 # не сжигаем «холостой» отклик чтобы узнать. Дождёмся либо tracker
@@ -3269,6 +3368,7 @@ class BotManager:
                     state.status_detail = f"HH-лимит: {state.hh_today_applies}/{_hh_limit}. Сброс в 00:00 МСК"
                     self._add_log(state.short, state.color,
                         f"\U0001f6d1 HH daily-limit {_hh_limit} достигнут ({state.hh_today_applies} откликов). Пауза.", "error")
+                    self._persist_pauses()
                     break
 
                 # Защищённый остаток: старые вакансии могут расходовать лимит
@@ -3769,6 +3869,7 @@ class BotManager:
                                 f"\U0001f6d1 ЛИМИТ HH! Бот остановлен. Автоматический сброс в 00:00 МСК.",
                                 "error",
                             )
+                            self._persist_pauses()
                         else:
                             state.limit_reset_time = datetime.now() + timedelta(
                                 minutes=CONFIG.limit_check_interval
@@ -4275,7 +4376,7 @@ class BotManager:
     def _process_llm_replies_inner(self, state: AccountState) -> None:
         """Inner implementation — called only when _llm_lock is held."""
         self._bind_mutation_guard(state)
-        if not self._can_mutate(state):
+        if not self._can_mutate(state, chat=True):
             return
         replied = 0
 
@@ -4439,7 +4540,7 @@ class BotManager:
         self._add_log(state.short, state.color, f"\U0001f916 LLM: {len(candidates)} чатов требуют ответа", "info")
 
         for i, neg_id in enumerate(cycle):
-            if not self._can_mutate(state) or not state.llm_enabled or not CONFIG.llm_enabled:
+            if not self._can_mutate(state, chat=True) or not state.llm_enabled or not CONFIG.llm_enabled:
                 self._add_log(state.short, state.color, f"\U0001f916 LLM: выключен в процессе цикла, прерываю", "warning")
                 break
             # Reset per-iteration: иначе exception на новой итерации видит global_key из ПРЕДЫДУЩЕЙ.
@@ -4577,11 +4678,7 @@ class BotManager:
                 cover_letter = state.acc.get("letter", "") if CONFIG.llm_use_cover_letter else ""
                 # Fetch resume for LLM context
                 if CONFIG.llm_use_resume:
-                    rh = state.acc.get("resume_hash", "")
-                    _cached = rh and rh in _resume_cache and (time.time() - _resume_cache[rh][1] < _RESUME_CACHE_TTL)
-                    resume_data = get_client(state.acc).fetch_resume()
-                    resume_text = (resume_data.get("text", "") if isinstance(resume_data, dict)
-                                   and "text" in resume_data else json.dumps(resume_data, ensure_ascii=False))
+                    resume_text, _cached = self._resume_for_llm(state)
                     if resume_text:
                         src = "кэш" if _cached else "загружено"
                         self._add_log(state.short, state.color,
@@ -4610,6 +4707,10 @@ class BotManager:
                             break
                 _raw_actions = (_last_emp_raw or {}).get("actions") or {}
                 _text_buttons = _raw_actions.get("text_buttons", [])
+                if _text_buttons and full_history[-1] is not _last_emp_raw:
+                    # Something (usually our answer) follows the button message:
+                    # pressing again would repeat it. The text path guards "last is ours".
+                    _text_buttons = []
                 _is_bot_msg = (_last_emp_raw or {}).get("is_bot", False)
                 if _text_buttons:
                     # Draft mode covers workflow actions as well as ordinary text.
@@ -4843,6 +4944,14 @@ class BotManager:
                         else:
                             self._add_log(state.short, state.color, f"\U0001f916 [{employer_short}] LLM не дал ответ, повтор через 30м", "warning", neg_id=neg_id)
                         log_debug(f"LLM [{state.short}] {neg_id}: пустой ответ от LLM, ставим temp_skip 30м")
+                        empties = state.__dict__.setdefault("_llm_empty_replies", {})
+                        empties[key] = empties.get(key, 0) + 1
+                        if empties[key] >= 3:
+                            # Regenerating forever only burns tokens; a human should answer this one.
+                            state.llm_replied_msgs[key] = None
+                            self._add_log(state.short, state.color,
+                                f"\U0001f916 [{employer_short}] LLM 3 раза не смог ответить — ответьте вручную", "warning", neg_id=neg_id)
+                            continue
                         state._llm_temp_skip[key] = time.time() + 1800
                         continue
                     log_debug(f"LLM [{state.short}] {neg_id}: ответ получен ({len(reply_text)} симв.), отправляю")

@@ -176,7 +176,6 @@ def test_mobile_429_waits_once_without_resubmitting(monkeypatch):
     request.assert_called_once()
 
 
-@pytest.mark.skip(reason="requires hh_mobile_transport patch, out of scope")
 def test_mobile_429_preserves_retry_after_from_http(monkeypatch):
     import responses
     from app import mobile_apply, oauth

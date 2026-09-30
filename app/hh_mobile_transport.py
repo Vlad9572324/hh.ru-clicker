@@ -40,8 +40,10 @@ class MobileAPIError(Exception):
     (или обрезанный текст ответа), для сетевых — текст исключения.
     """
 
-    def __init__(self, status_code: int, payload=None, url: str = "", *, outcome_unknown=False, challenge_required=False):
+    def __init__(self, status_code: int, payload=None, url: str = "", *, outcome_unknown=False,
+                 challenge_required=False, headers=None):
         self.status_code = status_code
+        self.headers = dict(headers or {})
         self.payload = payload
         self.url = url
         self.outcome_unknown = outcome_unknown
@@ -124,7 +126,7 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
     except requests.RequestException as e:
         log_debug(f"mobile_request {method} {url}: network error {e}")
         raise MobileAPIError(0, payload=str(e), url=url, outcome_unknown=mutating)
-    if r.status_code == 401:
+    if r.status_code == 401 or (r.status_code == 403 and oauth._is_403_auth_related(r)):
         # HH может отозвать access token раньше локального expires_at. Не
         # повторяем здесь POST/PUT: следующий вызов получит свежий token, а
         # текущая операция уйдёт в штатную fallback-политику.
@@ -140,7 +142,8 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
             payload = {'errors': [{'type': 'captcha_required', 'value': 'captcha_required'}]}
         raise MobileAPIError(r.status_code, payload=payload, url=url,
                              outcome_unknown=mutating and r.status_code >= 500,
-                             challenge_required=challenge is not None)
+                             challenge_required=challenge is not None,
+                             headers={"Retry-After": r.headers.get("Retry-After")} if r.headers.get("Retry-After") else None)
     if not r.content:
         if mutating and url.rstrip("/").endswith("/negotiations") and r.status_code not in (201, 204):
             raise MobileAPIError(r.status_code, payload="empty_mutation_response", url=url,
