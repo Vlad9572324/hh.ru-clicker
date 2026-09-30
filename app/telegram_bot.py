@@ -94,9 +94,9 @@ class TelegramCaptchaBot:
             targets = [self.chat_id]
         return targets
 
-    async def push_challenge(self, challenge_id, acc_short, image_bytes):
+    async def push_challenge(self, challenge_id, acc_short, image_bytes, note=''):
         """Рассылка капчи ВСЕМ подписчикам. Хранит message_id per (chat, cid)."""
-        caption = f'🔐 Капча для {acc_short}. Нажмите «Ответить» на это сообщение и введите текст с картинки. Если пропустили или ответ не принимается — /captcha для ручной проверки на HH.'
+        caption = (f'{note}\n' if note else '') + f'🔐 Капча для {acc_short}. Нажмите «Ответить» на это сообщение и введите текст с картинки. Если пропустили или ответ не принимается — /captcha для ручной проверки на HH.'
         # pending структура: {message_id: (chat_id, challenge_id)}
         if not hasattr(self, 'pending_chats'):
             self.pending_chats = {}  # {(chat_id, cid): message_id}

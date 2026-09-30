@@ -108,8 +108,10 @@ class CaptchaCoordinator:
             fetch_captcha_image, acc, item['challenge_url'])
         item['captcha_state'] = state or item['captcha_state']
         item['backurl'] = backurl or item['backurl']
+        note = ''
         if CONFIG.captcha_llm_enabled and item.get('llm_attempted') is not True:
             item['llm_attempted'] = True
+            note = '🤖 LLM не уверена в ответе — нужна ваша помощь.'
             try:
                 answer = await asyncio.to_thread(recognize_captcha, image)
             except Exception:
@@ -138,11 +140,13 @@ class CaptchaCoordinator:
                     self._log(acc, '🤖 Капча решена LLM — отклики возобновлены', 'success')
                     try:
                         await self.bot.send_message(
-                            f'🤖 Капча HH решена автоматически (LLM) для {acc.get("short") or acc.get("name") or "аккаунта"} — отклики возобновлены')
+                            f'🤖 Капча HH решена автоматически (LLM, «{answer}») для '
+                            f'{acc.get("short") or acc.get("name") or "аккаунта"} — отклики возобновлены')
                     except Exception:
                         logger.exception('TG notify (LLM solved) failed')
                     return
                 self._log(acc, '🤖 LLM: ответ отклонён HH → передаю юзеру', 'info')
+                note = f'🤖 LLM ответила «{answer}», HH не принял — введите вручную (картинка новая).'
                 self._close_session(session)
                 # Rejected submissions can invalidate the old image/key.
                 session, key, image, state, backurl = await asyncio.to_thread(
@@ -150,7 +154,7 @@ class CaptchaCoordinator:
                 item['captcha_state'] = state or item['captcha_state']
                 item['backurl'] = backurl or item['backurl']
         try:
-            result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image)
+            result = await self.bot.push_challenge(cid, acc.get('short') or acc.get('name') or 'HH', image, note=note)
         except Exception:
             self._close_session(session)
             raise
