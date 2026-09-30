@@ -1940,6 +1940,15 @@ class BotManager:
         return any(item['acc_key'] in keys and item['captcha_key']
                    for item in list(coordinator.pending.values()))
 
+    def _captcha_llm_status(self, acc):
+        """What the LLM did with this account's pending captcha (for the card)."""
+        coordinator = getattr(self, 'telegram_captcha_coordinator', None)
+        if coordinator is None:
+            return None
+        keys = (str(acc.get('user_id', '')), str(acc.get('resume_hash', '')))
+        return next((dict(item['llm_result']) for item in list(coordinator.pending.values())
+                     if item.get('acc_key') in keys and item.get('llm_result')), None)
+
     _LLM_RESUME_TTL = 3600
 
     def _resume_for_llm(self, state) -> tuple[str, bool]:
@@ -2064,6 +2073,7 @@ class BotManager:
                 "resume_hash": s.acc.get("resume_hash", ""),
                 "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
                 "captcha_record": captcha_active(s.acc),
+                "captcha_llm": self._captcha_llm_status(s.acc),
                 "all_resumes": s.acc.get("all_resumes", []),
                 "color": s.color,
                 "status": _status,
@@ -2200,6 +2210,7 @@ class BotManager:
                     "resume_hash": s.acc.get("resume_hash", ""),
                     "telegram_captcha_pending": self._telegram_captcha_pending(s.acc),
                     "captcha_record": captcha_active(s.acc),
+                "captcha_llm": self._captcha_llm_status(s.acc),
                     "all_resumes": ts.get("all_resumes", []),
                     "letter": s.acc.get("letter", ""),
                     "urls": s.acc.get("urls", []),

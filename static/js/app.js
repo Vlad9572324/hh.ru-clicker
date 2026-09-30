@@ -4027,6 +4027,7 @@ function buildCardHTML(acc) {
     </div>
     <div id="acc-captcha-${acc.idx}" hidden style="margin:8px 0;padding:10px;border:1px solid var(--yellow);border-radius:6px">
       <div role="alert" style="font-weight:700;color:var(--yellow);margin-bottom:8px">⏸ Отклики остановлены — введите капчу HH</div>
+      <div id="acc-captcha-llm-${acc.idx}" hidden style="font-size:12px;margin-bottom:8px;color:var(--cyan)"></div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
         <img id="acc-captcha-img-${acc.idx}" alt="Проверка HH: введите символы с картинки" style="max-width:min(280px,100%);border:1px solid var(--dim);border-radius:4px;background:#fff;display:none">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -5216,6 +5217,16 @@ function updateCard(card, acc) {
     const newlyShown = captchaPanel.hidden && needsCaptcha;
     captchaPanel.hidden = !needsCaptcha;
     if (newlyShown) { loadCaptchaImg(acc.idx); }
+    const llmLine = document.getElementById('acc-captcha-llm-' + acc.idx);
+    if (llmLine) {
+      const r = acc.captcha_llm || {};
+      const text = r.status === 'reading' ? '🤖 LLM читает капчу…'
+        : r.status === 'unsure' ? '🤖 LLM пробовала: модели не сошлись в ответе — введите вручную'
+        : r.status === 'rejected' ? `🤖 LLM пробовала «${r.answer || ''}» — HH не принял, введите вручную`
+        : '';
+      llmLine.textContent = text;
+      llmLine.hidden = !needsCaptcha || !text;
+    }
     if (!needsCaptcha) {
       const result = document.getElementById('acc-captcha-result-' + acc.idx);
       if (result) result.replaceChildren();

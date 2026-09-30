@@ -112,11 +112,13 @@ class CaptchaCoordinator:
         if CONFIG.captcha_llm_enabled and item.get('llm_attempted') is not True:
             item['llm_attempted'] = True
             note = '🤖 LLM не уверена в ответе — нужна ваша помощь.'
+            item['llm_result'] = {'status': 'reading'}
             try:
                 answer = await asyncio.to_thread(recognize_captcha, image)
             except Exception:
                 answer = None
             if not answer:
+                item['llm_result'] = {'status': 'unsure'}
                 self._log(acc, '🤖 LLM: модели не сошлись в ответе → капча передана вам', 'info')
             if answer:
                 try:
@@ -148,6 +150,7 @@ class CaptchaCoordinator:
                         logger.exception('TG notify (LLM solved) failed')
                     return
                 self._log(acc, '🤖 LLM: ответ отклонён HH → передаю юзеру', 'info')
+                item['llm_result'] = {'status': 'rejected', 'answer': answer}
                 note = f'🤖 LLM ответила «{answer}», HH не принял — введите вручную (картинка новая).'
                 self._close_session(session)
                 # Rejected submissions can invalidate the old image/key.

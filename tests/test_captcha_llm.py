@@ -159,3 +159,21 @@ def test_delivery_retry_does_not_repeat_llm(vision, monkeypatch, enabled):
         assert bot.push_challenge.await_count == 2
         assert CONFIG.captcha_llm_forwarded == 1
     asyncio.run(run())
+
+
+def test_coordinator_exposes_llm_outcome_for_the_card(vision, monkeypatch):
+    acc = {'user_id': 'card-account'}
+    captcha.hold(acc, {'captcha_url': 'https://hh.ru/account/captcha?state=test'})
+    cid = captcha.current(acc)['id']
+    manager = SimpleNamespace(account_states=[SimpleNamespace(acc=acc)], temp_states={},
+                              resume_challenge_account=Mock(), _add_log=Mock())
+    monkeypatch.setattr(captcha_worker, 'fetch_captcha_image', Mock(
+        return_value=(Mock(), 'key', b'png', 'test', 'https://hh.ru/')))
+    monkeypatch.setattr(captcha_worker, 'recognize_captcha', Mock(return_value=None))
+    async def run():
+        bot = Mock(push_challenge=AsyncMock(return_value=True), send_browser_option=AsyncMock())
+        coordinator = captcha_worker.CaptchaCoordinator(manager, bot)
+        await coordinator.scan()
+        assert coordinator.pending[cid]['llm_result'] == {'status': 'unsure'}
+        assert 'не уверена' in bot.push_challenge.await_args.kwargs['note']
+    asyncio.run(run())
