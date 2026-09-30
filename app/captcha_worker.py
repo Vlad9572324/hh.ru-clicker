@@ -116,6 +116,8 @@ class CaptchaCoordinator:
                 answer = await asyncio.to_thread(recognize_captcha, image)
             except Exception:
                 answer = None
+            if not answer:
+                self._log(acc, '🤖 LLM: модели не сошлись в ответе → капча передана вам', 'info')
             if answer:
                 try:
                     ok, reason = await asyncio.to_thread(
@@ -137,7 +139,7 @@ class CaptchaCoordinator:
                         await asyncio.to_thread(self.manager.resume_challenge_account, item['acc_key'])
                     except Exception:
                         pass
-                    self._log(acc, '🤖 Капча решена LLM — отклики возобновлены', 'success')
+                    self._log(acc, f'🤖 Капча решена LLM («{answer}») — отклики возобновлены', 'success')
                     try:
                         await self.bot.send_message(
                             f'🤖 Капча HH решена автоматически (LLM, «{answer}») для '

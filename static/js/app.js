@@ -6077,12 +6077,11 @@ function humanPreview() {
   const target = Number(config.human_target_applies_per_hour) || 2.5;
   const interval = Math.max(3600 / target, minimum, maximum);
   const appliedToday = Math.max(0, Number(State.lastSnapshot?.global_stats?.applied_today) || 0);
-  const solved = Math.max(0, Number(config.captcha_llm_solved) || 0);
-  const captchaAverage = appliedToday > 0 ? (100 * solved / appliedToday).toFixed(1) + '%' : 'нет данных';
+  const week = config.captcha_llm_week || {};
   const enabled = document.getElementById('hp-human_mode_enabled').checked;
   document.getElementById('human-preview').textContent = !valid ? 'Некорректные часы: используйте HH-HH (например 07-24 или 22-06).' :
     !delaysValid ? 'Укажите обе задержки: неотрицательные целые числа, минимум не больше максимума.' :
-    `Целевой темп: ~2-3 applies/час (~40 в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (сервер: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Решено капч LLM (за запуск) / отклики сегодня: ${solved} / ${appliedToday}; отношение: ${captchaAverage}.`;
+    `Целевой темп: ~2-3 applies/час (~40 в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (МСК: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Отклики сегодня: ${appliedToday}. Капчи за 7 дней: ${week.challenges || 0}, из них решено LLM: ${week.llm_solved || 0}.`;
 }
 
 function applyHumanSettings() {
@@ -8678,7 +8677,9 @@ setInterval(() => {
     llmEnabled.dataset.initialized = '1';
   }
   const stats = document.getElementById('captcha-llm-stats');
-  if (stats) stats.textContent = `За запуск: решено LLM — ${cfg.captcha_llm_solved || 0} / передано юзеру — ${cfg.captcha_llm_forwarded || 0}`;
+  const week = cfg.captcha_llm_week || {};
+  if (stats) stats.textContent = `За 7 дней: капч ${week.challenges || 0}, решено LLM — ${week.llm_solved || 0}`
+    + ` (попыток LLM: ${week.llm_attempts || 0}; остальные — вручную)`;
   const enabled = document.getElementById('tg-enabled');
   if (!enabled.dataset.initialized) {
     enabled.checked = cfg.telegram_captcha_enabled !== false;

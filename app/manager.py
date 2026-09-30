@@ -309,6 +309,7 @@ from app.llm import generate_llm_reply, _openclaw_command, get_llm_last_status, 
 from app.hh_client_factory import get_client
 from app.user_agent import login_device_identity
 from app.captcha import active as captcha_active
+from app.captcha_journal import llm_week as captcha_llm_week
 
 from app.hh_chat import (
     _build_thread_from_chat_item, _check_chat_locked,
@@ -2385,7 +2386,8 @@ class BotManager:
                 "pages_per_url": CONFIG.pages_per_url,
                 **{key: getattr(CONFIG, key) for key in human_pace.HUMAN_CONFIG_KEYS},
                 "human_target_applies_per_hour": human_pace.TARGET_APPLIES_PER_HOUR,
-                "human_local_hour": datetime.now().hour,
+                "human_local_hour": datetime.now(human_pace._MSK).hour,
+                "captcha_llm_week": captcha_llm_week(),
                 "human_weekend_variance": human_pace.weekend_variance(),
                 "human_mode_enabled": CONFIG.human_mode_enabled,
                 "response_delay": CONFIG.response_delay,

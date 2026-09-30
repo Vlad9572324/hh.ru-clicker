@@ -101,6 +101,22 @@ def _load(days):
     return sorted(events, key=lambda e: e["_t"])
 
 
+_week_cache = {"at": 0.0, "value": None}
+
+
+def llm_week() -> dict:
+    """Cheap 7-day LLM captcha stats for the live snapshot (cached 60s)."""
+    import time
+    if _week_cache["value"] is not None and time.monotonic() - _week_cache["at"] < 60:
+        return _week_cache["value"]
+    events = _load(7)
+    llm = [e for e in events if e["event"] == "solve" and e.get("path") == "llm"]
+    value = {"challenges": sum(e["event"] == "challenge" for e in events),
+             "llm_attempts": len(llm), "llm_solved": sum(bool(e.get("ok")) for e in llm)}
+    _week_cache.update(at=time.monotonic(), value=value)
+    return value
+
+
 def summary(days=7) -> dict:
     events = _load(days)
     challenges = [e for e in events if e["event"] == "challenge"]

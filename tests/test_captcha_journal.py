@@ -35,3 +35,16 @@ def test_quick_return_after_ok_solve_is_flagged(tmp_path, monkeypatch):
 def test_record_never_raises(monkeypatch):
     monkeypatch.setattr(captcha_journal, "_path", lambda: "/nonexistent-dir/x.jsonl")
     captcha_journal.record("challenge", {"short": "A"})
+
+
+def test_llm_week_counts_llm_path_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(captcha_journal, "_week_cache", {"at": 0.0, "value": None})
+    monkeypatch.setattr(captcha_journal, "_applies_around", lambda name, now: (0, 0))
+    acc = {"short": "A"}
+    captcha_journal.record("challenge", acc)
+    captcha_journal.record("solve", acc, path="llm", ok=True)
+    captcha_journal.record("challenge", acc)
+    captcha_journal.record("solve", acc, path="llm", ok=False)
+    captcha_journal.record("solve", acc, path="telegram", ok=True)
+    assert captcha_journal.llm_week() == {"challenges": 2, "llm_attempts": 2, "llm_solved": 1}
