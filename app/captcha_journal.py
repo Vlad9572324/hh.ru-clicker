@@ -49,8 +49,12 @@ def _applies_around(acc_name, now):
 _SAMPLES_MAX = 500
 
 
-def save_sample(image, answer):
-    """Keep human-solved captchas (image + accepted answer) to benchmark auto-solvers offline."""
+def save_sample(image, answer, kind=""):
+    """Keep captchas with their answer to benchmark auto-solvers offline.
+
+    kind="" — a human answer HH accepted (ground truth);
+    kind="llm-rejected" — the LLM consensus HH refused (to study its mistakes).
+    """
     try:
         text = "-".join("".join(ch for ch in word if ch.isalnum()) for word in str(answer or "").split())[:40]
         if not image or not text:
@@ -58,7 +62,7 @@ def save_sample(image, answer):
         folder = storage.DATA_DIR / "captcha_samples"
         folder.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        (folder / f"{stamp}_{text}.png").write_bytes(image)
+        (folder / f"{stamp}_{kind + '_' if kind else ''}{text}.png").write_bytes(image)
         files = sorted(folder.glob("*.png"))
         for old in files[:-_SAMPLES_MAX]:
             old.unlink(missing_ok=True)

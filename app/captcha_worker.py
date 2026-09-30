@@ -150,7 +150,8 @@ class CaptchaCoordinator:
                     except Exception:
                         logger.exception('TG notify (LLM solved) failed')
                     return
-                self._log(acc, '🤖 LLM: ответ отклонён HH → передаю юзеру', 'info')
+                self._log(acc, f'🤖 LLM: ответ «{answer}» отклонён HH → передаю юзеру', 'info')
+                captcha_journal.save_sample(image, answer, kind='llm-rejected')
                 item['llm_result'] = {'status': 'rejected', 'answer': answer}
                 note = f'🤖 LLM ответила «{answer}», HH не принял — введите вручную (картинка новая).'
                 self._close_session(session)
