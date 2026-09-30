@@ -43,6 +43,12 @@ class TelegramCaptchaBot:
         if flow:
             flow.close()
 
+    def chat_bridge(self):
+        if not hasattr(self, '_chat_bridge'):
+            from app.telegram_chat import TelegramChatBridge
+            self._chat_bridge = TelegramChatBridge(self)
+        return self._chat_bridge
+
     def manual_flow(self):
         if not hasattr(self, '_manual_flow'):
             from app.telegram_manual_captcha import ManualCaptchaFlow
@@ -198,6 +204,14 @@ class TelegramCaptchaBot:
         acknowledged = False
         try:
             authorized = chat_id is not None and is_known(str(chat_id))
+            if authorized and data.startswith(('cv:', 'cr:')):
+                acknowledged = True
+                with contextlib.suppress(Exception):
+                    await self._call('answerCallbackQuery', {'callback_query_id': callback_query['id']})
+                _, ref, neg_id = data.split(':', 2)
+                bridge = self.chat_bridge()
+                await (bridge.show if data.startswith('cv:') else bridge.ask_reply)(chat_id, ref, neg_id)
+                return
             if authorized and data.startswith('bc_done:'):
                 acknowledged = True
                 with contextlib.suppress(Exception):
@@ -318,6 +332,8 @@ class TelegramCaptchaBot:
                         _bot_manager.toggle_pause()
                     reply = '⏸ Пауза' if _bot_manager.paused else '▶ Работает'
                 await self.send_menu(cid_s, reply, telegram_menu.build_main_menu(_bot_manager))
+            return
+        if reply_to_message_id is not None and await self.chat_bridge().answer(cid_s, reply_to_message_id, text):
             return
         # Reply to captcha challenge — только явный reply_to (без single-pending
         # fallback, чтобы обычные сообщения между challenges не резолвили captcha).

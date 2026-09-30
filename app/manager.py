@@ -1464,8 +1464,10 @@ class BotManager:
                         neg_id=neg_id,
                         body=thread.get('last_employer_msg') or last.get('body') or last.get('text', ''),
                     )
+                    from app.telegram_alerts import chat_buttons
                     send_alert(category, scope_key(account_key(state), key), html_text,
-                               sender=telegram_send_once, parse_mode='HTML')
+                               sender=telegram_send_once, parse_mode='HTML',
+                               reply_markup=chat_buttons(state.acc, neg_id))
 
         except Exception as exc:
             log_debug(f"telegram message scan [{state.short}] failed: {type(exc).__name__}: {exc}")
@@ -1491,9 +1493,11 @@ class BotManager:
                 vacancy_id=str(item.get('vacancy_id') or ''),
                 neg_id=neg_id, extra_lines=extra,
             )
+            from app.telegram_alerts import chat_buttons
             send_alert(AlertCategory.interview_invitation,
                        scope_key(account_key(state), f"interview:{neg_id}"), html_text,
-                       sender=telegram_send_once, parse_mode='HTML')
+                       sender=telegram_send_once, parse_mode='HTML',
+                       reply_markup=chat_buttons(state.acc, neg_id))
 
     def start(self):
         # Регистр всех worker-threads чтобы stop() мог их join'нуть — иначе

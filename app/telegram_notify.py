@@ -81,7 +81,7 @@ def _save_sent_events(events: dict) -> None:
     tmp.replace(_NOTIFICATIONS_FILE)
 
 
-def send_once(event_id: str, message: str, parse_mode: str = None) -> bool:
+def send_once(event_id: str, message: str, parse_mode: str = None, reply_markup: dict = None) -> bool:
     """Deliver an alert once, broadcasting to all subscribers (multi-user).
 
     Fans out to admin chat_id + все `/start`-подписчики (data/telegram_subscribers.json).
@@ -115,6 +115,8 @@ def send_once(event_id: str, message: str, parse_mode: str = None) -> bool:
                            "disable_web_page_preview": True}
                 if parse_mode:
                     payload["parse_mode"] = parse_mode
+                if reply_markup:
+                    payload["reply_markup"] = reply_markup
                 response = requests.post(
                     f"https://api.telegram.org/bot{token}/sendMessage",
                     json=payload, timeout=15,

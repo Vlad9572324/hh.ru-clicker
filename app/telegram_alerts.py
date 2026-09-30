@@ -122,7 +122,15 @@ def scope_key(account, key):
     return f"{kind}:{account}:{rest}"
 
 
-def send_alert(category, dedup_key, text, *, sender=None, parse_mode=None):
+def chat_buttons(acc, neg_id) -> dict:
+    """Read and answer an HH chat without leaving Telegram (the HH link often
+    fails to open in the app)."""
+    ref = f"{acc.get('user_id') or acc.get('resume_hash')}:{neg_id}"
+    return {"inline_keyboard": [[{"text": "💬 Показать переписку", "callback_data": "cv:" + ref},
+                                 {"text": "✍ Ответить HR", "callback_data": "cr:" + ref}]]}
+
+
+def send_alert(category, dedup_key, text, *, sender=None, parse_mode=None, reply_markup=None):
     """Send an account-scoped key (kind:account:event) using existing transport.
 
     parse_mode='HTML' → передаётся в telegram_notify.send_once для форматирования
@@ -141,7 +149,8 @@ def send_alert(category, dedup_key, text, *, sender=None, parse_mode=None):
             return False
         send_fn = sender or telegram_notify.send_once
         try:
-            delivered = send_fn(dedup_key, text, parse_mode=parse_mode) if parse_mode else send_fn(dedup_key, text)
+            extra = {k: v for k, v in (("parse_mode", parse_mode), ("reply_markup", reply_markup)) if v}
+            delivered = send_fn(dedup_key, text, **extra) if extra else send_fn(dedup_key, text)
         except TypeError:
             # Sender не поддерживает parse_mode kwarg (mock-инъекции в тестах).
             delivered = send_fn(dedup_key, text)
