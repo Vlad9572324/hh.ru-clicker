@@ -16,7 +16,7 @@ import threading
 import requests
 import urllib.parse
 from types import SimpleNamespace
-from app import human_pace
+from app import human_pace, chat_humanize
 from app.hh_http import HH
 from app.user_agent import mobile_user_agent, webview_user_agent
 try:
@@ -4992,15 +4992,13 @@ class BotManager:
                         self._llm_sent_by_neg_id.setdefault(neg_id, set()).add(global_key)
                     self._add_log(state.short, state.color,
                         f"\U0001f916 [{employer_short}] отправляю: «{reply_text[:60]}»", "info", neg_id=neg_id)
-                    # Читаем HR-сообщение (галочка «прочитано» в UI HH) + typing indicator
-                    # 2-4 сек — HR получает push «печатает…», ответ выглядит человечнее.
-                    try:
-                        get_client(state.acc).mark_chat_read(neg_id, last_msg_id)
-                        get_client(state.acc).send_participant_action(neg_id, "TYPING")
-                    except Exception:
-                        pass
-                    _delay = min(4.0, max(2.0, len(reply_text) * 0.03))
-                    time.sleep(_delay)
+                    # Имитация человека: «читает» → галочка «прочитано» → «думает» →
+                    # «печатает…» (пульсы, время от длины ответа). Прерывается стопом/паузой;
+                    # при прерывании проверка _can_mutate ниже снимает typing и не шлёт.
+                    chat_humanize.simulate(
+                        get_client(state.acc), neg_id, last_msg_id, employer_msg, reply_text,
+                        sleep=self._stop_event.wait,
+                        can_continue=lambda: self._can_mutate(state, llm=True))
                     if not self._can_mutate(state, llm=True):
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
@@ -5041,6 +5039,7 @@ class BotManager:
                             state._llm_drafts.pop(key, None)  # отправили — кэш не нужен
                         state._msg_consecutive[neg_id] = state._msg_consecutive.get(neg_id, 0) + 1
                         state._llm_neg_failures.pop(neg_id, None)  # clear backoff on success
+                        state.__dict__.get("_llm_send_fails", {}).pop(key, None)
                         replied += 1
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                          llm_reply=reply_text, llm_sent=True,
@@ -5067,7 +5066,11 @@ class BotManager:
                         with self._llm_sent_lock:
                             self._llm_sent_global.discard(global_key)
                             self._llm_sent_by_neg_id.get(neg_id, set()).discard(global_key)
-                        state._llm_temp_skip[key] = time.time() + 1800
+                        # Перманентно отвергаемый чат (HTTP 400: бот-работодатель, закрыто) иначе
+                        # крутился бы каждые 30 мин вечно: LLM-вызов + запросы в HH на каждый круг.
+                        _fails = state.__dict__.setdefault("_llm_send_fails", {})
+                        _fails[key] = _fails.get(key, 0) + 1
+                        state._llm_temp_skip[key] = time.time() + (1800, 7200, 21600, 86400)[min(_fails[key] - 1, 3)]
                         upsert_interview(neg_id, acc=state.short, acc_color=state.color,
                                          llm_reply=reply_text, llm_sent=False)
                         self._add_log(state.short, state.color,

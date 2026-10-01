@@ -96,7 +96,8 @@ def hold(acc, details):
     # UI лог: показать что HH запросил капчу для этого аккаунта (только на первый).
     if new_challenge:
         from app.captcha_journal import record
-        record('challenge', acc, id=challenge_id, has_url=bool(safe_url(details.get('captcha_url'))))
+        record('challenge', acc, id=challenge_id, has_url=bool(safe_url(details.get('captcha_url'))),
+               source=details.get('source'))
         try:
             from app.instances import bot as _bot
             _bot._add_log(acc.get('short', ''), acc.get('color', 'yellow'),
@@ -105,9 +106,10 @@ def hold(acc, details):
             pass
 
 
-def capture(acc, status, payload):
+def capture(acc, status, payload, source=None):
     details = parse(status, payload)
     if details is not None:
+        details['source'] = source
         hold(acc, details)
     return details
 

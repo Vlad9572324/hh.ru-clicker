@@ -30,6 +30,9 @@ Web-only аналоги, перенесённые на mobile API:
 """
 
 import asyncio
+import copy
+import threading
+import time
 import requests
 
 from app import (
@@ -65,6 +68,19 @@ from app.hh_client import HHClient
 from app.hh_http import egress_proxies
 from app.llm import _randomize_text
 from app.logging_utils import log_debug
+
+
+CHAT_CACHE_TTL_SEC = 5.0
+CHAT_FULL_SWEEP_SEC = 1800.0
+_CHAT_CACHE: dict = {}
+_CHAT_FULL_SWEEP_AT: dict = {}
+_CHAT_LOCKS: dict = {}
+_CHAT_LOCKS_GUARD = threading.Lock()
+
+
+def _chat_lock(key: str) -> threading.Lock:
+    with _CHAT_LOCKS_GUARD:
+        return _CHAT_LOCKS.setdefault(key, threading.Lock())
 
 
 class MobileHHClient(HHClient):
@@ -130,6 +146,28 @@ class MobileHHClient(HHClient):
         return mobile_chat_actions.send_event(self.acc, neg_id, event_type, event_params)
 
     def fetch_chat_list(self, max_pages: int = 5) -> tuple:
+        """Single-flight + короткий кэш поверх _fetch_chat_list_uncached.
+
+        LLM-цикл и Telegram-сканер вызывают это одновременно, и каждый раз шёл
+        полный двойной проход (~46 GET /chats). Теперь параллельные вызовы
+        одного аккаунта делят один результат (TTL 5 с), а полный проход по
+        непрочитанным (до 20 страниц) делается раз в CHAT_FULL_SWEEP_SEC — в
+        остальное время хватает первых страниц (свежие непрочитанные наверху).
+        """
+        key = str(self.acc.get("user_id") or self.acc.get("resume_hash") or "")
+        with _chat_lock(key):
+            now = time.monotonic()
+            hit = _CHAT_CACHE.get(key)
+            if hit and now - hit[0] < CHAT_CACHE_TTL_SEC and hit[1] >= max_pages:
+                return copy.deepcopy(hit[2])
+            full = now - _CHAT_FULL_SWEEP_AT.get(key, 0.0) >= CHAT_FULL_SWEEP_SEC
+            result = self._fetch_chat_list_uncached(max_pages, unread_pages=20 if full else 3)
+            if full:
+                _CHAT_FULL_SWEEP_AT[key] = time.monotonic()
+            _CHAT_CACHE[key] = (time.monotonic(), max_pages, copy.deepcopy(result))
+            return result
+
+    def _fetch_chat_list_uncached(self, max_pages: int = 5, unread_pages: int = 20) -> tuple:
         """Список чатов: GET api.hh.ru/chats (page/per_page<=20). Возврат
         совместим с web hh_chat._fetch_chat_list:
         (items_by_id, display_info, current_participant_id).
@@ -153,7 +191,7 @@ class MobileHHClient(HHClient):
         recent_err: Exception | None = None
         try:
             unread_items, unread_display, unread_cur = mobile_chat_list.fetch_chat_list(
-                self.acc, max_pages=20, filter_unread=True,
+                self.acc, max_pages=unread_pages, filter_unread=True,
             )
         except Exception as e:  # noqa: BLE001
             unread_err = e

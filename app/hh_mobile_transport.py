@@ -137,7 +137,7 @@ def mobile_request(acc: dict, method: str, path: str, *, params=None,
         except ValueError:
             payload = r.text[:500]
         from app.captcha import capture
-        challenge = capture(acc, r.status_code, payload)
+        challenge = capture(acc, r.status_code, payload, source=f"{method.upper()} {path}")
         if challenge is not None:
             payload = {'errors': [{'type': 'captcha_required', 'value': 'captcha_required'}]}
         raise MobileAPIError(r.status_code, payload=payload, url=url,
