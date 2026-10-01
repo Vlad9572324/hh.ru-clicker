@@ -6085,14 +6085,14 @@ function humanPreview() {
   const minimum = humanValue('human_apply_delay_min', 'number');
   const maximum = humanValue('human_apply_delay_max', 'number');
   const delaysValid = Number.isInteger(minimum) && Number.isInteger(maximum) && minimum >= 0 && minimum <= maximum;
-  const target = Number(config.human_target_applies_per_hour) || 2.5;
+  const target = Number(config.human_target_applies_per_hour) || 4;
   const interval = Math.max(3600 / target, minimum, maximum);
   const appliedToday = Math.max(0, Number(State.lastSnapshot?.global_stats?.applied_today) || 0);
   const week = config.captcha_llm_week || {};
   const enabled = document.getElementById('hp-human_mode_enabled').checked;
   document.getElementById('human-preview').textContent = !valid ? 'Некорректные часы: используйте HH-HH (например 07-24 или 22-06).' :
     !delaysValid ? 'Укажите обе задержки: неотрицательные целые числа, минимум не больше максимума.' :
-    `Целевой темп: ~2-3 applies/час (~40 в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (МСК: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Отклики сегодня: ${appliedToday}. Капчи за 7 дней: ${week.challenges || 0}, из них решено LLM: ${week.llm_solved || 0}.`;
+    `Целевой темп: ~${target.toFixed(1)} applies/час (~${Math.round(target * 17)} в день) на аккаунт. Текущий час активен: ${hour === undefined ? 'нет данных' : active ? 'да' : 'нет'} (МСК: ${hour ?? '—'} ч); ${enabled ? 'одна попытка не чаще чем раз в ' + (interval / 60).toFixed(1) + ' мин; интервал сохраняется после перезапуска.' : 'режим выключен'}. Отклики сегодня: ${appliedToday}. Капчи за 7 дней: ${week.challenges || 0}, из них решено LLM: ${week.llm_solved || 0}.`;
 }
 
 function applyHumanSettings() {

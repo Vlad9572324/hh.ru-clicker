@@ -21,8 +21,8 @@ from app.user_agent import webview_user_agent
 _rng = random.Random()
 _MSK = ZoneInfo('Europe/Moscow')
 
-# About 42 attempts across the default 17-hour weekday window, before pauses.
-TARGET_APPLIES_PER_HOUR = 2.5
+# About 68 attempts across the default 17-hour weekday window, before pauses.
+TARGET_APPLIES_PER_HOUR = 4.0
 PACE_FILE = Path('data/apply_pace.json')
 _pace_lock = threading.RLock()
 

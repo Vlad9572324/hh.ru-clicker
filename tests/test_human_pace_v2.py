@@ -27,7 +27,7 @@ def test_conservative_defaults():
     assert (config.human_burst_size_min, config.human_burst_size_max) == (2, 4)
     assert (config.human_burst_pause_min_sec, config.human_burst_pause_max_sec) == (600, 1500)
     assert config.human_captcha_backoff_hours == 4
-    assert pace.TARGET_APPLIES_PER_HOUR == 2.5
+    assert pace.TARGET_APPLIES_PER_HOUR == 4.0
 
 
 @pytest.mark.parametrize('draw,expected', [(0, True), (.299999, True), (.3, False), (.99999, False)])
@@ -143,7 +143,7 @@ def test_captcha_and_weekend_cut_extend_saved_interval(monkeypatch):
     assert pace.delay_multiplier(state) == pytest.approx(3 / .7)
     assert pace.reserve_attempt(state.acc, now=1000) == 0
     remaining = pace.reserve_attempt(state.acc, now=1100, multiplier=pace.delay_multiplier(state))
-    assert remaining == pytest.approx(1440 * 3 / .7 - 100)
+    assert remaining == pytest.approx(3600 / pace.TARGET_APPLIES_PER_HOUR * 3 / .7 - 100)
 
 
 @pytest.mark.parametrize('value,expected', [('0', 0), (' 123 ', 123), ('-5', 60), ('1.5', 60), ('invalid', 60), ('', 60)])
