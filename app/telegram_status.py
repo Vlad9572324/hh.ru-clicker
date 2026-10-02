@@ -48,12 +48,40 @@ def install_status_tracking(bot_manager):
             if level == 'error':
                 account['errors_today'] = account.get('errors_today', 0) + 1
                 account['last_error'] = message
+                account['last_error_at'] = datetime.now(_MSK).isoformat(timespec='seconds')
             try:
                 storage._atomic_write_json(_EVENTS_FILE, {
                     'day': today.isoformat(), 'accounts': dict(events['accounts'])})
             except OSError:
                 log_debug('telegram status: cannot persist counters')
     bot_manager._add_log = tracked
+
+
+ERROR_FRESH_SEC = 2 * 3600
+
+
+def _challenge_pending(acc) -> bool:
+    """Капча в файле challenge (источник правды для блокировки записи), даже если флаг не дошёл до state."""
+    try:
+        from app import captcha
+        return bool(acc) and captcha.active(acc)
+    except Exception:
+        return False
+
+
+def _fresh_error(stats, now):
+    """(текст, ЧЧ:ММ) последней ошибки; старше ERROR_FRESH_SEC не показываем (раньше висела весь день)."""
+    message, stamp = stats.get('last_error'), stats.get('last_error_at')
+    if not message or not stamp:
+        return None, None
+    try:
+        at = datetime.fromisoformat(stamp)
+        age = (now.replace(tzinfo=None) - at.replace(tzinfo=None)).total_seconds()
+    except (ValueError, TypeError):
+        return None, None
+    if age > ERROR_FRESH_SEC:
+        return None, None
+    return message, at.strftime('%H:%M')
 
 
 def _next_apply_seconds(acc) -> float | None:
@@ -102,7 +130,7 @@ def build_status_snapshot(bot_manager) -> dict:
             limits = [v for v in (CONFIG.daily_apply_limit, CONFIG.hh_daily_limit) if v > 0]
             limit = min(limits) if limits else 200
             reason = getattr(state, 'paused_reason', None)
-            if reason == 'challenge':
+            if reason == 'challenge' or _challenge_pending(getattr(state, 'acc', None)):
                 status = '🚫 ждёт капчу'
                 challenge_count += 1
             elif getattr(state, 'limit_exceeded', False) or reason == 'limit' or getattr(state, 'status', '') == 'limit' or today >= limit:
@@ -115,12 +143,13 @@ def build_status_snapshot(bot_manager) -> dict:
                 # "idle" also covers normal waits (post-captcha cooldown, active hours):
                 # the account is running, the detail line says what it waits for.
                 status = '🟢 работает'
+            error_text, error_time = _fresh_error(stats, now)
             vacancy = ' / '.join(filter(None, (getattr(state, 'current_vacancy_title', ''), getattr(state, 'current_vacancy_company', ''))))
             acc = getattr(state, 'acc', None) or {}
             next_in = _next_apply_seconds(acc) if status == '🟢 работает' and acc else None
             accounts.append(dict(short=state.short, state=status, applied_today=today,
                                  daily_limit=limit, hourly_rate=float(sum(0 <= (now - stamp).total_seconds() < 3600 for stamp in stamps)),
-                                 current_vacancy=vacancy or None, last_error=stats.get('last_error'),
+                                 current_vacancy=vacancy or None, last_error=error_text, last_error_time=error_time,
                                  captcha_count=stats.get('captcha_count', 0),
                                  next_apply_sec=next_in,
                                  detail=(getattr(state, 'status_detail', '') or None) if status == '🟢 работает' else None))
@@ -168,14 +197,16 @@ def build_status_html(snapshot, previous_snapshot=None) -> str:
         if account['state'] == '🟢 работает':
             if account.get('detail'):
                 lines.append(f'⏳ {escape(str(account["detail"])[:160])}')
-            lines.append(f'⏭ Следующий отклик: через {_format_eta(account.get("next_apply_sec"))}')
+            eta = _format_eta(account.get("next_apply_sec"))
+            lines.append(f'⏭ Следующий отклик: {eta if eta in ("сейчас", "—") else "через " + eta}')
         elif account['state'] == '🚫 ждёт капчу':
             lines.append('🔐 Нужна капча — /captcha для ручного решения')
         if account.get('current_vacancy'):
             lines.append(f'🏢 Сейчас: <i>{escape(str(account["current_vacancy"])[:240])}</i>')
         lines.append(f'🤖 Капч за день: {account["captcha_count"]}')
         if account.get('last_error'):
-            lines.append(f'⚠️ {escape(str(account["last_error"])[:240])}')
+            when = f' ({account["last_error_time"]})' if account.get('last_error_time') else ''
+            lines.append(f'⚠️ {escape(str(account["last_error"]).lstrip("⚠️ ").strip()[:240])}{when}')
         lines.append('')
     total = snapshot['totals']
     lines.append(f'📈 <b>Итого</b>: {total["applied_today"]} откликов / {total["captcha_today"]} капч / {total["errors_today"]} ошибки')

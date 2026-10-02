@@ -34,6 +34,7 @@ def test_snapshot(manager):
     manager._add_log('Мария', '', '🔐 HH запросил капчу', 'warning')
     manager._add_log('Мария', '', 'Ошибка запроса', 'error')
     snapshot = status.build_status_snapshot(manager)
+    assert snapshot['accounts'][0].pop('last_error_time') == datetime.now(status._MSK).strftime('%H:%M')
     assert snapshot['accounts'] == [dict(short='Мария', state='🟢 работает',
         applied_today=1, daily_limit=50, hourly_rate=1.0,
         current_vacancy='Python Developer / Yandex', last_error='Ошибка запроса',
@@ -126,3 +127,17 @@ def test_idle_wait_is_running_not_paused(manager):
     assert snap['accounts'][0]['state'] == '🟢 работает'
     assert snap['header'] == '🟢 Бот работает'
     assert 'Пауза после капчи' in status.build_status_html(snap)
+
+
+def test_stale_error_hidden_and_challenge_file_shows_waiting(manager, monkeypatch):
+    manager._add_log('Мария', '', 'Старая ошибка', 'error')
+    events = manager._telegram_status_events['accounts']['Мария']
+    events['last_error_at'] = (datetime.now(status._MSK) - timedelta(hours=5)).isoformat()
+    snapshot = status.build_status_snapshot(manager)
+    assert snapshot['accounts'][0]['last_error'] is None
+    monkeypatch.setattr(status, '_challenge_pending', lambda acc: True)
+    snapshot = status.build_status_snapshot(manager)
+    assert snapshot['accounts'][0]['state'] == '🚫 ждёт капчу'
+    assert 'Ждём решения капчи' in snapshot['header']
+    html = status.build_status_html(snapshot)
+    assert 'через сейчас' not in html and 'Нужна капча' in html
