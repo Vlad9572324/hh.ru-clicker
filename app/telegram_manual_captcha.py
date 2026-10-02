@@ -244,7 +244,7 @@ class ManualCaptchaFlow:
             journal('solve', state.acc, path='tg_manual', ok=ok, reason=reason or None, id=item['cid'])
             if ok:
                 from app.captcha_journal import save_sample
-                save_sample(item.get('image'), text)
+                save_sample(item.get('image'), text, source='tg_manual')
             if self.find(item['cid'])[1] is not state:
                 self._retire(token)
                 await self.message(chat, 'Проверка аккаунта изменилась во время отправки. '

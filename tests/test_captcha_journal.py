@@ -48,3 +48,23 @@ def test_llm_week_counts_llm_path_only(tmp_path, monkeypatch):
     captcha_journal.record("solve", acc, path="llm", ok=False)
     captcha_journal.record("solve", acc, path="telegram", ok=True)
     assert captcha_journal.llm_week() == {"challenges": 2, "llm_attempts": 2, "llm_solved": 1}
+
+
+def test_samples_keep_image_and_exact_answer_and_never_purge(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    for i in range(520):  # больше прежнего лимита 500 — ничего не удаляется
+        captcha_journal.save_sample(b"png-%d" % i, "Слово Два", source="llm")
+    captcha_journal.save_sample(b"bad", "кикс проклевала", kind="llm-rejected")
+    folder = tmp_path / "captcha_samples"
+    assert len(list(folder.glob("*.png"))) == 521      # одинаковые секунда+ответ не затирают друг друга
+    labels = [json.loads(l) for l in (folder / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(labels) == 520                          # в эталон попадают только принятые
+    assert labels[0]["answer"] == "Слово Два" and labels[0]["source"] == "llm"
+    assert all((folder / l["file"]).exists() for l in labels)
+
+
+def test_no_label_for_empty_answer_or_image(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    captcha_journal.save_sample(b"", "x")
+    captcha_journal.save_sample(b"png", "   ")
+    assert not (tmp_path / "captcha_samples").exists() or not list((tmp_path / "captcha_samples").iterdir())

@@ -130,6 +130,7 @@ class CaptchaCoordinator:
                 captcha_journal.record('solve', acc, path='llm', ok=ok, reason=reason or None, id=cid,
                                        answer=None if ok else answer)
                 if ok:
+                    captcha_journal.save_sample(image, answer, source='llm')
                     captcha.clear(acc, cid)
                     CONFIG.captcha_llm_solved += 1
                     self.pending.pop(cid, None)
@@ -225,7 +226,7 @@ class CaptchaCoordinator:
                 item['backurl'], item['failurl'])
             captcha_journal.record('solve', acc, path='telegram', ok=ok, reason=reason or None, id=cid)
             if ok:
-                captcha_journal.save_sample(item.get('image'), text)
+                captcha_journal.save_sample(item.get('image'), text, source='telegram')
             if ok:
                 # HH подтвердил через 302 на backurl → снимаем challenge и
                 # будим worker'а. GUI-panel скроется через syncAccountCard.

@@ -46,13 +46,13 @@ def _applies_around(acc_name, now):
             sum(now - timedelta(hours=24) <= s <= now for s in stamps))
 
 
-_SAMPLES_MAX = 500
 
 
-def save_sample(image, answer, kind=""):
-    """Keep captchas with their answer to benchmark auto-solvers offline.
+def save_sample(image, answer, kind="", source=""):
+    """Keep captchas with their answer to benchmark auto-solvers offline. Never purged.
 
-    kind="" — a human answer HH accepted (ground truth);
+    kind="" — an answer HH accepted (ground truth, any solver: human or LLM); the exact
+    text goes to captcha_samples/labels.jsonl next to the image;
     kind="llm-rejected" — the LLM consensus HH refused (to study its mistakes).
     """
     try:
@@ -61,11 +61,19 @@ def save_sample(image, answer, kind=""):
             return
         folder = storage.DATA_DIR / "captcha_samples"
         folder.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        (folder / f"{stamp}_{kind + '_' if kind else ''}{text}.png").write_bytes(image)
-        files = sorted(folder.glob("*.png"))
-        for old in files[:-_SAMPLES_MAX]:
-            old.unlink(missing_ok=True)
+        now = datetime.now(timezone.utc)
+        name = f"{now.strftime('%Y%m%dT%H%M%S')}_{kind + '_' if kind else ''}{text}.png"
+        target = folder / name
+        n = 1
+        while target.exists():  # two captchas in one second must not overwrite each other
+            target = folder / name.replace(".png", f"_{n}.png")
+            n += 1
+        target.write_bytes(image)
+        if not kind:
+            entry = {"t": now.isoformat(timespec="seconds"), "file": target.name,
+                     "answer": str(answer).strip(), "source": source or None}
+            with _LOCK, open(folder / "labels.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as exc:
         log_debug(f"captcha sample: {type(exc).__name__}")
 
