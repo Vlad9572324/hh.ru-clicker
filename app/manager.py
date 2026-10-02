@@ -2488,6 +2488,16 @@ class BotManager:
             try:
                 self._run_account_worker_inner(idx, state)
                 break  # normal exit
+            except MutationBlocked:
+                # Пауза/капча/остановка запретили запись (например поднятие резюме) — это
+                # штатное ожидание, а не сбой: без падения, лога ошибки и Telegram-алерта
+                # каждые 30 с (так было 845 раз за ночь при неподтверждённой капче).
+                set_activity(state, "paused_wait", "Запись запрещена (пауза/капча/остановка); ждёт снятия",
+                    "Продолжит рабочий цикл, когда ограничение будет снято",
+                    wait_until=datetime.now(timezone.utc) + timedelta(seconds=30))
+                if not human_pace.interruptible_wait(
+                        self._stop_event, 30, lambda: not getattr(state, '_deleted', False)):
+                    break
             except Exception as e:
                 log_exception(f"WORKER CRASHED [{state.short}]", e)
                 cycle_operation_error(state)

@@ -209,3 +209,24 @@ def test_worker_crash_backoff_is_interruptible(dispatch, monkeypatch, cancel):
     bot._run_account_worker_inner.assert_called_once_with(0, state)
     bot._stop_event.wait.assert_called_once()
     assert state.status_detail != 'Перезапущен после ошибки'
+
+
+def test_mutation_blocked_is_quiet_wait_not_crash(dispatch, monkeypatch):
+    """Пауза/капча не должны превращаться в «Worker упал» + алерт каждые 30 с."""
+    from app.mutation_safety import MutationBlocked
+    bot, state = dispatch
+    bot._run_account_worker_inner = Mock(side_effect=MutationBlocked('paused'))
+    bot._add_log = Mock()
+    crash = Mock()
+    monkeypatch.setattr(module, 'log_exception', crash)
+    bot._stop_event = Mock(spec=threading.Event)
+    bot._stop_event.is_set.return_value = False
+
+    def stop(seconds):
+        bot._stop_event.is_set.return_value = True
+        return True
+    bot._stop_event.wait.side_effect = stop
+    bot._run_account_worker(0, state)
+    crash.assert_not_called()
+    bot._add_log.assert_not_called()
+    assert state.status != 'error'
