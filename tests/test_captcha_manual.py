@@ -95,3 +95,40 @@ def test_oauth_batch_has_immediate_challenge_break():
     conditions = [n for n in ast.walk(tree) if isinstance(n, ast.If)
                   and "result[0] == 'challenge'" in ast.unparse(n.test)]
     assert conditions and any(isinstance(n, ast.Break) for n in ast.walk(conditions[0]))
+
+
+def _continue_env(monkeypatch, **flags):
+    import threading
+    from types import SimpleNamespace
+    from app.routes import accounts
+    base = dict(acc={'user_id': 'orphan'}, _state_lock=threading.RLock(), _deleted=False,
+                paused=False, paused_reason='', pending_apply=None, pending_applies=[],
+                hard_stopped=False, limit_exceeded=False, cookies_expired=False,
+                consecutive_errors=3, short='O')
+    base.update(flags)
+    state = SimpleNamespace(**base)
+    monkeypatch.setattr(accounts.bot, '_get_apply_state', lambda idx: state)
+    monkeypatch.setattr(accounts.bot, '_persist_pauses', lambda wait=False: None)
+    captcha.hold(state.acc, {'captcha_url': 'https://hh.ru/account/captcha?state=s'})
+    cid = captcha.current(state.acc)['id']
+
+    class Req:
+        async def json(self): return {'confirmed': True, 'id': cid}
+    return accounts, state, Req(), cid
+
+
+def test_confirm_clears_challenge_that_exists_only_in_file(monkeypatch):
+    """Капча создана вне бота (аккаунт в памяти не на паузе): подтверждение человека её снимает."""
+    accounts, state, req, cid = _continue_env(monkeypatch)
+    result = asyncio.run(accounts.api_account_captcha_continue(0, req))
+    assert result['ok'] is True
+    assert not captcha.current(state.acc)
+    assert state.paused is False and state.consecutive_errors == 0
+
+
+def test_confirm_still_refused_under_other_protective_pause(monkeypatch):
+    accounts, state, req, cid = _continue_env(monkeypatch, paused=True, paused_reason='limit')
+    result = asyncio.run(accounts.api_account_captcha_continue(0, req))
+    assert result['ok'] is False
+    assert captcha.current(state.acc)['id'] == cid
+    captcha.clear(state.acc, cid)

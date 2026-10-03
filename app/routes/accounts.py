@@ -364,7 +364,11 @@ async def api_account_captcha_continue(idx: int, request: Request):
     if state is None:
         return {'ok': False, 'error': 'Аккаунт не найден'}
     with state._state_lock:
-        if (state._deleted or not state.paused or state.paused_reason != 'challenge'
+        # Капча может быть только в файле (создана другим процессом/до рестарта), а аккаунт в
+        # памяти — не на паузе: тогда подтверждение человека всё равно должно её снять.
+        challenge_pause = state.paused and state.paused_reason == 'challenge'
+        orphan_challenge = not state.paused and not state.paused_reason
+        if (state._deleted or not (challenge_pause or orphan_challenge)
                 or state.pending_apply or state.pending_applies or state.hard_stopped
                 or state.limit_exceeded or state.cookies_expired
                 or getattr(state, '_auth_recovery_pending', False)):
