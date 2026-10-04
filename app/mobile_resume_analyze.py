@@ -38,6 +38,7 @@ extra_terms (аргумент web-версии, supply/demand по SSR-поис�
 mobile не используется — сохранён в клиентской сигнатуре ради контракта.
 """
 
+from app.mutation_safety import MutationBlocked
 from app.hh_mobile_transport import (
     MobileAPIError,
     is_fallback_status,
@@ -90,6 +91,13 @@ def _aux_request(acc: dict, label: str, method: str, path: str, errors=None, **k
     (соответствующая часть результата останется пустой)."""
     try:
         return mobile_request(acc, method, path, **kwargs)
+    except MutationBlocked:
+        # POST-эндпоинты аудита только читают ML-подсказки, но транспорт
+        # считает любой POST мутацией: на паузе аккаунта часть пустая, без 500.
+        log_debug(f"mobile analyze_resume {label}: аккаунт на паузе — часть результата пустая")
+        if errors is not None:
+            errors.append({"endpoint": label, "error": "account_paused"})
+        return None
     except MobileAPIError as e:
         if is_fallback_status(e.status_code):
             raise
